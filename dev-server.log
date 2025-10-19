@@ -1,0 +1,5 @@
+
+> mobile-app@1.0.0 dev-server
+> node dev-server/index.js
+
+Dev auth server listening on http://localhost:4000
