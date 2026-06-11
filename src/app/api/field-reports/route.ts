@@ -1587,6 +1587,7 @@ export async function PUT(req: NextRequest) {
       .eq('id', id)
       .eq('company_id', session.user.companyId)
       .single()
+    if (!previousReport) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
     const workFront = body.work_front !== undefined && body.work_front !== '' ? String(body.work_front) : ''
     const resolvedReportFront = await resolveReportFrontNumberAndTitle({
       supabaseAdmin,
@@ -1647,6 +1648,7 @@ export async function PUT(req: NextRequest) {
         .from('pr_field_reports')
         .update(updatePayload)
         .eq('id', id)
+        .eq('company_id', session.user.companyId)
         .select()
         .single()
       if (!error) {
@@ -1715,7 +1717,13 @@ export async function DELETE(req: NextRequest) {
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
     const supabaseAdmin = getSupabaseAdmin()
-    const { data, error } = await supabaseAdmin.from('pr_field_reports').delete().eq('id', id).select().single()
+    const { data, error } = await supabaseAdmin
+      .from('pr_field_reports')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', session.user.companyId)
+      .select()
+      .single()
     if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
     return NextResponse.json({ ok: true, data })
   } catch (err) {
