@@ -451,7 +451,7 @@ export async function GET(req: NextRequest) {
       if (memberCrewIds.has(String(r?.id || ''))) return true
       if (isLinkedByLegacyCrewFields(r)) return true
       if (isCreatedByLoggedUser(r)) return true
-      return true
+      return false
     })
 
     return NextResponse.json(filtered)
