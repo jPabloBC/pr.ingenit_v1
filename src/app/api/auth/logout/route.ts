@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 
 // Log environment variables to ensure they are loaded correctly
-console.log('SUPABASE_URL:', process.env.SUPABASE_URL);
-console.log('SUPABASE_SERVICE_ROLE_KEY:', process.env.SUPABASE_SERVICE_ROLE_KEY);
-
-// Log Supabase client initialization
-console.log('Supabase client initialized:', supabaseAdmin);
+if (process.env.NODE_ENV === 'development') {
+  console.info('Auth/logout route active (development)')
+}
 
 // Cierra sesión: actualiza is_online y last_activity usando el id recibido por body
 export async function POST(request: NextRequest) {
@@ -17,14 +15,14 @@ export async function POST(request: NextRequest) {
       console.error('Logout request missing collaboratorId')
       return NextResponse.json({ error: 'Falta id' }, { status: 400 })
     }
-    console.log('Processing logout for collaboratorId:', collaboratorId)
-
-    // Log the request details
-    console.log('Request method:', request.method);
-    console.log('Request headers:', Object.fromEntries(request.headers));
-    console.log('Request body:', body);
-    console.log('Received request headers:', Object.fromEntries(request.headers));
-    console.log('Received request body:', body);
+    if (process.env.NODE_ENV === 'development') {
+      console.debug('Processing logout for collaboratorId:', collaboratorId)
+      // only log non-sensitive request summary in development
+      console.debug('Request method:', request.method)
+      const headersSummary: Record<string,string> = {}
+      for (const [k] of request.headers) headersSummary[k] = k === 'authorization' ? 'REDACTED' : '...'
+      console.debug('Request headers (summary):', headersSummary)
+    }
 
     // Handle Authorization header
     const authHeader = request.headers.get('Authorization');
@@ -33,7 +31,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    console.log('Authorization header:', authHeader);
+    if (process.env.NODE_ENV === 'development') console.debug('Authorization header present')
 
     // Ensure the collaborator exists before attempting to update
     const { data: collaborator, error: fetchError } = await supabaseAdmin
@@ -43,7 +41,7 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (fetchError || !collaborator) {
-      console.warn(`Logout attempt for non-existent collaboratorId: ${collaboratorId}. Proceeding with logout.`, fetchError);
+      if (process.env.NODE_ENV === 'development') console.warn(`Logout attempt for non-existent collaboratorId: ${collaboratorId}. Proceeding with logout.`, fetchError)
       // If collaborator doesn't exist, they are effectively logged out.
       // Return success to allow the client to clear its local session.
       const response = NextResponse.json({ success: true, message: 'Collaborator not found, but logout processed.' });
@@ -54,12 +52,12 @@ export async function POST(request: NextRequest) {
       return response;
     }
 
-    console.log('Collaborator found, proceeding with logout:', collaboratorId)
+    if (process.env.NODE_ENV === 'development') console.debug('Collaborator found, proceeding with logout:', collaboratorId)
 
-    console.log('Server timezone:', Intl.DateTimeFormat().resolvedOptions().timeZone);
+    if (process.env.NODE_ENV === 'development') console.debug('Server timezone:', Intl.DateTimeFormat().resolvedOptions().timeZone)
 
-    const fixedTime = new Date(Date.UTC(2025, 9, 17, 12, 0, 0)).toISOString();
-    console.log('Fixed UTC time for testing:', fixedTime);
+    const fixedTime = new Date(Date.UTC(2025, 9, 17, 12, 0, 0)).toISOString()
+    if (process.env.NODE_ENV === 'development') console.debug('Fixed UTC time for testing:', fixedTime)
 
     const { data: updatedCollaborator, error: updateError } = await supabaseAdmin
       .from('pr_collaborators')
@@ -71,13 +69,11 @@ export async function POST(request: NextRequest) {
       .select('last_activity');
 
     if (updateError) {
-      console.error('Error updating collaborator in database:', updateError);
+      console.error('Error updating collaborator in database:', updateError)
       return NextResponse.json({ error: 'No se pudo actualizar' }, { status: 500 });
     }
-
-    console.log('Database stored last_activity:', updatedCollaborator?.[0]?.last_activity);
-
-    console.log('Logout successful for collaboratorId:', collaboratorId)
+    if (process.env.NODE_ENV === 'development') console.debug('Database stored last_activity:', updatedCollaborator?.[0]?.last_activity)
+    if (process.env.NODE_ENV === 'development') console.info('Logout successful for collaboratorId:', collaboratorId)
 
     const response = NextResponse.json({ success: true });
     // Set CORS headers
@@ -88,12 +84,12 @@ export async function POST(request: NextRequest) {
     
     return response;
   } catch (e) {
-    console.error('Unexpected error during logout process:', e);
+    console.error('Unexpected error during logout process:', e)
     return NextResponse.json({ error: 'Error inesperado' }, { status: 500 });
   }
 }
 
-export async function OPTIONS(request: NextRequest) {
+export async function OPTIONS() {
   const headers = new Headers();
   headers.set('Access-Control-Allow-Origin', '*');
   headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');

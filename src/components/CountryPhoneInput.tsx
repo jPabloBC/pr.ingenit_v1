@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { TextField, Box, Typography } from '@mui/material'
-import { colors } from '@/theme/theme'
+import { colors } from '../theme/theme'
 
 interface CountryPhoneInputProps {
   value: string
@@ -275,7 +275,12 @@ const CountryPhoneInput: React.FC<CountryPhoneInputProps> = ({
     }
   }, [isOpen])
 
-  const handleCountryChange = (newValue: any) => {
+  interface CountryOption {
+    label: string;
+    dialCode: string;
+    value: string;
+  }
+  const handleCountryChange = (newValue: CountryOption) => {
     if (newValue && newValue.dialCode) {
       setSelectedCountry(newValue)
       const fullPhone = newValue.dialCode + phoneNumber
@@ -305,7 +310,7 @@ const CountryPhoneInput: React.FC<CountryPhoneInputProps> = ({
   }
 
   const customStyles = {
-    control: (provided: any, state: any) => ({
+    control: (provided: Record<string, unknown>, state: { isFocused: boolean }) => ({
       ...provided,
       minHeight: '40px',
       width: '60px',
@@ -320,7 +325,7 @@ const CountryPhoneInput: React.FC<CountryPhoneInputProps> = ({
         boxShadow: `0 0 0 1px ${colors.blue6}`,
       }),
     }),
-    option: (provided: any, state: any) => ({
+  option: (provided: Record<string, unknown>, state: { isSelected: boolean; isFocused: boolean }) => ({
       ...provided,
       backgroundColor: state.isSelected 
         ? colors.blue6 
@@ -334,29 +339,29 @@ const CountryPhoneInput: React.FC<CountryPhoneInputProps> = ({
         backgroundColor: state.isSelected ? colors.blue6 : colors.blue1,
       },
     }),
-    menu: (provided: any) => ({
+  menu: (provided: Record<string, unknown>) => ({
       ...provided,
       zIndex: 1000,
       maxHeight: '400px',
       minWidth: '250px',
     }),
-    menuList: (provided: any) => ({
+  menuList: (provided: Record<string, unknown>) => ({
       ...provided,
       maxHeight: '400px',
     }),
-    input: (provided: any) => ({
+  input: (provided: Record<string, unknown>) => ({
       ...provided,
       color: colors.gray8,
       fontSize: '14px',
     }),
-    placeholder: (provided: any) => ({
+  placeholder: (provided: Record<string, unknown>) => ({
       ...provided,
       color: colors.gray6,
       fontSize: '14px',
     }),
   }
 
-  const formatOptionLabel = (option: any) => (
+  const formatOptionLabel = (option: CountryOption) => (
     <Box display="flex" alignItems="center" gap={2} width="100%">
       <Box 
         component="img" 
@@ -373,7 +378,7 @@ const CountryPhoneInput: React.FC<CountryPhoneInputProps> = ({
     </Box>
   )
 
-  const formatValueLabel = (option: any) => (
+  const formatValueLabel = (option: CountryOption) => (
     <Box display="flex" alignItems="center" justifyContent="center">
       <Box 
         component="img" 

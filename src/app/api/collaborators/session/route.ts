@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 
 // Consulta el estado de sesión del colaborador por id
 export async function GET(request: NextRequest) {

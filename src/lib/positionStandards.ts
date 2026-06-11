@@ -1,4 +1,4 @@
-import { IndustryType } from '@/types'
+import { IndustryType } from '../types'
 
 // Cargos estandarizados por industria
 export const POSITION_STANDARDS: Record<IndustryType, string[]> = {
@@ -787,8 +787,10 @@ export function findSimilarPositions(position: string, industry: IndustryType | 
 // Función para agregar un cargo personalizado a la lista
 export function addCustomPosition(position: string, industry: IndustryType | string): void {
   // En una implementación real, esto guardaría en la base de datos
-  // Por ahora solo mostramos un mensaje
-  console.log(`Cargo personalizado agregado: ${position} para industria ${industry}`)
+  // Por ahora solo mostramos un mensaje en desarrollo
+  if (process.env.NODE_ENV === 'development') {
+    console.debug(`Cargo personalizado agregado: ${position} para industria ${industry}`)
+  }
 }
 
 // Función para validar si un cargo personalizado es válido
@@ -827,7 +829,7 @@ export function getPositionStats(industry: IndustryType | string): {
   return {
     totalPositions: positions.length,
     categories,
-    industryName: typeof industry === 'string' ? industry : industry.toLowerCase()
+    industryName: typeof industry === 'string' ? industry.toLowerCase() : 'unknown'
   }
 }
 

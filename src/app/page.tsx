@@ -6,10 +6,9 @@ import {
   AdminPanelSettings, 
   People
 } from '@mui/icons-material'
-import Image from 'next/image'
 import { colors } from '../theme/theme'
-import Header from '@/components/layout/header'
-import Footer from '@/components/layout/footer'
+import Header from '../components/layout/header'
+import Footer from '../components/layout/footer'
 
 export default function Home() {
   const router = useRouter()
@@ -35,7 +34,17 @@ export default function Home() {
           flex: 1,
           display: 'flex',
           alignItems: 'center',
+          py: { xs: 3, sm: 4, md: 5 },
+          minHeight: { md: 'clamp(500px, calc(100vh - 240px), 760px)' },
           position: 'relative',
+          '@media (max-height: 860px)': {
+            py: { xs: 2.5, sm: 3, md: 3 },
+            minHeight: { md: 'clamp(460px, calc(100vh - 210px), 620px)' },
+          },
+          '@media (max-height: 760px), (max-width: 1366px)': {
+            py: { md: 2 },
+            minHeight: { md: 'clamp(380px, calc(100vh - 180px), 520px)' },
+          },
           '&::before': {
             content: '""',
             position: 'absolute',
@@ -53,13 +62,16 @@ export default function Home() {
         sx={{ 
           position: 'relative', 
           zIndex: 1,
-          px: { xs: 2, sm: 3, md: 4 } // Padding responsive
+          px: { xs: 1.5, sm: 3, md: 4 }, // Padding responsive
+          '@media (max-height: 860px)': {
+            maxWidth: '920px',
+          },
         }}
       >
         <Box 
           textAlign="center" 
-          mb={{ xs: 4, sm: 6, md: 8 }} // Margin responsive
-          mt={{ xs: 4, sm: 6, md: 8 }} // Margin-top responsive
+          mb={{ xs: 2, sm: 2.5, md: 3 }} // Margin responsive
+          mt={{ xs: 0, sm: 0.5, md: 0 }} // Margin-top responsive
         >
           <Typography 
             variant="h2" 
@@ -67,17 +79,18 @@ export default function Home() {
             sx={{ 
               color: colors.white,
               fontWeight: 700,
-              mb: 2,
+              mb: { xs: 1.25, sm: 1.75, md: 2 },
               textShadow: `2px 2px 4px ${colors.blue1}80`,
-              fontSize: { 
-                xs: '2rem',    // Mobile: 32px
-                sm: '2.5rem',  // Tablet: 40px  
-                md: '3rem',    // Desktop: 48px
-                lg: '3.5rem'   // Large: 56px
-              }
+              fontSize: 'clamp(1.4rem, 3.4vw, 3rem)',
+              '@media (max-height: 860px)': {
+                fontSize: 'clamp(1.35rem, 3vw, 2.65rem)',
+              },
+              '@media (max-height: 760px), (max-width: 1366px)': {
+                fontSize: 'clamp(1.2rem, 2.4vw, 2.2rem)',
+              },
             }}
           >
-            Sistema de Gestión
+            Sistema de Gestión y Control
           </Typography>
           
           <Typography 
@@ -85,17 +98,15 @@ export default function Home() {
             sx={{ 
               color: colors.gold4,
               fontWeight: 500,
-              mb: 1,
+              mb: { xs: 0.75, sm: 1 },
               textShadow: `1px 1px 2px ${colors.blue1}60`,
-              fontSize: { 
-                xs: '1.25rem', // Mobile: 20px
-                sm: '1.5rem',  // Tablet: 24px
-                md: '1.75rem', // Desktop: 28px
-                lg: '2rem'     // Large: 32px
-              }
+              fontSize: 'clamp(1.05rem, 2.4vw, 2rem)',
+              '@media (max-height: 760px), (max-width: 1366px)': {
+                fontSize: 'clamp(0.95rem, 1.7vw, 1.5rem)',
+              },
             }}
           >
-            Recursos Humanos
+            Operación y Equipos
           </Typography>
           
           <Typography 
@@ -103,29 +114,31 @@ export default function Home() {
             sx={{ 
               color: colors.blue13,
               opacity: 0.95,
-              mt: 3,
-              fontSize: { 
-                xs: '0.95rem', // Mobile
-                sm: '1rem',    // Tablet
-                md: '1.1rem',  // Desktop
-                lg: '1.15rem'  // Large
-              }
+              mt: { xs: 1, sm: 1.5, md: 2 },
+              fontSize: 'clamp(0.9rem, 1.3vw, 1.15rem)',
+              px: { xs: 1, sm: 0 }
             }}
           >
-            Accede a la plataforma de gestión de recursos humanos
+            Centraliza el registro, seguimiento y reportes de tu operación en una sola plataforma
           </Typography>
         </Box>
 
         <Box 
           display="flex" 
           justifyContent="center"
-          px={{ xs: 1, sm: 2, md: 0 }} // Padding horizontal responsive
+          px={{ xs: 0.25, sm: 2, md: 0 }} // Padding horizontal responsive
         >
           {/* Acceso Unificado */}
           <Card 
             sx={{ 
-              maxWidth: { xs: '100%', sm: 480, md: 500 }, // Responsive max width
+              maxWidth: { xs: '100%', sm: 460, md: 440 }, // Responsive max width
               width: '100%',
+              '@media (max-height: 860px)': {
+                maxWidth: { md: 410 },
+              },
+              '@media (max-height: 760px), (max-width: 1366px)': {
+                maxWidth: { md: 360 },
+              },
               cursor: 'pointer',
               transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
               background: colors.white,
@@ -147,23 +160,33 @@ export default function Home() {
           >
             <CardContent sx={{ 
               textAlign: 'center', 
-              p: { xs: 3, sm: 4, md: 5 } // Padding responsive
+              p: { xs: 2, sm: 4, md: 5 }, // Padding responsive
+              '@media (max-height: 860px)': {
+                p: { md: 3 },
+              },
+              '@media (max-height: 760px), (max-width: 1366px)': {
+                p: { md: 2.2 },
+              },
             }}>
               <Box 
                 className="system-icon"
                 sx={{ 
-                  fontSize: { 
-                    xs: 60,  // Mobile: iconos más pequeños
-                    sm: 70,  // Tablet: iconos medianos
-                    md: 80   // Desktop: iconos grandes
-                  }, 
+                  fontSize: { xs: 44, sm: 62, md: 64 }, 
                   color: colors.blue6, 
-                  mb: { xs: 2, sm: 2.5, md: 3 }, // Margin responsive
+                  mb: { xs: 1.25, sm: 2.5, md: 3 }, // Margin responsive
                   transition: 'all 0.3s ease',
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
-                  gap: { xs: 1, sm: 1.5, md: 2 } // Gap responsive
+                  gap: { xs: 1, sm: 1.5, md: 2 }, // Gap responsive
+                  '@media (max-height: 860px)': {
+                    fontSize: { md: 54 },
+                    mb: { md: 1.25 },
+                  },
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    fontSize: { md: 44 },
+                    mb: { md: 0.65 },
+                  },
                 }} 
               >
                 <AdminPanelSettings sx={{ fontSize: 'inherit' }} />
@@ -176,13 +199,11 @@ export default function Home() {
                 sx={{ 
                   color: colors.blue1,
                   fontWeight: 500,
-                  mb: { xs: 1.5, sm: 2, md: 2 }, // Margin responsive
-                  fontSize: { 
-                    xs: '1.85rem', // Mobile: 28px
-                    sm: '2rem',    // Tablet: 32px
-                    md: '2.25rem', // Desktop: 36px
-                    lg: '2.5rem'   // Large: 40px
-                  }
+                  mb: { xs: 1, sm: 2, md: 2 }, // Margin responsive
+                  fontSize: 'clamp(1.5rem, 2.5vw, 2.5rem)',
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    fontSize: 'clamp(1.15rem, 1.8vw, 1.9rem)',
+                  },
                 }}
               >
                 Acceder al Sistema
@@ -192,22 +213,24 @@ export default function Home() {
                 variant="body1" 
                 sx={{ 
                   color: colors.gray4,
-                  mb: { xs: 3, sm: 3.5, md: 4 }, // Margin responsive
-                  fontSize: { 
-                    xs: '0.95rem', // Mobile
-                    sm: '1rem',    // Tablet
-                    md: '1.05rem', // Desktop
-                    lg: '1.1rem'   // Large
-                  },
+                  mb: { xs: 2.25, sm: 3.5, md: 4 }, // Margin responsive
+                  fontSize: 'clamp(0.9rem, 1.15vw, 1.1rem)',
                   lineHeight: 1.6,
-                  px: { xs: 0, sm: 1, md: 0 } // Padding horizontal en tablet
+                  px: { xs: 0, sm: 1, md: 0 }, // Padding horizontal en tablet
+                  '@media (max-height: 860px)': {
+                    mb: { md: 2.2 },
+                  },
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    mb: { md: 1.2 },
+                    lineHeight: 1.45,
+                    fontSize: '0.88rem',
+                  },
                 }}
               >
-                Portal unificado para administradores y colaboradores.
-                Selecciona tu tipo de usuario una vez dentro del sistema.
+                Plataforma centralizada para el control y seguimiento operativo.
               </Typography>
               
-              <Box sx={{ mb: { xs: 3, sm: 3.5, md: 4 } }}> {/* Margin responsive */}
+              {/*<Box sx={{ mb: { xs: 3, sm: 3.5, md: 4 } }}>
                 <Typography 
                   variant="body2" 
                   sx={{ 
@@ -315,7 +338,7 @@ export default function Home() {
                   />
                   Acceso diferenciado por roles y permisos
                 </Typography>
-              </Box>
+              </Box> */}
               
               <Button 
                 variant="contained" 
@@ -324,14 +347,18 @@ export default function Home() {
                 sx={{
                   background: `linear-gradient(135deg, ${colors.blue6} 0%, ${colors.blue8} 100%)`,
                   color: colors.white,
-                  py: { xs: 1.5, sm: 1.75, md: 2 }, // Padding vertical responsive
+                  py: { xs: 1.25, sm: 1.75, md: 2 }, // Padding vertical responsive
                   px: { xs: 2, sm: 3, md: 4 }, // Padding horizontal responsive
                   borderRadius: { xs: 2.5, sm: 3 }, // Border radius responsive
-                  fontWeight: 600,
+                  fontWeight: 400,
                   fontSize: { 
-                    xs: '1rem',    // Mobile
+                    xs: '0.95rem',    // Mobile
                     sm: '1.05rem', // Tablet
                     md: '1.1rem'   // Desktop
+                  },
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    py: { md: 1 },
+                    fontSize: { md: '0.88rem' },
                   },
                   textTransform: 'none',
                   boxShadow: `0 4px 16px ${colors.blue6}40`,
@@ -354,10 +381,10 @@ export default function Home() {
         {/* Información adicional */}
         <Box 
           textAlign="center" 
-          mt={{ xs: 6, sm: 7, md: 8 }} 
-          mb={{ xs: 8, sm: 10, md: 12 }} // Margin-bottom incrementado y responsive
+          mt={{ xs: 1.5, sm: 2.5, md: 3 }} 
+          mb={{ xs: 0, sm: 0.5, md: 1 }} // Margin-bottom incrementado y responsive
         >
-          <Typography 
+          {/* <Typography 
             variant="body2" 
             sx={{ 
               color: colors.blue13,
@@ -366,19 +393,7 @@ export default function Home() {
             }}
           >
             Plataforma escalable para minería, pymes y grandes empresas
-          </Typography>
-          <Typography 
-            variant="caption" 
-            sx={{ 
-              color: colors.blue14,
-              opacity: 0.8,
-              mt: 1,
-              display: 'block',
-              fontSize: '0.9rem'
-            }}
-          >
-            IngenIT © 2025 - Sistema de Gestión de Personal v1.0.0
-          </Typography>
+          </Typography> */}
         </Box>
       </Container>
     </Box>

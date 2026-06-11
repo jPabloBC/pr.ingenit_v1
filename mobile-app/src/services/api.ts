@@ -82,10 +82,21 @@ export class ApiService {
       })
       return response.data
     } catch (error) {
-      console.error('POST request failed:', {
-        url,
-        error: error instanceof Error ? error.message : error,
-      })
+      // Better logging: include baseURL, full URL, and response body if present
+      try {
+        const base = (this.api.defaults && this.api.defaults.baseURL) || ''
+        const fullUrl = base ? `${base.replace(/\/$/, '')}${url.startsWith('/') ? url : `/${url}`}` : url
+        const respBody = (error as any)?.response?.data
+        console.error('POST request failed:', {
+          url,
+          fullUrl,
+          message: error instanceof Error ? error.message : String(error),
+          status: (error as any)?.response?.status,
+          responseBody: respBody,
+        })
+      } catch (logErr) {
+        console.error('POST request failed (logging fallback):', error)
+      }
       throw error
     }
   }

@@ -10,6 +10,9 @@ declare module 'next-auth' {
       role: UserRole
       companyId: string
       companyName?: string
+      specialty?: string | null
+      projectId?: string | null
+      projectName?: string | null
     }
   }
 
@@ -20,6 +23,9 @@ declare module 'next-auth' {
     role: UserRole
     companyId: string
     companyName?: string
+    specialty?: string | null
+    projectId?: string | null
+    projectName?: string | null
   }
 }
 
@@ -29,5 +35,8 @@ declare module 'next-auth/jwt' {
     role: UserRole
     companyId: string
     companyName?: string
+    specialty?: string | null
+    projectId?: string | null
+    projectName?: string | null
   }
 }

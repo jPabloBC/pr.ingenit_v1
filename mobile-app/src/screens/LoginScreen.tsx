@@ -13,6 +13,7 @@ import {
   Platform,
 } from 'react-native'
 import { Button, Card, TextInput, HelperText } from 'react-native-paper'
+import { Ionicons } from '@expo/vector-icons'
 import { apiService } from '../services/api'
 import { authService } from '../services/auth'
 import { API_BASE_URL } from '../constants/api'
@@ -23,10 +24,27 @@ import { supabase } from '../services/supabaseClient'
 import bcrypt from 'bcryptjs'
 
 const LoginScreen = () => {
+      // Track failed password attempts
+      const [passwordAttempts, setPasswordAttempts] = useState(0)
+      const [resetMessage, setResetMessage] = useState<string | null>(null)
+      const [showResetForm, setShowResetForm] = useState(false)
+      const [resetToken, setResetToken] = useState('')
+      const [newPassword, setNewPassword] = useState('')
+      const [confirmNewPassword, setConfirmNewPassword] = useState('')
+      const [resetLoading, setResetLoading] = useState(false)
+      const [resetError, setResetError] = useState<string | null>(null)
+      // const [healthMessage, setHealthMessage] = useState<string | null>(null)
+    // Track failed collaborator validation attempts
+    const [collaboratorAttempts, setCollaboratorAttempts] = useState(0)
   const { login, setAuthState } = useAuth() as any
   const [companyId, setCompanyId] = useState('') // UUID de la empresa
   const [companyInput, setCompanyInput] = useState('') // Input de nombre de empresa
-  const [identifier, setIdentifier] = useState('')
+  const [identifier, setIdentifierRaw] = useState('')
+  // Solo permite letras y números
+  const setIdentifier = (value: string) => {
+    const sanitized = value.replace(/[^a-zA-Z0-9]/g, '')
+    setIdentifierRaw(sanitized)
+  }
   const [otp, setOtp] = useState('')
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
@@ -41,6 +59,8 @@ const LoginScreen = () => {
   const [password, setPassword] = useState('')
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  // Nuevo: bandera para forzar re-identificación
+  const [forceReidentify, setForceReidentify] = useState(false)
 
   // Paso 1: Validar existencia de la empresa (versión correcta, única)
   // (Eliminado duplicado)
@@ -89,9 +109,12 @@ const LoginScreen = () => {
         .eq('is_active', true)
         .maybeSingle()
       if (error || !data) {
+        setCollaboratorAttempts(prev => prev + 1)
         setError('Colaborador no encontrado o inactivo')
         setLoading(false)
         return
+      } else {
+        setCollaboratorAttempts(0)
       }
       setCollaboratorExists(true)
       setCollaboratorName(data.first_name || '')
@@ -134,7 +157,14 @@ const LoginScreen = () => {
         if (collab.password_hash) {
           const ok = await bcrypt.compare(password, collab.password_hash)
           if (!ok) {
-            throw new Error('Contraseña incorrecta')
+            // Increment attempts and show the exact password error here to avoid
+            // being overwritten by outer catch handlers (e.g., Network Error)
+            setPasswordAttempts(prev => prev + 1)
+            setError('Contraseña incorrecta')
+            setLoading(false)
+            return
+          } else {
+            setPasswordAttempts(0)
           }
 
           // Password matches the stored hash. Prefer to obtain a Supabase session
@@ -222,7 +252,13 @@ const LoginScreen = () => {
         return
       }
     } catch (e: any) {
-      setError('No se pudo iniciar sesión: ' + (e?.message || e))
+      // If the error is the password incorrect sentinel, show it directly.
+      const msg = e?.message || String(e)
+      if (msg && msg.includes('Contraseña incorrecta')) {
+        setError('Contraseña incorrecta')
+      } else {
+        setError('No se pudo iniciar sesión: ' + (msg || 'Error desconocido'))
+      }
       console.log('❌ Error en fetch login-collaborator:', e)
     } finally {
       setLoading(false)
@@ -249,13 +285,49 @@ const LoginScreen = () => {
             Gestión de Colaboradores
           </Text>
         </View>
+        {/* Elementos flotantes fuera del Card */}
+        {!companyStep && companyLogo && (
+          <View style={{ alignItems: 'center', marginBottom: 12, position: 'relative' }}>
+            <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
+              <Image
+                source={{ uri: companyLogo }}
+                style={[styles.companyLogo, { marginBottom: 4, borderWidth: 1, borderColor: COLORS.white }]} 
+                resizeMode="contain"
+              />
+              <Button
+                onPress={() => {
+                  setCompanyStep(true)
+                  setCompanyValid(null)
+                  setCompanyName('')
+                  setCompanyLogo(null)
+                  setCompanyId('')
+                  setCompanyInput('')
+                  setIdentifier('')
+                  setError('')
+                  setCollaboratorExists(false)
+                  setPassword('')
+                  setLoginSuccess(false)
+                  setForceReidentify(true)
+                }}
+                style={{ position: 'absolute', top: -22, right: -22, backgroundColor: 'transparent', padding: 0, borderRadius: 20 }}
+              >
+                <Ionicons name="swap-horizontal" size={36} color={COLORS.blue8} style={{ shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 6, shadowOffset: { width: 2, height: 2 } }} />
+              </Button>
+            </View>
+            <Text style={{ fontSize: 16, color: COLORS.white, fontWeight: 'normal', maxWidth: 120, textAlign: 'center', marginTop: 2 }} numberOfLines={2}>
+              {companyName}
+            </Text>
+          </View>
+        )}
         <Card style={styles.loginCard}>
           <Card.Content style={styles.cardContent}>
-            <Text style={styles.title}>
-              Iniciar Sesión
-            </Text>
+            <View style={{ justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
+              <Text style={[styles.title, { textAlign: 'center' }]}>Iniciar Sesión</Text>
+            </View>
             <Text style={styles.description}>
-              Accede con tu cuenta de colaborador
+              {(!collaboratorExists)
+                ? 'Identifica la empresa para continuar'
+                : `${collaboratorName} ${collaboratorLastName}`}
             </Text>
             <View style={styles.formContainer}>
               {step === 1 && (
@@ -295,35 +367,7 @@ const LoginScreen = () => {
                   ) : (
                     <>
                       <View style={styles.companyInfoRow}>
-                        <Text style={styles.companyName} numberOfLines={1}>
-                          {companyName
-                            ? companyName.charAt(0).toUpperCase() + companyName.slice(1).toLowerCase()
-                            : ''}
-                        </Text>
-                        {companyLogo ? (
-                          <Image
-                            source={{ uri: companyLogo }}
-                            style={styles.companyLogo}
-                            resizeMode="contain"
-                          />
-                        ) : null}
-                        <Button
-                          mode="text"
-                          onPress={() => {
-                            setCompanyStep(true)
-                            setCompanyValid(null)
-                            setCompanyName('')
-                            setCompanyLogo(null)
-                            setCompanyId('')
-                            setCompanyInput('')
-                            setIdentifier('')
-                            setError('')
-                          }}
-                          style={styles.changeCompanyBtn}
-                          labelStyle={styles.changeCompanyLabel}
-                        >
-                          Cambiar empresa
-                        </Button>
+                        {/* Company name removed as requested */}
                       </View>
                       {!collaboratorExists && (
                         <>
@@ -343,7 +387,10 @@ const LoginScreen = () => {
                           />
                           <Button
                             mode="contained"
-                            onPress={handleValidateUser}
+                            onPress={() => {
+                              setForceReidentify(false)
+                              handleValidateUser()
+                            }}
                             loading={loading}
                             style={styles.loginButton}
                             labelStyle={styles.loginButtonLabel}
@@ -354,16 +401,21 @@ const LoginScreen = () => {
                         </>
                       )}
                       {collaboratorExists && (
-                        <View style={{ marginBottom: 1, alignItems: 'center' }}>
-                          <Text style={{ fontSize: 20, fontWeight: 'normal', color: COLORS.blue5 }}>
-                            {collaboratorName} {collaboratorLastName}
-                          </Text>
-                        </View>
+                        !forceReidentify && null
                       )}
-                      {error ? (
-                        <HelperText type="error" style={styles.helperError}>
-                          {error}
-                        </HelperText>
+                      {(!collaboratorExists && error) ? (
+                        <>
+                          {(collaboratorAttempts < 4) && (
+                            <HelperText type="error" style={styles.helperError}>
+                              {error}
+                            </HelperText>
+                          )}
+                          {(collaboratorAttempts >= 4) && (
+                            <HelperText type="error" style={styles.helperError}>
+                              Contáctese con su empleador si tiene problemas de acceso.
+                            </HelperText>
+                          )}
+                        </>
                       ) : null}
                       {collaboratorExists && !loginSuccess && (
                         <>
@@ -388,6 +440,114 @@ const LoginScreen = () => {
                               />
                             }
                           />
+                          {(error && passwordAttempts < 4) && (
+                            <HelperText type="error" style={styles.helperError}>
+                              {error === 'Contraseña incorrecta' ? 'Contraseña incorrecta' : error}
+                            </HelperText>
+                          )}
+                          {(passwordAttempts >= 4) && (
+                            <>
+                              <Button
+                                mode="outlined"
+                                style={{ marginTop: 8, borderColor: COLORS.error }}
+                                onPress={async () => {
+                                  setResetMessage(null)
+                                  try {
+                                    const resp = await authService.requestPasswordReset({ companyId, document: identifier })
+                                      if (resp.success) {
+                                        // show form to enter token + new password
+                                        setResetMessage('Se ha enviado un correo de restablecimiento si el usuario existe. Ingresa el código recibido y la nueva contraseña abajo.')
+                                        setShowResetForm(true)
+                                      } else {
+                                        setResetMessage(resp.message || 'No fue posible iniciar el restablecimiento.')
+                                      }
+                                  } catch (e: any) {
+                                    setResetMessage('Error al solicitar restablecimiento: ' + (e?.message || e))
+                                  }
+                                }}
+                              >
+                                Restablecer contraseña
+                              </Button>
+                              {resetMessage && (
+                                <HelperText type="info" style={[styles.helperError, { color: COLORS.info, marginTop: 6 }]}> 
+                                  {resetMessage}
+                                </HelperText>
+                              )}
+                              {showResetForm && (
+                                <>
+                                  <TextInput
+                                    label="Código de restablecimiento"
+                                    value={resetToken}
+                                    onChangeText={setResetToken}
+                                    mode="outlined"
+                                    autoCapitalize="none"
+                                    style={[styles.input, { marginTop: 8 }]}
+                                    disabled={resetLoading}
+                                  />
+                                  <TextInput
+                                    label="Nueva contraseña"
+                                    value={newPassword}
+                                    onChangeText={setNewPassword}
+                                    mode="outlined"
+                                    secureTextEntry
+                                    style={styles.input}
+                                    disabled={resetLoading}
+                                  />
+                                  <TextInput
+                                    label="Confirmar nueva contraseña"
+                                    value={confirmNewPassword}
+                                    onChangeText={setConfirmNewPassword}
+                                    mode="outlined"
+                                    secureTextEntry
+                                    style={styles.input}
+                                    disabled={resetLoading}
+                                  />
+                                  {resetError && (
+                                    <HelperText type="error" style={styles.helperError}>
+                                      {resetError}
+                                    </HelperText>
+                                  )}
+                                  <Button
+                                    mode="contained"
+                                    onPress={async () => {
+                                      setResetError(null)
+                                      if (!resetToken || !newPassword) {
+                                        setResetError('Ingrese código y la nueva contraseña')
+                                        return
+                                      }
+                                      if (newPassword !== confirmNewPassword) {
+                                        setResetError('Las contraseñas no coinciden')
+                                        return
+                                      }
+                                      setResetLoading(true)
+                                      try {
+                                        const resp = await authService.performPasswordReset({ token: resetToken, password: newPassword })
+                                        if (resp.success) {
+                                          setResetMessage('Contraseña restablecida con éxito. Intenta ingresar nuevamente.')
+                                          setShowResetForm(false)
+                                          setPasswordAttempts(0)
+                                          setPassword('')
+                                          setResetToken('')
+                                          setNewPassword('')
+                                          setConfirmNewPassword('')
+                                        } else {
+                                          setResetError(resp.message || 'No fue posible restablecer la contraseña')
+                                        }
+                                      } catch (e: any) {
+                                        setResetError('Error al restablecer: ' + (e?.message || e))
+                                      } finally {
+                                        setResetLoading(false)
+                                      }
+                                    }}
+                                    loading={resetLoading}
+                                    style={[styles.loginButton, { marginTop: 8 }]}
+                                  >
+                                    Confirmar restablecimiento
+                                  </Button>
+                                </>
+                              )}
+                            </>
+                          )}
                           <Button
                             mode="contained"
                             onPress={handleCollaboratorLogin}
@@ -439,9 +599,17 @@ const LoginScreen = () => {
             </View>
           </Card.Content>
         </Card>
-        <Text style={styles.footer}>
-          ¿No tienes una cuenta?
-        </Text>
+        {/* Botón de prueba de conexión API eliminado */}
+        {(companyStep && step === 1) && (
+          <Text
+            style={styles.footer}
+            onPress={() => {
+              alert('¿Tu empresa no está registrada?, por favor contáctanos: ventas@ingenit.cl');
+            }}
+          >
+            ¿No tienes una cuenta?
+          </Text>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   )
@@ -459,7 +627,7 @@ const styles = ({
   },
   logoContainer: {
     alignItems: 'center' as const,
-    marginBottom: SPACING.xxl,
+    marginBottom: SPACING.md,
   },
   logoImage: {
     width: 80,
@@ -501,7 +669,7 @@ const styles = ({
   },
   description: {
     textAlign: 'center' as const,
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.xs,
     color: COLORS.textSecondary,
     fontSize: 20,
   },
@@ -556,8 +724,8 @@ const styles = ({
     marginLeft: 8,
   },
   companyLogo: {
-    width: 44,
-    height: 44,
+    width: 60,
+    height: 60,
     backgroundColor: COLORS.gray2,
     marginRight: 8,
     borderRadius: 2,

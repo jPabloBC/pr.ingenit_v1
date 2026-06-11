@@ -5,7 +5,7 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn('SUPABASE service config missing: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
+  if (process.env.NODE_ENV === 'development') console.warn('SUPABASE service config missing: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
 }
 
 const supabaseAdmin = createClient(SUPABASE_URL || '', SUPABASE_SERVICE_ROLE_KEY || '', {
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'error_listing_buckets', details: listError.message }, { status: 500 })
     }
 
-    const exists = (buckets || []).some((b: any) => b.name === bucket)
+    const exists = (buckets || []).some((b: { name: string }) => b.name === bucket)
     if (exists) {
       return NextResponse.json({ ok: true, created: false, bucket })
     }
@@ -37,8 +37,8 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ ok: true, created: true, bucket, data })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Unexpected error in ensure-bucket:', err)
-    return NextResponse.json({ error: 'unexpected', details: err?.message || String(err) }, { status: 500 })
+    return NextResponse.json({ error: 'unexpected', details: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }
 }

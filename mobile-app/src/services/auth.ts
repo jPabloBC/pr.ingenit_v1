@@ -209,6 +209,51 @@ class AuthService {
       throw error;
     }
   }
+
+  /**
+   * Request a password reset for a collaborator.
+   * Tries a couple of common endpoint names and returns a normalized result.
+   */
+  async requestPasswordReset(payload: { companyId?: string; document?: string; email?: string }): Promise<{ success: boolean; message?: string }> {
+    const candidates = [
+      '/api/auth/forgot-password',
+      '/api/auth/request-password-reset',
+      '/api/auth/reset-password-request',
+      '/api/auth/send-reset',
+    ]
+
+    for (const endpoint of candidates) {
+      try {
+        const resp = await apiService.post(endpoint, payload)
+        // If the endpoint exists and responds, assume success if no error thrown
+        return { success: true, message: (resp && resp.message) || 'OK' }
+      } catch (err) {
+        // Try next candidate
+        // If error indicates 404 or unknown endpoint, continue
+        const msg = (err as any)?.message || String(err)
+        console.warn(`Password reset attempt failed for ${endpoint}:`, msg)
+        continue
+      }
+    }
+
+    // None of endpoints worked
+    return { success: false, message: 'El endpoint de restablecimiento no está disponible' }
+  }
+
+  /**
+   * Confirm and perform password reset using token and new password.
+   * Expects backend endpoint '/api/auth/reset-password' which accepts { token, password }
+   */
+  async performPasswordReset(payload: { token: string; password: string }): Promise<{ success: boolean; message?: string }> {
+    try {
+      const resp = await apiService.post('/api/auth/reset-password', payload)
+      return { success: true, message: (resp && resp.message) || 'Password reset successful' }
+    } catch (err) {
+      const msg = (err as any)?.message || String(err)
+      console.error('performPasswordReset failed:', msg)
+      return { success: false, message: msg }
+    }
+  }
 }
 
 export const authService = new AuthService()

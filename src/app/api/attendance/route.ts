@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase } from '../../../lib/supabaseClient';
 
 export async function GET() {
   try {
@@ -26,13 +26,13 @@ export async function GET() {
       `);
 
     if (error) {
-      console.error('Error fetching attendance data:', error);
+      console.debug('Error fetching attendance data:', error);
       return NextResponse.json({ error: 'Error fetching attendance data' }, { status: 500 });
     }
 
     return NextResponse.json(data);
   } catch (err) {
-    console.error('Unexpected error:', err);
+    console.debug('Unexpected error:', err);
     return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 });
   }
 }

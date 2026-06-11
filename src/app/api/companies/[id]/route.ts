@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { supabase } from '@/lib/supabaseClient'
-import { IndustryType } from '@/types'
+import { authOptions } from '../../../../lib/auth'
+import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
+import { IndustryType } from '../../../../types'
 
 export async function GET(
   request: NextRequest,
@@ -22,13 +22,28 @@ export async function GET(
       return NextResponse.json({ error: 'No tienes acceso a esta empresa' }, { status: 403 })
     }
 
-    // Obtener solo la información necesaria para colaboradores
-    const { data: company, error: companyError } = await supabase
-      .from('pr_companies')
-      .select('id, industry, country, created_at, updated_at')
-      .eq('id', companyId)
-      .single()
+    // Obtener la información necesaria. Algunas instalaciones no tienen las
+    // columnas `default_positions`/`default_specialties`, así que intentamos
+    // primero con esos campos y si falla por columnas inexistentes, reintentar
+    // con un SELECT reducido para evitar 500.
+    let company: any = null
+    let companyError: any = null
 
+    const trySelect = async (fields: string) => {
+      return await supabaseAdmin
+        .from('pr_companies')
+        .select(fields)
+        .eq('id', companyId)
+        .single()
+    }
+
+    // Primera tentativa: include possible defaults
+    ;({ data: company, error: companyError } = await trySelect('id, name, logo_url, industry, country, default_positions, default_specialties, created_at, updated_at'))
+
+    // Si la DB no tiene esas columnas (PG code 42703), reintentar sin ellas
+    if (companyError && String(companyError.code) === '42703') {
+      ;({ data: company, error: companyError } = await trySelect('id, name, logo_url, industry, country, created_at, updated_at'))
+    }
 
     if (companyError) {
       console.error('Error fetching company:', companyError)
@@ -64,7 +79,11 @@ export async function GET(
 
     return NextResponse.json({
       id: company.id,
+      name: company.name,
+      logo_url: company.logo_url || null,
       industry: industry,
+        default_positions: company.default_positions || [],
+        default_specialties: company.default_specialties || [],
       country: company.country,
       createdAt: company.created_at,
       updatedAt: company.updated_at
@@ -108,7 +127,7 @@ export async function PUT(
     } = body
 
     // Actualizar datos de la empresa
-    const { data: updatedCompany, error: updateError } = await supabase
+    const { data: updatedCompany, error: updateError } = await supabaseAdmin
       .from('pr_companies')
       .update({
         name,
