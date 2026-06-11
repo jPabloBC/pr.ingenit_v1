@@ -67,6 +67,7 @@ type DailyReportRecord = {
   weather_label?: string | null
   source_field_report_ids?: string[]
   notes?: Record<string, any> | null
+  created_by?: string | null
   v2_form_snapshot?: Record<string, any> | null
   v2_runtime_snapshot?: Record<string, any> | null
   raw_payload?: Record<string, any> | null
@@ -5146,10 +5147,11 @@ export default function DailyReportPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
   const role = String((session?.user as any)?.role || "").toLowerCase()
+  const currentUserId = String((session?.user as any)?.id || "")
   const isUserRole = role === "user"
   const isAdminRole = role === "admin"
+  const isDevRole = role === "dev"
   const canAccess = role === "admin" || role === "dev" || role === "user"
-  const canDeleteDailyReports = canAccess
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -11858,6 +11860,11 @@ export default function DailyReportPage() {
                       const hhInd = hhIndFromNotes > 0 ? hhIndFromNotes : hhIndFromS4
                       const hhTotal = hhDir + hhInd > 0 ? (hhDir + hhInd) : asNum(r?.hh_day)
                       const reportDateKey = String(r?.report_date || "").slice(0, 10)
+                      const linkedRecordsForDate = records.filter((row) => String(row?.report_date || "").slice(0, 10) === reportDateKey)
+                      const canDeleteDateReports =
+                        isAdminRole ||
+                        isDevRole ||
+                        (isUserRole && linkedRecordsForDate.length > 0 && linkedRecordsForDate.every((row) => String(row?.created_by || "") === currentUserId))
                       const showDateActions = deleteActionRecordIdByDate.get(reportDateKey) === String(r?.id || "")
                       const dateActionsRowSpan = reportCountByDate.get(reportDateKey) || 1
                       return (
@@ -11929,7 +11936,7 @@ export default function DailyReportPage() {
                                   </span>
                                 </Tooltip>
                               ) : null}
-                              {canDeleteDailyReports ? (
+                              {canDeleteDateReports ? (
                                 <Tooltip title="Eliminar fecha">
                                   <span>
                                     <IconButton

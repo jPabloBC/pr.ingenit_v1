@@ -628,6 +628,7 @@ const DAILY_REPORT_LIST_SELECT = `
   weather_label,
   source_field_report_ids,
   notes,
+  created_by,
   created_at,
   updated_at,
   s4_prev_indirect_dot,
