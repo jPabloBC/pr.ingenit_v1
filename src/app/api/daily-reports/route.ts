@@ -1081,6 +1081,8 @@ export async function DELETE(req: NextRequest) {
 
     const supabaseAdmin = getSupabaseAdmin()
     const companyId = String(session.user.companyId)
+    const currentUserId = session?.user?.id ? String(session.user.id) : ''
+    const isUserRole = role === 'user'
     const deleteReason = String(req.nextUrl.searchParams.get('delete_reason') || req.nextUrl.searchParams.get('reason') || '').trim() || null
     const deleteSource = String(req.nextUrl.searchParams.get('delete_source') || req.nextUrl.searchParams.get('source') || 'daily_report_delete').trim()
     const deleteScope = String(req.nextUrl.searchParams.get('delete_scope') || '').trim().toLowerCase()
@@ -1101,6 +1103,9 @@ export async function DELETE(req: NextRequest) {
 
       const reportsToDelete = Array.isArray(dateReports) ? dateReports : []
       if (reportsToDelete.length === 0) return NextResponse.json({ error: 'No hay reportes para la fecha indicada' }, { status: 404 })
+      if (isUserRole && reportsToDelete.some((report: any) => String(report?.created_by || '') !== currentUserId)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
 
       const preparedReports = await Promise.all(reportsToDelete.map(async (report: any) => {
         const reportDate = String(report?.report_date || '').trim()
@@ -1173,6 +1178,9 @@ export async function DELETE(req: NextRequest) {
       .maybeSingle()
     if (existingError) return NextResponse.json({ error: formatError(existingError) }, { status: 500 })
     if (!existing?.id) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
+    if (isUserRole && String(existing?.created_by || '') !== currentUserId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     const reportDate = String(existing?.report_date || '').trim()
     const reportNo = Number(existing?.report_no || 0)
