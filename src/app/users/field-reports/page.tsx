@@ -1202,6 +1202,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
       id: `history-${row.id}-${snapshotType}`,
       __historyPreview: true
     }
+    activeHydrationReportIdRef.current = String(reportLike.id || '')
     setEditMode(false)
     setSelectedReport(reportLike)
     setReportHydrating(false)
@@ -3086,7 +3087,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
     const loadSelected = async () => {
       let r: any = selectedReport
       try {
-        if (selectedReport?.id && !selectedReport?.__fullLoaded) {
+        if (selectedReport?.__historyPreview === true) {
+          r = { ...selectedReport, __fullLoaded: true }
+        }
+        if (selectedReport?.id && !selectedReport?.__fullLoaded && selectedReport?.__historyPreview !== true) {
           const activeReportId = String(activeHydrationReportIdRef.current || '')
           if (activeReportId && activeReportId !== String(selectedReport.id || '')) return
           if (process.env.NODE_ENV !== 'production') {
