@@ -10,6 +10,7 @@ import {
   Container,
   FormControl,
   IconButton,
+  InputAdornment,
   InputLabel,
   MenuItem,
   Paper,
@@ -78,7 +79,6 @@ const STATUS_OPTIONS = [
   'Finiquitado',
   'Otro',
 ]
-const EMPLOYMENT_STATE_OPTIONS = ['Vigente', 'Finiquitado'] as const
 
 const statusToReasonCode = (status?: string) => {
   const normalized = String(status || '').trim().toLowerCase()
@@ -170,6 +170,24 @@ const formatDocument = (value?: string) => {
   return String(formattedRut || doc).toUpperCase()
 }
 
+const documentSearchVariants = (value?: string) => {
+  const formatted = formatDocument(value).toLowerCase()
+  const raw = String(value || '').trim().toLowerCase()
+  return [
+    formatted,
+    formatted.replace(/\./g, ''),
+    formatted.replace(/[^0-9k]/g, ''),
+    raw,
+    raw.replace(/\./g, ''),
+    raw.replace(/[^0-9k]/g, ''),
+  ]
+}
+
+const searchQueryVariants = (value: string) => {
+  const q = value.trim().toLowerCase()
+  return [q, q.replace(/\./g, ''), q.replace(/[^0-9k]/g, '')].filter(Boolean)
+}
+
 const formatDocumentForExcel = (value?: string) => {
   const doc = String(value || '').trim()
   if (!doc) return ''
@@ -243,7 +261,6 @@ export default function AttendancePage() {
   const [dailyDateAnchorEl, setDailyDateAnchorEl] = useState<HTMLElement | null>(null)
   const [dailyRows, setDailyRows] = useState<DailyStatusRow[]>([])
   const [dailySelectedCollaborator, setDailySelectedCollaborator] = useState<string>('all')
-  const [dailySelectedState, setDailySelectedState] = useState<string>('all')
   const [dailySelectedAttendance, setDailySelectedAttendance] = useState<string>('all')
   const [dailySelectedWorkerType, setDailySelectedWorkerType] = useState<string>('all')
   const [dailySearch, setDailySearch] = useState('')
@@ -560,15 +577,15 @@ export default function AttendancePage() {
     })
 
     const q = dailySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(dailySearch)
     return rows.filter((row) => {
       const displayStatus = formatAttendanceStatus(String(row.status || ''), String(row.reason || ''))
       const employmentState = row.collaborator?.is_active === false ? 'Finiquitado' : 'Vigente'
       const workerType = String(row.collaborator?.worker_type || '').trim()
-      if (dailySelectedState !== 'all' && employmentState !== dailySelectedState) return false
       if (dailySelectedAttendance !== 'all' && displayStatus !== dailySelectedAttendance) return false
       if (dailySelectedWorkerType !== 'all' && workerType !== dailySelectedWorkerType) return false
       if (!q) return true
-      const document = formatDocument(row.collaborator?.document).toLowerCase()
+      const documentVariants = documentSearchVariants(row.collaborator?.document)
       const fullName = formatFullName(row.collaborator).toLowerCase()
       const position = String(row.collaborator?.position || '').toLowerCase()
       const workerTypeSearch = workerType.toLowerCase()
@@ -576,11 +593,12 @@ export default function AttendancePage() {
       const status = displayStatus.toLowerCase()
       const reason = String(row.reason || '').toLowerCase()
       return (
-        document.includes(q) ||
+        documentVariants.some((document) => qVariants.some((query) => document.includes(query))) ||
         fullName.includes(q) ||
         position.includes(q) ||
         specialty.includes(q) ||
         workerTypeSearch.includes(q) ||
+        employmentState.toLowerCase().includes(q) ||
         status.includes(q) ||
         reason.includes(q)
       )
@@ -599,7 +617,7 @@ export default function AttendancePage() {
       }
       return String(getValue(a)).localeCompare(String(getValue(b)), 'es', { sensitivity: 'base' }) * dir
     })
-  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedState, dailySelectedAttendance, dailySelectedWorkerType, dailySearch, dailyDate, dailySortField, dailySortDirection])
+  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedAttendance, dailySelectedWorkerType, dailySearch, dailyDate, dailySortField, dailySortDirection])
 
   const historyMatrixRows = useMemo<AttendanceMatrixRow[]>(() => {
     const byCollaborator = new Map<string, AttendanceMatrixRow>()
@@ -656,6 +674,7 @@ export default function AttendancePage() {
 
   const filteredHistoryRows = useMemo(() => {
     const q = historySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(historySearch)
     return historyMatrixRows.filter((row) => {
       if (historySelectedCollaborator !== 'all' && String(row.collaborator_id) !== historySelectedCollaborator) return false
       const workerType = String(row.collaborator?.worker_type || '').trim()
@@ -667,7 +686,7 @@ export default function AttendancePage() {
         if (!hasSelectedStatus) return false
       }
       if (!q) return true
-      const document = formatDocument(row.collaborator?.document).toLowerCase()
+      const documentVariants = documentSearchVariants(row.collaborator?.document)
       const fullName = formatFullName(row.collaborator).toLowerCase()
       const position = String(row.collaborator?.position || '').toLowerCase()
       const workerTypeSearch = workerType.toLowerCase()
@@ -680,7 +699,7 @@ export default function AttendancePage() {
         .join(' ')
         .toLowerCase()
       return (
-        document.includes(q) ||
+        documentVariants.some((document) => qVariants.some((query) => document.includes(query))) ||
         fullName.includes(q) ||
         position.includes(q) ||
         specialty.includes(q) ||
@@ -1060,7 +1079,8 @@ export default function AttendancePage() {
                   flexWrap: 'nowrap',
                   overflowX: 'auto',
                   overflowY: 'hidden',
-                  pb: 0.5,
+                  pt: 1,
+                  pb: 0.75,
                   WebkitOverflowScrolling: 'touch',
                   '& > .MuiTextField-root, & > .MuiFormControl-root': {
                     flex: { xs: '0 0 160px', md: '0 0 168px' },
@@ -1077,40 +1097,36 @@ export default function AttendancePage() {
                 {tab === 'daily' ? (
                   <>
                     <Box sx={{ flex: { xs: '0 0 160px', md: '0 0 168px' } }}>
-                      <Typography sx={{ mb: 0.25, px: 0.75, fontSize: 12, fontWeight: 500, color: dailyDate ? colors.blue6 : '#64748b', lineHeight: 1 }}>
-                        Fecha
-                      </Typography>
-                      <Button
-                        variant="outlined"
-                        disabled={dailyDatesLoading || dailyAvailableDates.length === 0}
-                        onClick={(e) => setDailyDateAnchorEl(e.currentTarget)}
-                        fullWidth
-                        sx={{
-                          justifyContent: 'space-between',
-                          height: 40,
-                          px: 1.25,
-                          borderColor: colors.blue6,
-                          color: dailyDate ? '#1f2937' : '#64748b',
-                          fontSize: 16,
-                          fontWeight: 400,
-                          textAlign: 'left',
-                          textTransform: 'none',
-                          '&:hover': { borderColor: colors.blue8, bgcolor: '#f8fbff' },
-                          '&.Mui-disabled': {
-                            borderColor: '#cbd5e1',
-                            color: '#94a3b8',
-                          },
-                        }}
-                      >
-                        <span>
-                          {dailyDatesLoading
+                      <TextField
+                        label="Fecha"
+                        value={
+                          dailyDatesLoading
                             ? 'Cargando...'
                             : dailyDate
                               ? formatDateLabel(dailyDate)
-                              : 'Sin fechas'}
-                        </span>
-                        <CalendarMonth sx={{ fontSize: 22 }} />
-                      </Button>
+                              : 'Sin fechas'
+                        }
+                        disabled={dailyDatesLoading || dailyAvailableDates.length === 0}
+                        onClick={(e) => setDailyDateAnchorEl(e.currentTarget)}
+                        size="small"
+                        fullWidth
+                        InputProps={{
+                          readOnly: true,
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <CalendarMonth sx={{ fontSize: 21, color: 'rgba(0, 0, 0, 0.72)' }} />
+                            </InputAdornment>
+                          ),
+                        }}
+                        sx={{
+                          '& .MuiInputBase-root': {
+                            cursor: dailyDatesLoading || dailyAvailableDates.length === 0 ? 'default' : 'pointer',
+                          },
+                          '& .MuiInputBase-input': {
+                            cursor: dailyDatesLoading || dailyAvailableDates.length === 0 ? 'default' : 'pointer',
+                          },
+                        }}
+                      />
                       <Popover
                         open={Boolean(dailyDateAnchorEl)}
                         anchorEl={dailyDateAnchorEl}
@@ -1132,19 +1148,6 @@ export default function AttendancePage() {
                         />
                       </Popover>
                     </Box>
-                    <FormControl size="small" fullWidth>
-                      <InputLabel>Estado</InputLabel>
-                      <Select
-                        value={dailySelectedState}
-                        label="Estado"
-                        onChange={(e) => setDailySelectedState(String(e.target.value || 'all'))}
-                      >
-                        <MenuItem value="all">Todos</MenuItem>
-                        {EMPLOYMENT_STATE_OPTIONS.map((stateOption) => (
-                          <MenuItem key={stateOption} value={stateOption}>{stateOption}</MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Tipo trabajador</InputLabel>
                       <Select
@@ -1260,7 +1263,6 @@ export default function AttendancePage() {
                     if (tab === 'daily') {
                       setDailyDate(defaultTo)
                       setDailySelectedCollaborator('all')
-                      setDailySelectedState('all')
                       setDailySelectedAttendance('all')
                       setDailySelectedWorkerType('all')
                       setDailySearch('')
