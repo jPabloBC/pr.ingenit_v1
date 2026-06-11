@@ -23,7 +23,7 @@ const normalizeOptional = (value: unknown) => {
 export async function writeAuditLog(params: WriteAuditLogParams) {
   try {
     const { error } = await params.supabaseAdmin
-      .from('platform_audit_logs')
+      .from('pr_platform_audit_logs')
       .insert({
         company_id: params.companyId,
         project_id: normalizeOptional(params.projectId),
