@@ -78,6 +78,7 @@ interface FieldReport {
   work_front?: string | null
   report_sequence_no?: number | null
   report_title?: string | null
+  created_by?: string | null
 }
 
 interface ReportFrontOption {
@@ -409,8 +410,10 @@ export default function FieldReportsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
   const role = String((session?.user as any)?.role || '').toLowerCase()
+  const currentUserId = String((session?.user as any)?.id || '')
   const isUserRole = role === 'user'
   const isAdminRole = role === 'admin'
+  const isDevRole = role === 'dev'
   const isViewerRole = role === 'viewer'
   const isDailyReportMode = false
   const isReadOnlyRole = isViewerRole || isDailyReportMode
@@ -10176,6 +10179,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             }
                             const supervisorParts = splitNameRole(supervisorDisplay)
                             const capatazParts = splitNameRole(capatazDisplay)
+                            const canDeleteReport =
+                              !isReadOnlyRole &&
+                              (
+                                isAdminRole ||
+                                isDevRole ||
+                                (isUserRole && !!currentUserId && String(r?.created_by || '') === currentUserId)
+                              )
                             return (
                               <ListItem
                                 key={r.id}
@@ -10340,7 +10350,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       </IconButton>
                                     </Tooltip>
                                   ) : null}
-                                  {!isReadOnlyRole ? (
+                                  {canDeleteReport ? (
                                     <Tooltip title="Eliminar">
                                       <IconButton size="small" color="error" onClick={() => confirmDeleteReport(r.id)}>
                                         <Trash2 size={16} />
