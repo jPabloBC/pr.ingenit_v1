@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import { resolveCurrentActor } from '@/lib/currentActor'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,33 @@ const normalizeCrewMemberRole = (role: any, position: any) => {
   if (explicit === 'foreman' || explicit === 'capataz') return 'foreman'
   if (explicit === 'member' || explicit === 'integrante' || explicit === 'colaborador') return 'member'
   return inferCrewRoleFromPosition(position)
+}
+
+const writeCrewAudit = async (
+  supabaseAdminClient: any,
+  session: any,
+  params: {
+    action: string
+    resourceId?: string | null
+    beforeData?: any
+    afterData?: any
+    metadata?: Record<string, any> | null
+  }
+) => {
+  await writeAuditLog({
+    supabaseAdmin: supabaseAdminClient,
+    companyId: String(session?.user?.companyId || ''),
+    projectId: session?.user?.projectId || null,
+    actorUserId: session?.user?.id || null,
+    actorEmail: session?.user?.email || null,
+    actorRole: session?.user?.role || null,
+    action: params.action as any,
+    resourceType: 'crew',
+    resourceId: params.resourceId || null,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata || null
+  })
 }
 
 export async function GET(req: NextRequest, ctx: any) {
@@ -83,6 +111,11 @@ export async function GET(req: NextRequest, ctx: any) {
       const supLegacy = Array.isArray(data.supervisors) ? data.supervisors.map(String) : (data.supervisor ? [String(data.supervisor)] : [])
       const frmLegacy = Array.isArray(data.foremen) ? data.foremen.map(String) : (data.foreman ? [String(data.foreman)] : [])
       const memLegacy = Array.isArray(data.members) ? data.members.map(String) : (data.member ? [String(data.member)] : [])
+      await writeCrewAudit(supabaseAdmin, session, {
+        action: 'view',
+        resourceId: String(id),
+        metadata: { member_count: supLegacy.length + frmLegacy.length + memLegacy.length }
+      })
       return NextResponse.json({ ...data, supervisors: supLegacy, foremen: frmLegacy, members: memLegacy })
     }
 
@@ -93,6 +126,11 @@ export async function GET(req: NextRequest, ctx: any) {
 
     if (collabErr) {
       // If we can't fetch positions, return all as members
+      await writeCrewAudit(supabaseAdmin, session, {
+        action: 'view',
+        resourceId: String(id),
+        metadata: { member_count: collabIds.length, members_fallback: true }
+      })
       return NextResponse.json({ ...data, supervisors: [], foremen: [], members: collabIds })
     }
 
@@ -109,12 +147,22 @@ export async function GET(req: NextRequest, ctx: any) {
       else if (role === 'foreman') foremen.push(idv)
       else members.push(idv)
     }
-    return NextResponse.json({
+    const responseData = {
       ...data,
       supervisors: Array.from(new Set(supervisors)),
       foremen: Array.from(new Set(foremen)),
       members: Array.from(new Set(members))
+    }
+
+    await writeCrewAudit(supabaseAdmin, session, {
+      action: 'view',
+      resourceId: String(id),
+      metadata: {
+        member_count: responseData.supervisors.length + responseData.foremen.length + responseData.members.length
+      }
     })
+
+    return NextResponse.json(responseData)
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
@@ -137,6 +185,26 @@ export async function PUT(req: NextRequest, ctx: any) {
 
     // Update crew basic fields (name, description only — supervisors/foremen/members are in pr_crew_members table)
     const id = ctx.params.id
+    let beforeCrew: any = null
+    let beforeMembers: any[] = []
+    try {
+      const beforeCrewRes = await supabaseAdmin
+        .from('pr_crews')
+        .select('*')
+        .eq('company_id', session.user.companyId)
+        .eq('id', id)
+        .maybeSingle()
+      beforeCrew = beforeCrewRes.data || null
+
+      const beforeMembersRes = await supabaseAdmin
+        .from('pr_crew_members')
+        .select('*')
+        .eq('crew_id', id)
+      beforeMembers = beforeMembersRes.data || []
+    } catch {
+      beforeCrew = null
+      beforeMembers = []
+    }
 
     const normalizedName = body?.name ? String(body.name).toLocaleUpperCase('es-CL') : body?.name
     const normalizedSpecialty = body?.specialty ? String(body.specialty).toLocaleUpperCase('es-CL') : body?.specialty
@@ -294,6 +362,33 @@ export async function PUT(req: NextRequest, ctx: any) {
       console.warn('Could not update collaborator assignment flags', e)
     }
 
+    let afterMembers: any[] = []
+    try {
+      const { data: memberRows } = await supabaseAdmin
+        .from('pr_crew_members')
+        .select('*')
+        .eq('crew_id', id)
+      afterMembers = memberRows || []
+    } catch {
+      afterMembers = []
+    }
+
+    await writeCrewAudit(supabaseAdmin, session, {
+      action: 'update',
+      resourceId: String(id),
+      beforeData: { crew: beforeCrew, members: beforeMembers },
+      afterData: { crew: updated, members: afterMembers },
+      metadata: {
+        name: updated?.name ?? normalizedName ?? null,
+        area: updated?.specialty ?? normalizedSpecialty ?? null,
+        specialty: updated?.specialty ?? normalizedSpecialty ?? null,
+        member_count_before: beforeMembers.length,
+        member_count_after: afterMembers.length,
+        added_member_ids: newMemberIds.filter((memberId) => !currentMemberIds.includes(memberId)),
+        removed_member_ids: idsToRemove
+      }
+    })
+
     return NextResponse.json(updated)
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
@@ -305,7 +400,9 @@ export async function DELETE(req: NextRequest, ctx: any) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (role === 'viewer') return NextResponse.json({ error: 'Forbidden: read-only role' }, { status: 403 })
+    if (role !== 'admin' && role !== 'dev') {
+      return NextResponse.json({ error: 'Forbidden: solo admin/dev puede eliminar cuadrillas' }, { status: 403 })
+    }
 
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
@@ -314,6 +411,27 @@ export async function DELETE(req: NextRequest, ctx: any) {
 
     // Delete members then crew
     const id = ctx.params.id
+    let beforeCrew: any = null
+    let beforeMembers: any[] = []
+    try {
+      const beforeCrewRes = await supabaseAdmin
+        .from('pr_crews')
+        .select('*')
+        .eq('company_id', session.user.companyId)
+        .eq('id', id)
+        .maybeSingle()
+      beforeCrew = beforeCrewRes.data || null
+
+      const beforeMembersRes = await supabaseAdmin
+        .from('pr_crew_members')
+        .select('*')
+        .eq('crew_id', id)
+      beforeMembers = beforeMembersRes.data || []
+    } catch {
+      beforeCrew = null
+      beforeMembers = []
+    }
+
     const { error: delMembersErr } = await supabaseAdmin.from('pr_crew_members').delete().eq('crew_id', id)
     if (delMembersErr) return NextResponse.json({ error: delMembersErr.message }, { status: 500 })
 
@@ -328,6 +446,18 @@ export async function DELETE(req: NextRequest, ctx: any) {
 
     const { error: delCrewErr } = await supabaseAdmin.from('pr_crews').delete().eq('company_id', session.user.companyId).eq('id', id)
     if (delCrewErr) return NextResponse.json({ error: delCrewErr.message }, { status: 500 })
+
+    await writeCrewAudit(supabaseAdmin, session, {
+      action: 'delete',
+      resourceId: String(id),
+      beforeData: { crew: beforeCrew, members: beforeMembers },
+      metadata: {
+        name: beforeCrew?.name ?? null,
+        area: beforeCrew?.specialty ?? null,
+        specialty: beforeCrew?.specialty ?? null,
+        member_count: beforeMembers.length
+      }
+    })
 
     return NextResponse.json({ success: true })
   } catch (err) {

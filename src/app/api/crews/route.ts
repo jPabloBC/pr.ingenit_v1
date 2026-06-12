@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { normalizeText } from '@/lib/normalize'
 import { resolveCurrentActor } from '@/lib/currentActor'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,6 +50,33 @@ const chunkArray = <T,>(items: T[], size: number) => {
   const chunks: T[][] = []
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
   return chunks
+}
+
+const writeCrewAudit = async (
+  supabaseAdminClient: any,
+  session: any,
+  params: {
+    action: string
+    resourceId?: string | null
+    beforeData?: any
+    afterData?: any
+    metadata?: Record<string, any> | null
+  }
+) => {
+  await writeAuditLog({
+    supabaseAdmin: supabaseAdminClient,
+    companyId: String(session?.user?.companyId || ''),
+    projectId: session?.user?.projectId || null,
+    actorUserId: session?.user?.id || null,
+    actorEmail: session?.user?.email || null,
+    actorRole: session?.user?.role || null,
+    action: params.action as any,
+    resourceType: 'crew',
+    resourceId: params.resourceId || null,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata || null
+  })
 }
 
 const fetchCrewMembersForCrewIds = async (supabaseAdminClient: any, crewIds: string[], withRole: boolean) => {
@@ -768,6 +796,18 @@ export async function POST(req: NextRequest) {
         console.warn('Could not update collaborator assignment flags', e)
       }
     }
+
+    await writeCrewAudit(supabaseAdmin, session, {
+      action: 'create',
+      resourceId: crew?.id ? String(crew.id) : null,
+      afterData: crew,
+      metadata: {
+        name: crew?.name ?? normalizedName ?? null,
+        area: crew?.specialty ?? normalizedSpecialty ?? null,
+        specialty: crew?.specialty ?? normalizedSpecialty ?? null,
+        member_count: uniqueIds.length
+      }
+    })
 
     return NextResponse.json(crew)
   } catch (err) {

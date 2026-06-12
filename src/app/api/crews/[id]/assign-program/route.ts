@@ -2,6 +2,35 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
+
+const writeCrewProgramAudit = async (
+  supabaseAdminClient: any,
+  session: any,
+  params: {
+    crewId: string
+    assignmentId?: string | null
+    afterData?: any
+    metadata?: Record<string, any> | null
+  }
+) => {
+  await writeAuditLog({
+    supabaseAdmin: supabaseAdminClient,
+    companyId: String(session?.user?.companyId || ''),
+    projectId: session?.user?.projectId || null,
+    actorUserId: session?.user?.id || null,
+    actorEmail: session?.user?.email || null,
+    actorRole: session?.user?.role || null,
+    action: 'assign_program' as any,
+    resourceType: 'crew',
+    resourceId: params.crewId,
+    afterData: params.afterData,
+    metadata: {
+      ...(params.metadata || {}),
+      assignment_id: params.assignmentId || null
+    }
+  })
+}
 
 export async function POST(req: NextRequest, ctx: any) {
   try {
@@ -69,6 +98,18 @@ export async function POST(req: NextRequest, ctx: any) {
     }
 
     if (existing) {
+      await writeCrewProgramAudit(supabaseAdmin, session, {
+        crewId,
+        assignmentId: existing?.id ? String(existing.id) : null,
+        afterData: { crew, assigned: existing },
+        metadata: {
+          activity_id: activityId,
+          work_date: workDate,
+          existing: true,
+          assigned_count: 1,
+          crew_name: crew?.name ?? null
+        }
+      })
       return NextResponse.json({ success: true, crew, assigned: existing })
     }
 
@@ -115,6 +156,19 @@ export async function POST(req: NextRequest, ctx: any) {
     }
 
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 })
+
+    await writeCrewProgramAudit(supabaseAdmin, session, {
+      crewId,
+      assignmentId: inserted?.id ? String(inserted.id) : null,
+      afterData: { crew, assigned: inserted },
+      metadata: {
+        activity_id: activityId,
+        work_date: workDate,
+        existing: false,
+        assigned_count: inserted ? 1 : 0,
+        crew_name: crew?.name ?? null
+      }
+    })
 
     return NextResponse.json({ success: true, crew, assigned: inserted })
   } catch (err) {
