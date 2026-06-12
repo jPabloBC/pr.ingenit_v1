@@ -40,6 +40,9 @@ export default function CrewsPage() {
   const isAdminReadOnly = role === 'admin'
   const isViewerReadOnly = role === 'viewer'
   const isUserRole = role === 'user'
+  const canEditCrews = role === 'admin' || role === 'dev' || role === 'user'
+  const canManageCrewActivities = role === 'admin' || role === 'dev' || role === 'user'
+  const canDeleteCrews = role === 'admin' || role === 'dev'
   const canManageCrews = !isAdminReadOnly && !isViewerReadOnly
   const canViewDateNotes = canManageCrews || isAdminReadOnly || isViewerReadOnly
   const [latePolicy, setLatePolicy] = useState<{ allowByUser: boolean }>({
@@ -242,6 +245,13 @@ export default function CrewsPage() {
   const [showAllProgramDisciplines, setShowAllProgramDisciplines] = useState(false)
   const [crews, setCrews] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [isCreatingCrew, setIsCreatingCrew] = useState(false)
+  const [isSavingCrew, setIsSavingCrew] = useState(false)
+  const [deletingCrewId, setDeletingCrewId] = useState<string | null>(null)
+  const [editLoadingCrewId, setEditLoadingCrewId] = useState<string | null>(null)
+  const [editLoadError, setEditLoadError] = useState<string | null>(null)
+  const [programLoadingCrewId, setProgramLoadingCrewId] = useState<string | null>(null)
+  const [programLoadError, setProgramLoadError] = useState<string | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [openingCreateForm, setOpeningCreateForm] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
@@ -654,6 +664,7 @@ export default function CrewsPage() {
 
   const loadProgramCrewContext = useCallback(async (crewId: string, workDate?: string) => {
     setLoadingProgramCrew(true)
+    setProgramLoadError(null)
     setProgramCrewMembers([])
     setProgramCrewRoleIds(null)
     setProgramAssignedActivities([])
@@ -668,6 +679,10 @@ export default function CrewsPage() {
         fetch(`/api/crews/${encodeURIComponent(String(crewId))}/full`),
         fetch(assignedUrl)
       ])
+
+      if (!crewRes.ok || !fullRes.ok || !assignedRes.ok) {
+        throw new Error('No se pudieron cargar los datos de actividades de la cuadrilla.')
+      }
 
       if (crewRes.ok) {
         const crew = await crewRes.json()
@@ -692,8 +707,10 @@ export default function CrewsPage() {
       }
     } catch (e) {
       console.warn('Could not load program crew context', e)
+      setProgramLoadError((e as any)?.message || 'No se pudieron cargar los datos de actividades de la cuadrilla.')
     } finally {
       setLoadingProgramCrew(false)
+      setProgramLoadingCrewId(null)
     }
   }, [])
 
@@ -1508,6 +1525,8 @@ export default function CrewsPage() {
 
   const closeEditModalImmediate = () => {
     setShowEditModal(false)
+    setEditLoadingCrewId(null)
+    setEditLoadError(null)
     resetForm()
   }
 
@@ -2416,8 +2435,9 @@ export default function CrewsPage() {
   }
 
   const handleSaveCrew = async () => {
-    if (!canManageCrews) return
     const isEdit = Boolean(editingId)
+    if (isEdit ? !canEditCrews : !canManageCrews) return
+    if ((isEdit && isSavingCrew) || (!isEdit && isCreatingCrew)) return
     // pick the right vectors depending on mode
     // Asegurar que solo se envíen arrays de strings (IDs)
     const toIdArray = (arr: any[]) => (arr || []).map(x => (typeof x === 'object' && x !== null && 'id' in x) ? String(x.id) : String(x))
@@ -2598,47 +2618,72 @@ export default function CrewsPage() {
     //   }
     // }
 
-    let res
-    if (isEdit && editingId) {
-      // saving (PUT)
-      res = await fetch(`/api/crews/${editingId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      })
-    } else {
-      // saving (POST)
-      res = await fetch("/api/crews", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      })
-    }
+    if (isEdit) setIsSavingCrew(true)
+    else setIsCreatingCrew(true)
 
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('Error saving crew', res.status)
-      try {
-        const json = JSON.parse(text)
-        alert('Error guardando cuadrilla: ' + (formatApiError(json?.error) || formatApiError(json) || text))
-      } catch (e) {
-        alert('Error guardando cuadrilla: ' + text)
+    try {
+      let res
+      if (isEdit && editingId) {
+        // saving (PUT)
+        res = await fetch(`/api/crews/${editingId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+      } else {
+        // saving (POST)
+        res = await fetch("/api/crews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
       }
-      return
+
+      if (!res.ok) {
+        const text = await res.text()
+        console.error('Error saving crew', res.status)
+        try {
+          const json = JSON.parse(text)
+          alert('Error guardando cuadrilla: ' + (formatApiError(json?.error) || formatApiError(json) || text))
+        } catch (e) {
+          alert('Error guardando cuadrilla: ' + text)
+        }
+        return
+      }
+      await loadCrews({ force: true })
+      try { await refreshAssignedIds() } catch (e) {}
+      if (isEdit) {
+        setShowEditModal(false)
+      } else {
+        setShowCreateForm(false)
+      }
+      resetForm()
+    } catch (e: any) {
+      console.error('Error saving crew', e)
+      alert('Error guardando cuadrilla: ' + (e?.message || String(e)))
+    } finally {
+      if (isEdit) setIsSavingCrew(false)
+      else setIsCreatingCrew(false)
     }
-    await loadCrews({ force: true })
-    try { await refreshAssignedIds() } catch (e) {}
-    if (isEdit) {
-      setShowEditModal(false)
-    } else {
-      setShowCreateForm(false)
-    }
-    resetForm()
   }
 
   const handleEdit = async (crew: any) => {
-    if (!canManageCrews) return
+    if (!canEditCrews) return
     // Editando cuadrilla
+    const targetId = String(crew?.id || '')
+    if (!targetId || editLoadingCrewId) return
+    setEditLoadingCrewId(targetId)
+    setEditLoadError(null)
+    setShowCreateForm(false)
+    setEditingCrew(crew)
+    setEditingId(targetId)
+    setFName(crew.name || "")
+    setEditSelectedFrontName(getCrewNameBase(crew.name || ''))
+    setFDescription(crew.description || "")
+    setEditFieldBossId(String(crew.field_boss_id || crew.jefe_terreno_id || crew.terrain_boss_id || ''))
+    setEditWorkDate(crew.work_date || toChileDateKey(crew.created_at) || getChileToday())
+    setShowEditModal(true)
+
     try {
       await loadCrews({ silent: true, force: true })
     } catch (e) {
@@ -2646,13 +2691,14 @@ export default function CrewsPage() {
     }
     // fetch latest crew data from server to ensure supervisors/foremen/members fields are present
     try {
-      const res = await fetch(`/api/crews/${crew.id}`, { cache: 'no-store' })
-      if (res.ok) {
-        const latest = await res.json()
-        crew = latest || crew
-      }
+      const res = await fetch(`/api/crews/${targetId}`, { cache: 'no-store' })
+      if (!res.ok) throw new Error('No se pudo cargar el detalle de la cuadrilla.')
+      const latest = await res.json()
+      crew = latest || crew
     } catch (e) {
-      // ignore, use provided crew
+      setEditLoadError((e as any)?.message || 'No se pudo cargar el detalle de la cuadrilla.')
+      setEditLoadingCrewId(null)
+      return
     }
     
     // Store the full crew for direct access in render
@@ -2685,6 +2731,11 @@ export default function CrewsPage() {
       loadedCollaborators = await loadCollaboratorsCached({ force: true, normalizeSpecialty: true })
     } catch (e) {
       loadedCollaborators = collaborators
+    }
+    if (!loadedCollaborators.length) {
+      setEditLoadError('No se pudieron cargar los colaboradores para editar la cuadrilla.')
+      setEditLoadingCrewId(null)
+      return
     }
 
     // set arrays for supervisors/foremen/members (support legacy single fields)
@@ -2759,15 +2810,35 @@ export default function CrewsPage() {
     try { await refreshAssignedIds() } catch (e) {}
     setShowCreateForm(false)
     setShowEditModal(true)
+    setEditLoadingCrewId(null)
   }
 
   const handleDelete = async (id: string) => {
-    if (!canManageCrews) return
-    if (!confirm("¿Eliminar cuadrilla?")) return
-    const res = await fetch(`/api/crews/${id}`, { method: "DELETE" })
-    if (!res.ok) return alert("Error eliminando cuadrilla")
-    await loadCrews({ force: true })
-    try { await refreshAssignedIds() } catch (e) {}
+    if (!canDeleteCrews) return
+    const targetId = String(id || '')
+    if (!targetId || deletingCrewId) return
+    if (!confirm("Esta acción eliminará la cuadrilla y actualizará sus integrantes. ¿Desea continuar?")) return
+    setDeletingCrewId(targetId)
+    try {
+      const res = await fetch(`/api/crews/${targetId}`, { method: "DELETE" })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        alert("Error eliminando cuadrilla" + (text ? `: ${text}` : ''))
+        return
+      }
+      setCrews((prev) => {
+        const next = (prev || []).filter((crew: any) => String(crew?.id || '') !== targetId)
+        deriveAssignedIds(next)
+        return next
+      })
+      try { await loadCrews({ silent: true, force: true }) } catch (e) {}
+      try { await refreshAssignedIds() } catch (e) {}
+    } catch (e: any) {
+      console.error('Error deleting crew', e)
+      alert("Error eliminando cuadrilla" + (e?.message ? `: ${e.message}` : ''))
+    } finally {
+      setDeletingCrewId(null)
+    }
   }
 
   const loadCrews = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
@@ -2949,6 +3020,22 @@ export default function CrewsPage() {
     } finally {
       setLoadingProgram(false)
     }
+  }
+
+  const openProgramDialogForCrew = (crew: any) => {
+    if (!canManageCrewActivities) return
+    const crewId = String(crew?.id || '')
+    if (!crewId) return
+    const workDate = String(crew?.work_date || '').trim() || toChileDateKey(crew?.created_at) || getChileToday()
+    setSelectedCrewForProgram(crewId)
+    setProgramWorkDate(workDate)
+    setProgramDialogOpen(true)
+    setProgramLoadingCrewId(crewId)
+    setProgramLoadError(null)
+    setShowAllProgramDisciplines(false)
+    setProgramQuery('')
+    setProgramResults([])
+    setProgramAssignedActivities([])
   }
 
   const quickQuantityRaw = String(newActivity.quantity || '').trim()
@@ -3611,19 +3698,60 @@ export default function CrewsPage() {
                                   </Box>
                                   <Box sx={{ display: 'inline-flex', flexWrap: 'nowrap', gap: { xs: 0.35, sm: 0.5, md: 0.75 }, alignItems: 'center', justifyContent: 'flex-end', ml: { xs: 0, sm: 0.25, md: 0.5 }, flex: '0 0 auto', maxWidth: '100%' }}>
                                     {isAdminReadOnly || isViewerReadOnly ? (
-                                      <Tooltip title="Ver" arrow>
-                                        <span>
-                                          <IconButton size="small" disabled={showCreateForm} onClick={() => openView(String(c.id))} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
-                                            <VisibilityOutlinedIcon fontSize="small" />
-                                          </IconButton>
-                                        </span>
-                                      </Tooltip>
+                                      <>
+                                        <Tooltip title="Ver" arrow>
+                                          <span>
+                                            <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                              <VisibilityOutlinedIcon fontSize="small" />
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
+                                        {canEditCrews ? (
+                                          <Tooltip title="Editar" arrow>
+                                            <span>
+                                              <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                                <EditOutlinedIcon fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        ) : null}
+                                        {canManageCrewActivities ? (
+                                          <Tooltip title="Actividades" arrow>
+                                            <span>
+                                              <IconButton type="button" size="small" disabled={showCreateForm || programLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openProgramDialogForCrew(c) }} sx={() => {
+                                                const hasActivities = (Array.isArray(c.activities) && c.activities.length > 0) || c.activity_id || c.activityId || c.activity_name || c.activity
+                                                return {
+                                                  border: '1px solid',
+                                                  borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
+                                                  borderRadius: 1.5,
+                                                  color: hasActivities ? '#ffffff' : '#ca6807',
+                                                  bgcolor: hasActivities ? '#2563eb' : '#fff',
+                                                  width: { xs: 30, sm: 34 },
+                                                  height: { xs: 30, sm: 34 },
+                                                  '&:hover': { bgcolor: hasActivities ? '#1d4ed8' : '#f8fafc' }
+                                                }
+                                              }}>
+                                                <AssignmentTurnedInOutlinedIcon fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        ) : null}
+                                        {canDeleteCrews ? (
+                                          <Tooltip title="Eliminar" arrow>
+                                            <span>
+                                              <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
+                                                <DeleteOutlineIcon fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        ) : null}
+                                      </>
                                     ) : (
                                       <>
                                         {isUserRole && (
                                           <Tooltip title="Ver" arrow>
                                             <span>
-                                              <IconButton size="small" disabled={showCreateForm} onClick={() => openView(String(c.id))} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                              <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
                                                 <VisibilityOutlinedIcon fontSize="small" />
                                               </IconButton>
                                             </span>
@@ -3631,51 +3759,41 @@ export default function CrewsPage() {
                                         )}
                                         <Tooltip title="Editar" arrow>
                                           <span>
-                                            <IconButton size="small" disabled={showCreateForm} onClick={() => handleEdit(c)} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                            <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
                                               <EditOutlinedIcon fontSize="small" />
                                             </IconButton>
                                           </span>
                                         </Tooltip>
-                                        <Tooltip title="Actividades" arrow>
-                                          <span>
-                                            <IconButton size="small" disabled={showCreateForm} onClick={async () => {
-                                              setSelectedCrewForProgram(String(c.id))
-                                              setProgramWorkDate(getChileToday())
-                                              setProgramDialogOpen(true)
-                                              setShowAllProgramDisciplines(false)
-                                              setProgramQuery('')
-                                              setProgramResults([])
-                                              setProgramAssignedActivities([])
-                                              try {
-                                                await loadProgramCrewContext(String(c.id), programWorkDate)
-                                                await loadProgramActivities()
-                                              } catch (e) {
-                                                console.warn('Could not load program activities', e)
-                                              }
-                                            }} sx={() => {
-                                              const hasActivities = (Array.isArray(c.activities) && c.activities.length > 0) || c.activity_id || c.activityId || c.activity_name || c.activity
-                                              return {
-                                                border: '1px solid',
-                                                borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
-                                                borderRadius: 1.5,
-                                                color: hasActivities ? '#ffffff' : '#ca6807',
-                                                bgcolor: hasActivities ? '#2563eb' : '#fff',
-                                                width: { xs: 30, sm: 34 },
-                                                height: { xs: 30, sm: 34 },
-                                                '&:hover': { bgcolor: hasActivities ? '#1d4ed8' : '#f8fafc' }
-                                              }
-                                            }}>
-                                              <AssignmentTurnedInOutlinedIcon fontSize="small" />
-                                            </IconButton>
-                                          </span>
-                                        </Tooltip>
-                                        <Tooltip title="Eliminar" arrow>
-                                          <span>
-                                            <IconButton size="small" color="error" disabled={showCreateForm} onClick={() => handleDelete(c.id)} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
-                                              <DeleteOutlineIcon fontSize="small" />
-                                            </IconButton>
-                                          </span>
-                                        </Tooltip>
+                                        {canManageCrewActivities ? (
+                                          <Tooltip title="Actividades" arrow>
+                                            <span>
+                                              <IconButton type="button" size="small" disabled={showCreateForm || programLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openProgramDialogForCrew(c) }} sx={() => {
+                                                const hasActivities = (Array.isArray(c.activities) && c.activities.length > 0) || c.activity_id || c.activityId || c.activity_name || c.activity
+                                                return {
+                                                  border: '1px solid',
+                                                  borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
+                                                  borderRadius: 1.5,
+                                                  color: hasActivities ? '#ffffff' : '#ca6807',
+                                                  bgcolor: hasActivities ? '#2563eb' : '#fff',
+                                                  width: { xs: 30, sm: 34 },
+                                                  height: { xs: 30, sm: 34 },
+                                                  '&:hover': { bgcolor: hasActivities ? '#1d4ed8' : '#f8fafc' }
+                                                }
+                                              }}>
+                                                <AssignmentTurnedInOutlinedIcon fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        ) : null}
+                                        {canDeleteCrews ? (
+                                          <Tooltip title="Eliminar" arrow>
+                                            <span>
+                                              <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
+                                                <DeleteOutlineIcon fontSize="small" />
+                                              </IconButton>
+                                            </span>
+                                          </Tooltip>
+                                        ) : null}
                                       </>
                                     )}
                                   </Box>
@@ -3845,9 +3963,11 @@ export default function CrewsPage() {
                 </DialogContent>
                 <DialogActions>
                   <Button
+                    type="button"
                     variant="contained"
                     onClick={handleSaveCrew}
                     disabled={(
+                      isCreatingCrew ||
                       !attendanceWorkDates.includes(String(createWorkDate || '').trim()) ||
                       !String(createFieldBossId || '').trim() ||
                       (createSupervisorsSelected.length === 0) &&
@@ -3857,12 +3977,12 @@ export default function CrewsPage() {
                       !createSkipSupervisor &&
                       !createSkipForeman
                     )}
-                  >Crear</Button>
+                  >{isCreatingCrew ? 'Creando...' : 'Crear'}</Button>
                   <Button onClick={() => requestCloseCrewModal('create')} sx={{ border: '1px solid', borderColor: colors.blue6 }}>Cancelar</Button>
                 </DialogActions>
               </Dialog>
             )}
-            {!isAdminReadOnly && (
+            {canEditCrews && (
               <Dialog
                 open={showEditModal}
                 onClose={(_event, reason) => {
@@ -3880,13 +4000,23 @@ export default function CrewsPage() {
               >
                 <DialogTitle>Editar cuadrilla</DialogTitle>
                 <DialogContent onChangeCapture={() => { editTouchedRef.current = true }}>
-                  {renderFormFields('edit')}
+                  {editLoadingCrewId ? (
+                    <Typography sx={{ py: 3, color: colors.gray4 }}>Cargando cuadrilla...</Typography>
+                  ) : editLoadError ? (
+                    <Typography sx={{ py: 3, color: '#b91c1c' }}>{editLoadError}</Typography>
+                  ) : (
+                    renderFormFields('edit')
+                  )}
                 </DialogContent>
                 <DialogActions>
                   <Button
+                    type="button"
                     variant="contained"
                     onClick={handleSaveCrew}
                     disabled={(
+                      !!editLoadingCrewId ||
+                      !!editLoadError ||
+                      isSavingCrew ||
                       (editSupervisorsSelected.length === 0) &&
                       (editForemenSelected.length === 0) &&
                       (editMembersSelected.length === 0) &&
@@ -3894,7 +4024,7 @@ export default function CrewsPage() {
                       !editSkipSupervisor &&
                       !editSkipForeman
                     )}
-                  >Actualizar</Button>
+                  >{isSavingCrew ? 'Guardando...' : 'Actualizar'}</Button>
                   <Button onClick={() => requestCloseCrewModal('edit')} sx={{ border: '1px solid', borderColor: colors.blue6 }}>Cancelar</Button>
                 </DialogActions>
               </Dialog>
@@ -3923,7 +4053,7 @@ export default function CrewsPage() {
                 </Button>
               </DialogActions>
             </Dialog>
-            {!isAdminReadOnly && (
+            {canManageCrewActivities && (
             <Dialog open={programDialogOpen} onClose={(_event, reason) => {
               if (reason === 'backdropClick') return
               if (programDirty) {
@@ -3938,6 +4068,8 @@ export default function CrewsPage() {
               setProgramAssignedActivities([])
               setProgramInitialAssignedIds(new Set<string>())
               setProgramDirty(false)
+              setProgramLoadingCrewId(null)
+              setProgramLoadError(null)
               setProgramWorkDate(getChileToday())
             }} fullWidth maxWidth={false} PaperProps={{ sx: { width: '97vw', maxWidth: '97vw', height: '95vh', maxHeight: '95vh', m: 0 } }}>
               <DialogTitle>Seleccionar actividad desde Programa</DialogTitle>
@@ -3955,6 +4087,15 @@ export default function CrewsPage() {
                     fullWidth
                   />
                 </Box>
+                {loadingProgramCrew || programLoadingCrewId ? (
+                  <Box sx={{ py: 4 }}>
+                    <Typography sx={{ color: colors.gray4 }}>Cargando actividades...</Typography>
+                  </Box>
+                ) : programLoadError ? (
+                  <Box sx={{ py: 4 }}>
+                    <Typography sx={{ color: '#b91c1c' }}>{programLoadError}</Typography>
+                  </Box>
+                ) : (
                 <Box
                   sx={{
                     display: 'grid',
@@ -4302,7 +4443,7 @@ export default function CrewsPage() {
                 <Box sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Actividades asignadas</Typography>
                   {programAssignedActivities.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary">—</Typography>
+                    <Typography variant="body2" color="text.secondary">Sin actividades asignadas</Typography>
                   ) : (
                     <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 1.5, overflow: 'hidden' }}>
                       <Box sx={{ maxHeight: 360, overflowX: 'auto', overflowY: 'auto' }}>
@@ -4569,6 +4710,7 @@ export default function CrewsPage() {
                 </Box>
                   </Box>
                 </Box>
+                )}
               </DialogContent>
               <DialogActions sx={{ mt: 2, mb: 2, pb: 1, justifyContent: 'center' }}>
                 <Button variant="outlined" sx={{ mr: 1 }} onClick={() => {
@@ -4584,6 +4726,8 @@ export default function CrewsPage() {
                   setProgramAssignedActivities([])
                   setProgramInitialAssignedIds(new Set<string>())
                   setProgramDirty(false)
+                  setProgramLoadingCrewId(null)
+                  setProgramLoadError(null)
                 }}>Cerrar</Button>
                 {programDirty && (
                   <Button variant="contained" sx={{ ml: 1 }} onClick={async () => {

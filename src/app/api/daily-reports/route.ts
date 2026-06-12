@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../lib/auth'
+import { writeAuditLog } from '../../../lib/audit/writeAuditLog'
+import { assertCanMutateResource } from '../../../lib/authz/assertCanMutateResource'
 import { createClient } from '@supabase/supabase-js'
 
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-09'
@@ -611,6 +613,46 @@ function requireRole(role: string) {
   return role === 'admin' || role === 'dev' || role === 'user'
 }
 
+const optionalText = (value: any) => {
+  const text = String(value || '').trim()
+  return text || null
+}
+
+function resolveAuditProjectId(session: any, ...rows: any[]) {
+  for (const row of rows) {
+    const projectId = optionalText(row?.project_id)
+    if (projectId) return projectId
+  }
+  return optionalText(session?.user?.projectId)
+}
+
+async function writeDailyReportAudit(params: {
+  supabaseAdmin: any
+  session: any
+  companyId: string
+  action: 'create' | 'update' | 'delete' | 'view' | 'export' | 'download'
+  resourceType?: string
+  resourceId?: string | null
+  beforeData?: any
+  afterData?: any
+  metadata?: Record<string, any> | null
+}) {
+  await writeAuditLog({
+    supabaseAdmin: params.supabaseAdmin,
+    companyId: params.companyId,
+    projectId: resolveAuditProjectId(params.session, params.afterData, params.beforeData),
+    actorUserId: optionalText(params.session?.user?.id),
+    actorEmail: optionalText(params.session?.user?.email),
+    actorRole: optionalText(params.session?.user?.role),
+    action: params.action,
+    resourceType: params.resourceType || 'daily_report',
+    resourceId: params.resourceId,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata
+  })
+}
+
 const DAILY_REPORT_LIST_SELECT = `
   id,
   report_no,
@@ -628,6 +670,7 @@ const DAILY_REPORT_LIST_SELECT = `
   weather_label,
   source_field_report_ids,
   notes,
+  created_by,
   created_at,
   updated_at,
   s4_prev_indirect_dot,
@@ -688,6 +731,14 @@ export async function GET(req: NextRequest) {
         .eq('daily_report_id', historyReportId)
         .order('version_no', { ascending: false })
       if (error) return NextResponse.json({ error: formatError(error) }, { status: 500 })
+      await writeDailyReportAudit({
+        supabaseAdmin,
+        session,
+        companyId,
+        action: 'view',
+        resourceId: historyReportId,
+        metadata: { view: 'history_by_report', version_count: Array.isArray(data) ? data.length : 0 }
+      })
       return NextResponse.json(data || [])
     }
 
@@ -733,6 +784,21 @@ export async function GET(req: NextRequest) {
       } else {
         deletions = Array.isArray(deletionRows) ? deletionRows : []
       }
+
+      await writeDailyReportAudit({
+        supabaseAdmin,
+        session,
+        companyId,
+        action: 'view',
+        resourceType: 'daily_report_date',
+        resourceId: historyReportDate,
+        metadata: {
+          view: 'history_by_date',
+          report_count: Array.isArray(dateReports) ? dateReports.length : 0,
+          version_count: versions.length,
+          deletion_count: deletions.length
+        }
+      })
 
       return NextResponse.json({
         report_date: historyReportDate,
@@ -839,6 +905,19 @@ export async function GET(req: NextRequest) {
         .eq('id', id)
         .single()
       if (error) return NextResponse.json({ error: formatError(error) }, { status: 500 })
+      await writeDailyReportAudit({
+        supabaseAdmin,
+        session,
+        companyId,
+        action: 'view',
+        resourceId: id,
+        metadata: {
+          view: 'detail',
+          report_date: data?.report_date || null,
+          report_no: data?.report_no || null,
+          work_front: data?.work_front || null
+        }
+      })
       return NextResponse.json(data)
     }
 
@@ -961,6 +1040,19 @@ export async function POST(req: NextRequest) {
       payload,
       notes: (payload.notes && typeof payload.notes === 'object') ? payload.notes : {}
     })
+    await writeDailyReportAudit({
+      supabaseAdmin,
+      session,
+      companyId,
+      action: 'create',
+      resourceId: data?.id ? String(data.id) : null,
+      afterData: data || null,
+      metadata: {
+        report_date: data?.report_date || reportDate,
+        report_no: data?.report_no || reportNo,
+        work_front: data?.work_front || workFront
+      }
+    })
     return NextResponse.json({ ...data, _front_history_sync: historySync })
   } catch (err: any) {
     return NextResponse.json({ error: formatError(err) }, { status: 500 })
@@ -986,6 +1078,8 @@ export async function PUT(req: NextRequest) {
       .eq('id', id)
       .single()
     if (previousError) return NextResponse.json({ error: formatError(previousError), details: previousError }, { status: 500 })
+    const mutateError = assertCanMutateResource({ session, row: previousReport, resourceType: 'reporte diario' })
+    if (mutateError) return mutateError
 
     const reportDate = String(body?.report_date || '').trim()
     const dateBasedNo = getDailyReportNoFromDate(reportDate)
@@ -1066,6 +1160,21 @@ export async function PUT(req: NextRequest) {
       previousData: previousReport || null,
       newData: data || null
     })
+    await writeDailyReportAudit({
+      supabaseAdmin,
+      session,
+      companyId,
+      action: 'update',
+      resourceId: id,
+      beforeData: previousReport || null,
+      afterData: data || null,
+      metadata: {
+        report_date: data?.report_date || reportDate,
+        report_no: data?.report_no || null,
+        work_front: data?.work_front || workFront,
+        versioning: versionResult || null
+      }
+    })
     return NextResponse.json({ ...data, _versioning: versionResult, _front_history_sync: historySync })
   } catch (err: any) {
     return NextResponse.json({ error: formatError(err) }, { status: 500 })
@@ -1101,6 +1210,10 @@ export async function DELETE(req: NextRequest) {
 
       const reportsToDelete = Array.isArray(dateReports) ? dateReports : []
       if (reportsToDelete.length === 0) return NextResponse.json({ error: 'No hay reportes para la fecha indicada' }, { status: 404 })
+      for (const report of reportsToDelete) {
+        const mutateError = assertCanMutateResource({ session, row: report, resourceType: 'reporte diario' })
+        if (mutateError) return mutateError
+      }
 
       const preparedReports = await Promise.all(reportsToDelete.map(async (report: any) => {
         const reportDate = String(report?.report_date || '').trim()
@@ -1117,6 +1230,7 @@ export async function DELETE(req: NextRequest) {
       }))
 
       const deletionAuditIds: string[] = []
+      const deletionAuditIdsByReportId: Record<string, string> = {}
       for (const item of preparedReports) {
         const deletionAuditId = await saveDailyReportDeletionAudit({
           supabaseAdmin,
@@ -1131,7 +1245,11 @@ export async function DELETE(req: NextRequest) {
           deleteReason,
           deleteSource: deleteSource || 'daily_report_date_delete'
         })
-        if (deletionAuditId) deletionAuditIds.push(deletionAuditId)
+        if (deletionAuditId) {
+          deletionAuditIds.push(deletionAuditId)
+          const reportId = String(item.report?.id || '')
+          if (reportId) deletionAuditIdsByReportId[reportId] = deletionAuditId
+        }
       }
 
       const ids = preparedReports.map((item) => String(item.report?.id || '')).filter(Boolean)
@@ -1141,6 +1259,27 @@ export async function DELETE(req: NextRequest) {
         .eq('company_id', companyId)
         .in('id', ids)
       if (deleteReportsError) return NextResponse.json({ error: formatError(deleteReportsError) }, { status: 500 })
+
+      for (const item of preparedReports) {
+        const reportId = String(item.report?.id || '')
+        await writeDailyReportAudit({
+          supabaseAdmin,
+          session,
+          companyId,
+          action: 'delete',
+          resourceId: reportId || null,
+          beforeData: item.report || null,
+          metadata: {
+            delete_scope: 'date',
+            report_date: reportDateForScope,
+            report_no: item.reportNo,
+            work_front: item.workFront,
+            delete_reason: deleteReason,
+            delete_source: deleteSource || 'daily_report_date_delete',
+            deletion_audit_id: deletionAuditIdsByReportId[reportId] || null
+          }
+        })
+      }
 
       for (const item of preparedReports) {
         await deleteFrontHistoryForReport({
@@ -1173,6 +1312,8 @@ export async function DELETE(req: NextRequest) {
       .maybeSingle()
     if (existingError) return NextResponse.json({ error: formatError(existingError) }, { status: 500 })
     if (!existing?.id) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
+    const mutateError = assertCanMutateResource({ session, row: existing, resourceType: 'reporte diario' })
+    if (mutateError) return mutateError
 
     const reportDate = String(existing?.report_date || '').trim()
     const reportNo = Number(existing?.report_no || 0)
@@ -1199,6 +1340,24 @@ export async function DELETE(req: NextRequest) {
       .eq('company_id', companyId)
       .eq('id', id)
     if (deleteReportError) return NextResponse.json({ error: formatError(deleteReportError) }, { status: 500 })
+
+    await writeDailyReportAudit({
+      supabaseAdmin,
+      session,
+      companyId,
+      action: 'delete',
+      resourceId: id,
+      beforeData: existing || null,
+      metadata: {
+        delete_scope: 'id',
+        report_date: reportDate,
+        report_no: reportNo,
+        work_front: workFront,
+        delete_reason: deleteReason,
+        delete_source: deleteSource,
+        deletion_audit_id: deletionAuditId || null
+      }
+    })
 
     await deleteFrontHistoryForReport({ supabaseAdmin, companyId, reportDate, reportNo, workFront })
 

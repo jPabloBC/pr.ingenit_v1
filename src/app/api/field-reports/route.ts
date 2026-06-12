@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { normalizeText } from '@/lib/normalize'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
 import { resolveCurrentActor } from '@/lib/currentActor'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const FIELD_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-31'
@@ -30,6 +31,61 @@ function getSupabaseAdmin() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!key) throw new Error('Missing service role key')
   return createClient(SUPABASE_URL, key)
+}
+
+const optionalText = (value: any) => {
+  const text = String(value || '').trim()
+  return text || null
+}
+
+const buildFieldReportAuditMetadata = (row: any, extra?: Record<string, any> | null) => ({
+  report_no: row?.report_no ?? row?.report_sequence_no ?? null,
+  report_date: row?.report_date ?? row?.date ?? null,
+  work_front: row?.work_front ?? null,
+  front: row?.front ?? row?.work_front ?? null,
+  status: row?.status ?? null,
+  ...(extra || {})
+})
+
+function resolveFieldReportAuditCompanyId(session: any, ...rows: any[]) {
+  for (const row of rows) {
+    const companyId = optionalText(row?.company_id)
+    if (companyId) return companyId
+  }
+  return optionalText(session?.user?.companyId) || ''
+}
+
+function resolveFieldReportAuditProjectId(session: any, ...rows: any[]) {
+  for (const row of rows) {
+    const projectId = optionalText(row?.project_id)
+    if (projectId) return projectId
+  }
+  return optionalText(session?.user?.projectId)
+}
+
+async function writeFieldReportAudit(params: {
+  supabaseAdmin: any
+  session: any
+  action: 'create' | 'update' | 'delete' | 'view'
+  resourceId?: string | null
+  beforeData?: any
+  afterData?: any
+  metadata?: Record<string, any> | null
+}) {
+  await writeAuditLog({
+    supabaseAdmin: params.supabaseAdmin,
+    companyId: resolveFieldReportAuditCompanyId(params.session, params.afterData, params.beforeData),
+    projectId: resolveFieldReportAuditProjectId(params.session, params.afterData, params.beforeData),
+    actorUserId: optionalText(params.session?.user?.id),
+    actorEmail: optionalText(params.session?.user?.email),
+    actorRole: optionalText(params.session?.user?.role),
+    action: params.action,
+    resourceType: 'field_report',
+    resourceId: params.resourceId,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata
+  })
 }
 
 const normalizeFrontLabel = (value: any) => normalizeText(String(value || '')).toUpperCase()
@@ -107,6 +163,7 @@ const FIELD_REPORT_LIST_SUMMARY_SELECT = [
   'end_time',
   'activities',
   'assignments',
+  'created_by',
   'created_at'
 ].join(', ')
 
@@ -129,6 +186,7 @@ const FIELD_REPORT_LIST_SLIM_SELECT = [
   'area',
   'start_time',
   'end_time',
+  'created_by',
   'created_at'
 ].join(', ')
 
@@ -1249,6 +1307,7 @@ export async function POST(req: NextRequest) {
 
     const payload: Record<string, any> = {
       company_id: session.user.companyId,
+      created_by: session?.user?.id || null,
       design_version: body.design_version !== undefined && body.design_version !== '' ? String(body.design_version).toUpperCase() : 'V1',
       emitted_by_id: body.emitted_by_id !== undefined && body.emitted_by_id !== '' ? body.emitted_by_id : null,
       date: body.date !== undefined ? body.date : null,
@@ -1295,6 +1354,17 @@ export async function POST(req: NextRequest) {
           resolvedWorkFrontId,
           resolvedReportFront.nextSequenceNoToPersist
         )
+        await writeFieldReportAudit({
+          supabaseAdmin,
+          session,
+          action: 'create',
+          resourceId: data?.id ? String(data.id) : null,
+          afterData: data || null,
+          metadata: buildFieldReportAuditMetadata(data, {
+            saved_fields_count: Object.keys(insertPayload).length,
+            omitted_fields: Array.from(omittedFields)
+          })
+        })
         return NextResponse.json({ ...data, _saved_fields: Object.keys(insertPayload), _omitted_fields: Array.from(omittedFields) })
       }
       const msg = (error && (error as any).message) ? String((error as any).message) : JSON.stringify(error)
@@ -1457,6 +1527,14 @@ export async function GET(req: NextRequest) {
       const { data, error } = await q.eq('id', id).single()
       if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
       const enriched = await enrichReportPeople(supabaseAdmin, String(session.user.companyId), data)
+      await writeFieldReportAudit({
+        supabaseAdmin,
+        session,
+        action: 'view',
+        resourceId: id,
+        afterData: enriched || data || null,
+        metadata: buildFieldReportAuditMetadata(enriched || data, { view: 'detail' })
+      })
       return NextResponse.json(enriched)
     }
 
@@ -1476,23 +1554,23 @@ export async function GET(req: NextRequest) {
     if (summary && error) {
       const fallbackSelects = slim
         ? [
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, specialty',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name',
-            'id, company_id, date, created_at',
-            'id, company_id'
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, specialty',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name',
+            'id, company_id, created_by, date, created_at',
+            'id, company_id, created_by'
           ]
         : includeCalc ? [
-            'id, company_id, design_version, emitted_by_id, date, report_sequence_no, report_title, supervisor_id, capataz_id, specialty, work_front, crew_id, crew_ids, crew_name, weather, turno, area, start_time, end_time, activities, assignments, created_at, personnel, personnel_ids, person_hours, equipment_entries, equipment_hours',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, activities, assignments, specialty, personnel, personnel_ids, person_hours, equipment_entries, equipment_hours',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments, personnel_ids, person_hours, equipment_entries, equipment_hours',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments, person_hours, equipment_entries, equipment_hours',
+            'id, company_id, created_by, design_version, emitted_by_id, date, report_sequence_no, report_title, supervisor_id, capataz_id, specialty, work_front, crew_id, crew_ids, crew_name, weather, turno, area, start_time, end_time, activities, assignments, created_at, personnel, personnel_ids, person_hours, equipment_entries, equipment_hours',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, activities, assignments, specialty, personnel, personnel_ids, person_hours, equipment_entries, equipment_hours',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments, personnel_ids, person_hours, equipment_entries, equipment_hours',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments, person_hours, equipment_entries, equipment_hours',
           ] : [
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, activities, assignments, specialty',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments',
-            'id, company_id, date, created_at, area, work_front, crew_id, crew_name',
-            'id, company_id, date, created_at',
-            'id, company_id'
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_ids, crew_name, supervisor_id, capataz_id, start_time, end_time, activities, assignments, specialty',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name, supervisor_id, capataz_id, activities, assignments',
+            'id, company_id, created_by, date, created_at, area, work_front, crew_id, crew_name',
+            'id, company_id, created_by, date, created_at',
+            'id, company_id, created_by'
           ]
       for (const fallbackSelect of fallbackSelects) {
         let candidateSelect = fallbackSelect
@@ -1587,6 +1665,7 @@ export async function PUT(req: NextRequest) {
       .eq('id', id)
       .eq('company_id', session.user.companyId)
       .single()
+    if (!previousReport) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
     const workFront = body.work_front !== undefined && body.work_front !== '' ? String(body.work_front) : ''
     const resolvedReportFront = await resolveReportFrontNumberAndTitle({
       supabaseAdmin,
@@ -1647,6 +1726,7 @@ export async function PUT(req: NextRequest) {
         .from('pr_field_reports')
         .update(updatePayload)
         .eq('id', id)
+        .eq('company_id', session.user.companyId)
         .select()
         .single()
       if (!error) {
@@ -1673,6 +1753,20 @@ export async function PUT(req: NextRequest) {
           editedBy: session?.user?.id ? String(session.user.id) : null,
           previousData: previousReport || null,
           newData: data || null
+        })
+        await writeFieldReportAudit({
+          supabaseAdmin,
+          session,
+          action: 'update',
+          resourceId: String(id),
+          beforeData: previousReport || null,
+          afterData: data || null,
+          metadata: buildFieldReportAuditMetadata(data || previousReport, {
+            saved_fields_count: Object.keys(updatePayload).length,
+            omitted_fields: Array.from(omittedFields),
+            versioning: versionResult || null,
+            evidence_removed_count: removedKeys.length
+          })
         })
         return NextResponse.json({
           ...data,
@@ -1715,8 +1809,36 @@ export async function DELETE(req: NextRequest) {
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
     const supabaseAdmin = getSupabaseAdmin()
-    const { data, error } = await supabaseAdmin.from('pr_field_reports').delete().eq('id', id).select().single()
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from('pr_field_reports')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', session.user.companyId)
+      .maybeSingle()
+    if (existingError) return NextResponse.json({ error: String(existingError) }, { status: 500 })
+    if (!existing?.id) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
+    const actorUserId = String(session?.user?.id || '').trim()
+    const createdBy = String(existing?.created_by || '').trim()
+    if (role === 'user' && (!actorUserId || !createdBy || createdBy !== actorUserId)) {
+      return NextResponse.json({ error: 'Forbidden: solo el creador puede eliminar reporte de terreno' }, { status: 403 })
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('pr_field_reports')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', session.user.companyId)
+      .select()
+      .single()
     if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
+    await writeFieldReportAudit({
+      supabaseAdmin,
+      session,
+      action: 'delete',
+      resourceId: String(id),
+      beforeData: data || existing || null,
+      metadata: buildFieldReportAuditMetadata(data || existing)
+    })
     return NextResponse.json({ ok: true, data })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })

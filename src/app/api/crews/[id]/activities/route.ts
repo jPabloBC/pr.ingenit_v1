@@ -2,6 +2,38 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
+
+const writeCrewActivityAudit = async (
+  supabaseAdminClient: any,
+  session: any,
+  params: {
+    action: string
+    resourceId?: string | null
+    crewId?: string | null
+    beforeData?: any
+    afterData?: any
+    metadata?: Record<string, any> | null
+  }
+) => {
+  await writeAuditLog({
+    supabaseAdmin: supabaseAdminClient,
+    companyId: String(session?.user?.companyId || ''),
+    projectId: session?.user?.projectId || null,
+    actorUserId: session?.user?.id || null,
+    actorEmail: session?.user?.email || null,
+    actorRole: session?.user?.role || null,
+    action: params.action as any,
+    resourceType: 'crew_activity',
+    resourceId: params.resourceId || null,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: {
+      ...(params.metadata || {}),
+      crew_id: params.crewId || null
+    }
+  })
+}
 
 export async function GET(req: NextRequest, ctx: any) {
   try {
@@ -164,7 +196,9 @@ export async function GET(req: NextRequest, ctx: any) {
       })
 
     const activityIds = orderedAssigned.map((a: any) => a.activity_id).filter(Boolean)
-    if (activityIds.length === 0) return NextResponse.json({ activities: [], assigned: [] })
+    if (activityIds.length === 0) {
+      return NextResponse.json({ activities: [], assigned: [] })
+    }
 
     let activitiesQuery = supabaseAdmin
       .from('pr_program')
@@ -218,6 +252,22 @@ export async function DELETE(req: NextRequest, ctx: any) {
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
     const crewId = ctx.params.id
 
+    let beforeRows: any[] = []
+    try {
+      let beforeQuery = supabaseAdmin
+        .from('pr_crew_activities')
+        .select('*')
+        .eq('company_id', session.user.companyId)
+        .eq('crew_id', crewId)
+      if (assignmentId) beforeQuery = beforeQuery.eq('id', assignmentId)
+      else beforeQuery = beforeQuery.eq('activity_id', activityId)
+      if (workDate) beforeQuery = beforeQuery.eq('work_date', workDate)
+      const { data: rows } = await beforeQuery
+      beforeRows = rows || []
+    } catch {
+      beforeRows = []
+    }
+
     let del = supabaseAdmin
       .from('pr_crew_activities')
       .delete()
@@ -230,6 +280,18 @@ export async function DELETE(req: NextRequest, ctx: any) {
     const { error } = await del
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await writeCrewActivityAudit(supabaseAdmin, session, {
+      action: 'delete_activity',
+      resourceId: assignmentId || String(activityId || ''),
+      crewId,
+      beforeData: beforeRows,
+      metadata: {
+        assignment_id: assignmentId || null,
+        activity_id: activityId || null,
+        work_date: workDate,
+        deleted_count: beforeRows.length
+      }
+    })
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
@@ -264,6 +326,24 @@ export async function PUT(req: NextRequest, ctx: any) {
       const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
       const crewId = ctx.params.id
 
+      let beforeRows: any[] = []
+      try {
+        const assignmentIds = orders.map((row) => row.assignmentId).filter(Boolean)
+        const activityIds = orders.map((row) => row.activityId).filter(Boolean)
+        let beforeQuery = supabaseAdmin
+          .from('pr_crew_activities')
+          .select('*')
+          .eq('company_id', session.user.companyId)
+          .eq('crew_id', crewId)
+          .eq('work_date', workDate)
+        if (assignmentIds.length > 0) beforeQuery = beforeQuery.in('id', assignmentIds)
+        else if (activityIds.length > 0) beforeQuery = beforeQuery.in('activity_id', activityIds)
+        const { data: rows } = await beforeQuery
+        beforeRows = rows || []
+      } catch {
+        beforeRows = []
+      }
+
       let missingDisplayOrderColumn = false
       for (const row of orders) {
         let q = supabaseAdmin
@@ -291,6 +371,37 @@ export async function PUT(req: NextRequest, ctx: any) {
         )
       }
 
+      let afterRows: any[] = []
+      try {
+        const assignmentIds = orders.map((row) => row.assignmentId).filter(Boolean)
+        const activityIds = orders.map((row) => row.activityId).filter(Boolean)
+        let afterQuery = supabaseAdmin
+          .from('pr_crew_activities')
+          .select('*')
+          .eq('company_id', session.user.companyId)
+          .eq('crew_id', crewId)
+          .eq('work_date', workDate)
+        if (assignmentIds.length > 0) afterQuery = afterQuery.in('id', assignmentIds)
+        else if (activityIds.length > 0) afterQuery = afterQuery.in('activity_id', activityIds)
+        const { data: rows } = await afterQuery
+        afterRows = rows || []
+      } catch {
+        afterRows = []
+      }
+
+      await writeCrewActivityAudit(supabaseAdmin, session, {
+        action: 'update_activity',
+        resourceId: String(crewId),
+        crewId,
+        beforeData: beforeRows,
+        afterData: afterRows,
+        metadata: {
+          mode: 'reorder',
+          work_date: workDate,
+          order_count: orders.length
+        }
+      })
+
       return NextResponse.json({ ok: true })
     }
 
@@ -310,6 +421,22 @@ export async function PUT(req: NextRequest, ctx: any) {
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
     const crewId = ctx.params.id
 
+    let beforeRows: any[] = []
+    try {
+      let beforeQuery = supabaseAdmin
+        .from('pr_crew_activities')
+        .select('*')
+        .eq('company_id', session.user.companyId)
+        .eq('crew_id', crewId)
+      if (assignmentId) beforeQuery = beforeQuery.eq('id', assignmentId)
+      else beforeQuery = beforeQuery.eq('activity_id', activityId)
+      if (workDate) beforeQuery = beforeQuery.eq('work_date', workDate)
+      const { data: rows } = await beforeQuery
+      beforeRows = rows || []
+    } catch {
+      beforeRows = []
+    }
+
     let upd = supabaseAdmin
       .from('pr_crew_activities')
       .update({ user_detail: userDetail })
@@ -326,10 +453,51 @@ export async function PUT(req: NextRequest, ctx: any) {
       String((error as any)?.message || '').includes("Could not find the 'user_detail' column") ||
       String((error as any)?.message || '').includes('column "user_detail" does not exist')
     )) {
+      await writeCrewActivityAudit(supabaseAdmin, session, {
+        action: 'update_activity',
+        resourceId: assignmentId || activityId || null,
+        crewId,
+        beforeData: beforeRows,
+        metadata: {
+          assignment_id: assignmentId || null,
+          activity_id: activityId || null,
+          work_date: workDate,
+          skipped: 'user_detail column missing'
+        }
+      })
       return NextResponse.json({ ok: true, skipped: 'user_detail column missing' })
     }
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    let afterRows: any[] = []
+    try {
+      let afterQuery = supabaseAdmin
+        .from('pr_crew_activities')
+        .select('*')
+        .eq('company_id', session.user.companyId)
+        .eq('crew_id', crewId)
+      if (assignmentId) afterQuery = afterQuery.eq('id', assignmentId)
+      else afterQuery = afterQuery.eq('activity_id', activityId)
+      if (workDate) afterQuery = afterQuery.eq('work_date', workDate)
+      const { data: rows } = await afterQuery
+      afterRows = rows || []
+    } catch {
+      afterRows = []
+    }
+
+    await writeCrewActivityAudit(supabaseAdmin, session, {
+      action: 'update_activity',
+      resourceId: assignmentId || activityId || null,
+      crewId,
+      beforeData: beforeRows,
+      afterData: afterRows,
+      metadata: {
+        assignment_id: assignmentId || null,
+        activity_id: activityId || null,
+        work_date: workDate,
+        mode: 'user_detail'
+      }
+    })
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
