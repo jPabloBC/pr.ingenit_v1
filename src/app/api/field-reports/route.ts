@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 import { normalizeText } from '@/lib/normalize'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
 import { resolveCurrentActor } from '@/lib/currentActor'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const FIELD_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-31'
@@ -30,6 +31,61 @@ function getSupabaseAdmin() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!key) throw new Error('Missing service role key')
   return createClient(SUPABASE_URL, key)
+}
+
+const optionalText = (value: any) => {
+  const text = String(value || '').trim()
+  return text || null
+}
+
+const buildFieldReportAuditMetadata = (row: any, extra?: Record<string, any> | null) => ({
+  report_no: row?.report_no ?? row?.report_sequence_no ?? null,
+  report_date: row?.report_date ?? row?.date ?? null,
+  work_front: row?.work_front ?? null,
+  front: row?.front ?? row?.work_front ?? null,
+  status: row?.status ?? null,
+  ...(extra || {})
+})
+
+function resolveFieldReportAuditCompanyId(session: any, ...rows: any[]) {
+  for (const row of rows) {
+    const companyId = optionalText(row?.company_id)
+    if (companyId) return companyId
+  }
+  return optionalText(session?.user?.companyId) || ''
+}
+
+function resolveFieldReportAuditProjectId(session: any, ...rows: any[]) {
+  for (const row of rows) {
+    const projectId = optionalText(row?.project_id)
+    if (projectId) return projectId
+  }
+  return optionalText(session?.user?.projectId)
+}
+
+async function writeFieldReportAudit(params: {
+  supabaseAdmin: any
+  session: any
+  action: 'create' | 'update' | 'delete' | 'view'
+  resourceId?: string | null
+  beforeData?: any
+  afterData?: any
+  metadata?: Record<string, any> | null
+}) {
+  await writeAuditLog({
+    supabaseAdmin: params.supabaseAdmin,
+    companyId: resolveFieldReportAuditCompanyId(params.session, params.afterData, params.beforeData),
+    projectId: resolveFieldReportAuditProjectId(params.session, params.afterData, params.beforeData),
+    actorUserId: optionalText(params.session?.user?.id),
+    actorEmail: optionalText(params.session?.user?.email),
+    actorRole: optionalText(params.session?.user?.role),
+    action: params.action,
+    resourceType: 'field_report',
+    resourceId: params.resourceId,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata
+  })
 }
 
 const normalizeFrontLabel = (value: any) => normalizeText(String(value || '')).toUpperCase()
@@ -1295,6 +1351,17 @@ export async function POST(req: NextRequest) {
           resolvedWorkFrontId,
           resolvedReportFront.nextSequenceNoToPersist
         )
+        await writeFieldReportAudit({
+          supabaseAdmin,
+          session,
+          action: 'create',
+          resourceId: data?.id ? String(data.id) : null,
+          afterData: data || null,
+          metadata: buildFieldReportAuditMetadata(data, {
+            saved_fields_count: Object.keys(insertPayload).length,
+            omitted_fields: Array.from(omittedFields)
+          })
+        })
         return NextResponse.json({ ...data, _saved_fields: Object.keys(insertPayload), _omitted_fields: Array.from(omittedFields) })
       }
       const msg = (error && (error as any).message) ? String((error as any).message) : JSON.stringify(error)
@@ -1457,6 +1524,14 @@ export async function GET(req: NextRequest) {
       const { data, error } = await q.eq('id', id).single()
       if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
       const enriched = await enrichReportPeople(supabaseAdmin, String(session.user.companyId), data)
+      await writeFieldReportAudit({
+        supabaseAdmin,
+        session,
+        action: 'view',
+        resourceId: id,
+        afterData: enriched || data || null,
+        metadata: buildFieldReportAuditMetadata(enriched || data, { view: 'detail' })
+      })
       return NextResponse.json(enriched)
     }
 
@@ -1676,6 +1751,20 @@ export async function PUT(req: NextRequest) {
           previousData: previousReport || null,
           newData: data || null
         })
+        await writeFieldReportAudit({
+          supabaseAdmin,
+          session,
+          action: 'update',
+          resourceId: String(id),
+          beforeData: previousReport || null,
+          afterData: data || null,
+          metadata: buildFieldReportAuditMetadata(data || previousReport, {
+            saved_fields_count: Object.keys(updatePayload).length,
+            omitted_fields: Array.from(omittedFields),
+            versioning: versionResult || null,
+            evidence_removed_count: removedKeys.length
+          })
+        })
         return NextResponse.json({
           ...data,
           _saved_fields: Object.keys(updatePayload),
@@ -1725,6 +1814,14 @@ export async function DELETE(req: NextRequest) {
       .select()
       .single()
     if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
+    await writeFieldReportAudit({
+      supabaseAdmin,
+      session,
+      action: 'delete',
+      resourceId: String(id),
+      beforeData: data || null,
+      metadata: buildFieldReportAuditMetadata(data)
+    })
     return NextResponse.json({ ok: true, data })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
