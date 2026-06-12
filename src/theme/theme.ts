@@ -1,6 +1,6 @@
 'use client'
 
-import { createTheme } from '@mui/material/styles'
+import { createTheme, responsiveFontSizes } from '@mui/material/styles'
 
 // Colores corporativos IngenIT
 export const colors = {
@@ -41,7 +41,7 @@ export const colors = {
   white: "#ffffff",
 }
 
-export const theme = createTheme({
+const baseTheme = createTheme({
   palette: {
     primary: {
       main: colors.blue6, // #005abf
@@ -112,41 +112,59 @@ export const theme = createTheme({
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 700,
       color: colors.blue3,
+      fontSize: '2.5rem',
+      lineHeight: 1.15,
     },
     h2: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 600,
       color: colors.blue3,
+      fontSize: '2rem',
+      lineHeight: 1.18,
     },
     h3: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 600,
       color: colors.blue3,
+      fontSize: '1.75rem',
+      lineHeight: 1.2,
     },
     h4: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 600,
       color: colors.blue3,
+      fontSize: '1.55rem',
+      lineHeight: 1.22,
     },
     h5: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 500,
       color: colors.blue3,
+      fontSize: '1.3rem',
+      lineHeight: 1.25,
     },
     h6: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 500,
       color: colors.blue3,
+      fontSize: '1.1rem',
+      lineHeight: 1.28,
     },
     body1: {
       fontFamily: 'var(--font-sansation, "Open Sans", Arial, sans-serif)',
+      fontSize: '1rem',
+      lineHeight: 1.55,
     },
     body2: {
       fontFamily: 'var(--font-sansation, "Open Sans", Arial, sans-serif)',
+      fontSize: '0.92rem',
+      lineHeight: 1.5,
     },
     button: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
       fontWeight: 500,
+      fontSize: '0.95rem',
+      lineHeight: 1.3,
       textTransform: 'none' as const,
     },
   },
@@ -231,6 +249,33 @@ export const theme = createTheme({
         },
       },
     },
+    MuiInputBase: {
+      styleOverrides: {
+        input: {
+          fontSize: '1rem',
+          lineHeight: 1.4,
+          '&::placeholder': {
+            fontSize: '1rem',
+            opacity: 0.75,
+          },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.95rem',
+        },
+      },
+    },
+    MuiFormHelperText: {
+      styleOverrides: {
+        root: {
+          fontSize: '0.8rem',
+          lineHeight: 1.35,
+        },
+      },
+    },
     MuiChip: {
       styleOverrides: {
         root: {
@@ -259,4 +304,9 @@ export const theme = createTheme({
       },
     },
   },
+})
+
+export const theme = responsiveFontSizes(baseTheme, {
+  factor: 2.2,
+  variants: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'body1', 'body2', 'button'],
 })

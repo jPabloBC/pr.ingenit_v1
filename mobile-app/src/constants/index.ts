@@ -22,7 +22,7 @@ if (__DEV__ && Platform.OS === 'android' && apiBase.includes('localhost')) {
 }
 
 // Ensure we export an explicit string (empty in production if not configured)
-export const API_BASE_URL = 'http://192.168.1.87:3000';
+export const API_BASE_URL = apiBase || '';
 
 console.log('API_BASE_URL:', API_BASE_URL);
 

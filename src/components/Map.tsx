@@ -26,7 +26,7 @@ const customIcon = L.icon({
 
 const Map: React.FC<MapProps> = ({ latitude, longitude }) => {
   useEffect(() => {
-    console.log('Map coordinates:', { latitude, longitude });
+    if (process.env.NODE_ENV === 'development') console.debug('Map coordinates:', { latitude, longitude })
   }, [latitude, longitude]);
 
   const position = [latitude, longitude];

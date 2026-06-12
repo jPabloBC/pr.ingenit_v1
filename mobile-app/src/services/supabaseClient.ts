@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from '@supabase/supabase-js';
 
 // Hardcoding Supabase URL and ANON KEY for testing purposes
 const SUPABASE_URL = 'https://juupotamdjqzpxuqdtco.supabase.co';

@@ -1,11 +1,12 @@
 'use client'
 
 import { useSession } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 import { CircularProgress, Box, Typography } from '@mui/material'
 import { colors } from '../../theme/theme'
-import Aside from '@/components/layout/Aside'
+import Aside from '../../components/layout/Aside'
+import VersionUpdateBanner from '../../components/system/VersionUpdateBanner'
 
 export default function UsersLayout({
   children,
@@ -14,20 +15,29 @@ export default function UsersLayout({
 }) {
   const { data: session, status } = useSession()
   const router = useRouter()
+  const pathname = usePathname()
+  const isProjectSelectionRoute = pathname === '/users/select-project'
 
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/auth/signin')
-    } else if (status === 'authenticated' && session?.user) {
-      // Verificar que el usuario tenga rol administrativo
-      const userRole = (session.user as any).role
-      const adminRoles = ['admin', 'hr_manager', 'supervisor', 'ADMIN', 'HR_MANAGER', 'SUPERVISOR']
-      
-      if (!adminRoles.includes(userRole)) {
+	useEffect(() => {
+		if (status === 'unauthenticated') {
+			router.push('/auth/signin')
+		} else if (status === 'authenticated' && session?.user) {
+			if (isProjectSelectionRoute) return
+			// Verificar que el usuario tenga rol administrativo o permisos asignados
+			const userRole = String((session.user as { role?: string }).role ?? '').trim().toLowerCase()
+			if (userRole === 'dev') {
+				router.push('/auth/signin?error=dev_area_moved_to_ingenit_v2')
+        return
+      }
+      const permissions = (session.user as any)?.permissions || []
+      const adminRoles = ['admin', 'hr_manager', 'supervisor']
+      const isBasicUser = userRole === 'user'
+
+      if (!adminRoles.includes(userRole) && !isBasicUser && (!Array.isArray(permissions) || permissions.length === 0)) {
         router.push('/auth/signin?error=access_denied')
       }
     }
-  }, [status, session, router])
+	}, [status, session, router, isProjectSelectionRoute])
 
   if (status === 'loading') {
     return (
@@ -54,11 +64,17 @@ export default function UsersLayout({
     return null // Se redirige automáticamente
   }
 
-  if (status === 'authenticated' && session?.user) {
-    const userRole = (session.user as any).role
-    const adminRoles = ['admin', 'hr_manager', 'supervisor', 'ADMIN', 'HR_MANAGER', 'SUPERVISOR']
+	if (status === 'authenticated' && session?.user) {
+		if (isProjectSelectionRoute) {
+			return <Box sx={{ backgroundColor: 'white', minHeight: '100vh' }}>{children}</Box>
+		}
+		const userRole = String((session.user as { role?: string }).role ?? '').trim().toLowerCase()
+		if (userRole === 'dev') return null
+		const permissions = (session.user as any)?.permissions || []
+		const adminRoles = ['admin', 'hr_manager', 'supervisor']
+    const isBasicUser = userRole === 'user'
     
-    if (!adminRoles.includes(userRole)) {
+    if (!adminRoles.includes(userRole) && !isBasicUser && (!Array.isArray(permissions) || permissions.length === 0)) {
       return (
         <Box 
           display="flex" 
@@ -82,11 +98,13 @@ export default function UsersLayout({
     }
   }
 
-  return (
-    <Box sx={{ display: 'flex', backgroundColor: 'white', minHeight: '100vh' }}>
-      <Aside />
-      <Box sx={{ flex: 1 }}>{children}</Box>
-    </Box>
-  )
+	return (
+		<Box sx={{ display: 'flex', backgroundColor: 'white', minHeight: '100vh' }}>
+			<Aside />
+			<Box sx={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', width: '100%', minWidth: 0 }}>
+        {children}
+        <VersionUpdateBanner />
+      </Box>
+		</Box>
+	)
 }
-

@@ -2,11 +2,15 @@
 
 import { Container, Typography, Box, Paper } from '@mui/material'
 import { Settings } from '@mui/icons-material'
-import { colors } from '@/theme/theme'
+import { colors } from '../../../theme/theme'
 
 export default function SettingsPage() {
   return (
-    <Container maxWidth="xl">
+    <Container
+      maxWidth={false}
+      disableGutters
+      sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}
+    >
       <Box sx={{ mb: 4 }}>
         <Box display="flex" alignItems="center" gap={2} mb={2}>
           <Settings sx={{ color: colors.blue6, fontSize: 32 }} />

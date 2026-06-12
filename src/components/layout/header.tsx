@@ -2,7 +2,7 @@
 
 import { AppBar, Toolbar, Box, Typography, Button, Container } from '@mui/material'
 import Image from 'next/image'
-import { colors } from '@/theme/theme'
+import { colors } from '../../theme/theme'
 import Link from 'next/link'
 
 interface HeaderProps {
@@ -10,6 +10,8 @@ interface HeaderProps {
 }
 
 export default function Header({ showNavigation = false }: HeaderProps) {
+  const appVersion = String(process.env.NEXT_PUBLIC_APP_VERSION || 'dev')
+
   return (
     <AppBar 
       position="sticky" 
@@ -18,13 +20,26 @@ export default function Header({ showNavigation = false }: HeaderProps) {
         background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue3} 100%)`,
         borderBottom: `1px solid ${colors.blue6}20`,
         backdropFilter: 'blur(10px)',
+        '@media (max-height: 760px), (max-width: 1366px)': {
+          borderBottom: `1px solid ${colors.blue6}18`,
+        },
       }}
     >
-      <Container maxWidth="xl">
+      <Container
+        maxWidth="xl"
+        sx={{
+          px: { xs: 1.5, sm: 2.5, md: 3 },
+        }}
+      >
         <Toolbar 
           sx={{ 
             justifyContent: 'space-between',
-            py: 2
+            py: { xs: 0.75, sm: 1, md: 1.2 },
+            minHeight: { xs: 56, md: 70 },
+            '@media (max-height: 760px), (max-width: 1366px)': {
+              py: { md: 0.5 },
+              minHeight: { md: 52 },
+            },
           }}
         >
           {/* Logo y marca */}
@@ -34,8 +49,10 @@ export default function Header({ showNavigation = false }: HeaderProps) {
                 <Image
                   src="/assets/icon_ingenIT_wt.png"
                   alt="IngenIT Logo"
-                  width={60}
-                  height={60}
+                  width={44}
+                  height={44}
+                  unoptimized
+                  priority
                   style={{
                     maxWidth: '100%',
                     height: 'auto',
@@ -94,10 +111,13 @@ export default function Header({ showNavigation = false }: HeaderProps) {
                 variant="body2" 
                 sx={{ 
                   color: colors.blue13,
-                  fontSize: '0.875rem'
+                  fontSize: { xs: '0.75rem', md: '0.875rem' },
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    fontSize: { md: '0.78rem' },
+                  },
                 }}
               >
-                v1.0.0
+                v{appVersion}
               </Typography>
             </Box>
           )}

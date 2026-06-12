@@ -2,7 +2,7 @@
 
 import { Container, Typography, Box, Paper } from '@mui/material'
 import { Payment } from '@mui/icons-material'
-import { colors } from '@/theme/theme'
+import { colors } from '../../../theme/theme'
 
 export default function CollaboratorPayrollPage() {
   return (

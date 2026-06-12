@@ -53,24 +53,6 @@ export default function EmployeeDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/auth/signin?type=employee')
-      return
-    }
-
-    if (session?.user) {
-      // Check if user has employee role
-      const userRole = (session.user as any).role
-      if (['ADMIN', 'HR_MANAGER', 'SUPERVISOR'].includes(userRole)) {
-        router.push('/dashboard')
-        return
-      }
-
-      fetchEmployeeData()
-    }
-  }, [session, status, router])
-
   const fetchEmployeeData = async () => {
     try {
       setLoading(true)
@@ -90,11 +72,29 @@ export default function EmployeeDashboard() {
         })
         setLoading(false)
       }, 1000)
-    } catch (err) {
+    } catch {
       setError('Error al cargar los datos del empleado')
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin?type=employee')
+      return
+    }
+
+    if (session?.user) {
+  // Check if user has employee role
+  const userRole = (session.user as { role?: string }).role ?? ''
+  if (['ADMIN', 'HR_MANAGER', 'SUPERVISOR'].includes(userRole)) {
+        router.push('/dashboard')
+        return
+      }
+
+      fetchEmployeeData()
+    }
+  }, [session, status, router, fetchEmployeeData])
 
   if (status === 'loading' || loading) {
     return (
@@ -149,6 +149,8 @@ export default function EmployeeDashboard() {
               alt="IngenIT Logo"
               width={80}
               height={32}
+              unoptimized
+              priority
               style={{ 
                 filter: 'brightness(0) invert(1)',
                 opacity: 0.7

@@ -1,0 +1,2 @@
+# Exclude the mobile-app directory from deployment
+/mobile-app

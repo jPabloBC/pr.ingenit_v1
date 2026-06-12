@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, CardContent, Typography } from '@mui/material';
-import { Collaborator } from '@/types';
+import { Collaborator } from '../types';
 
 const CollaboratorCard = ({ collaborator }: { collaborator: Collaborator }) => {
   return (

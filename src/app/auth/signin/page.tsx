@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { signIn, getSession } from 'next-auth/react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { signIn, getSession, useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
 import {
   Container,
   Box,
@@ -11,63 +11,172 @@ import {
   Button,
   Typography,
   Alert,
-  CircularProgress,
-  Divider
+  CircularProgress
 } from '@mui/material'
-import {
-  ArrowBack
-} from '@mui/icons-material'
 import Image from 'next/image'
 import { colors } from '../../../theme/theme'
+import { Eye, EyeOff } from 'lucide-react'
 
 export default function SignIn() {
+  const { update } = useSession()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [failedAttempts, setFailedAttempts] = useState(0)
+  const [attemptsThisSession, setAttemptsThisSession] = useState(0)
   const [loading, setLoading] = useState(false)
-  // Solo usuarios administrativos
+  const [redirecting, setRedirecting] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const [hasAttempted, setHasAttempted] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetMessage, setResetMessage] = useState('')
+  const [resetError, setResetError] = useState('')
   const router = useRouter()
-  const searchParams = useSearchParams()
+  const redirectToApp = () => {
+    const target = '/users/select-project'
+    try { router.replace(target) } catch {}
+    window.setTimeout(() => {
+      if (window.location.pathname === '/auth/signin') {
+        window.location.replace(target)
+      }
+    }, 1500)
+  }
 
-  // Eliminado: lógica de tabs y tipos de usuario
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('error') === 'access_denied') {
+        ;(async () => {
+          const s = await getSession()
+          if (s?.user) {
+            try { router.replace('/users/select-project') } catch { window.location.replace('/users/select-project') }
+          } else {
+            // remove the error param to clean URL without navigating
+            history.replaceState(null, '', '/auth/signin')
+          }
+        })()
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [router])
+
+  useEffect(() => {
+    // Update failedAttempts when email changes (persisted in localStorage per-email)
+    if (!email) {
+      // if no email typed, reflect anonymous attempts as well
+      const anon = Number(localStorage.getItem(`signin_failed_attempts:anonymous`) || 0)
+      setFailedAttempts(anon)
+      setAttemptsThisSession(0)
+      return
+    }
+    const key = `signin_failed_attempts:${email}`
+    const prev = Number(localStorage.getItem(key) || 0)
+    const anon = Number(localStorage.getItem(`signin_failed_attempts:anonymous`) || 0)
+    setFailedAttempts(Math.max(prev, anon))
+    setAttemptsThisSession(0)
+  }, [email])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (loading || redirecting) return
+    setHasAttempted(true)
     setError('')
     setLoading(true)
+    let keepBusyUntilRedirect = false
 
+    // Check if email exists in pr_users or in Supabase Auth to give specific messages
+    const normalizedEmail = String(email || '').trim().toLowerCase()
+    let existsInPrUsers = false
+    let existsInAuth = false
     try {
-      const result = await signIn('credentials', {
-        email,
-        password,
-        redirect: false
-      })
-
-      if (result?.error) {
-        if (result.error.includes('auth_id')) {
-          setError('Error de autenticación: auth_id no sincronizado');
-        } else {
-          setError('Credenciales inválidas')
-        }
-      } else {
-        // Get the session to check user role and redirect accordingly
-        const session = await getSession()
-        if (session?.user) {
-          // Solo usuarios administrativos
-          const userRole = (session.user as any).role
-          if (['admin', 'hr_manager', 'supervisor', 'ADMIN', 'HR_MANAGER', 'SUPERVISOR'].includes(userRole)) {
-            router.push('/users/dashboard')
-          } else {
-            setError('No tienes permisos administrativos')
-            setLoading(false)
-            return
-          }
+      const checkRes = await fetch(`/api/auth/check-email?email=${encodeURIComponent(normalizedEmail)}`)
+      if (checkRes.ok) {
+        const j = await checkRes.json()
+        existsInPrUsers = !!j.inPrUsers
+        existsInAuth = !!j.inAuth
+        if (!existsInPrUsers && !existsInAuth) {
+          setError('Usuario no existente')
+          setLoading(false)
+          return
         }
       }
     } catch (err) {
+      // ignore check errors and continue with signin attempt
+    }
+
+    try {
+      const result = await signIn('credentials', {
+        email: normalizedEmail,
+        password,
+        redirect: false,
+        callbackUrl: `${location.origin}/users/select-project`
+      })
+
+        // If NextAuth returned a redirect URL, navigate there immediately
+        if (result?.ok && result?.url) {
+          try {
+            const s = await getSession()
+            if (s?.user) {
+              await update({ projectId: null, projectName: null })
+            }
+            keepBusyUntilRedirect = true
+            setRedirecting(true)
+            redirectToApp()
+            return
+          } catch { /* fallthrough */ }
+        }
+
+      if (result?.error) {
+        const errorText = String(result.error || '')
+        const isNetworkAuthError =
+          errorText.includes('AUTH_NETWORK_ERROR') ||
+          errorText.toLowerCase().includes('fetch failed') ||
+          errorText.includes('AuthRetryableFetchError')
+
+        // incrementar contador de intentos fallidos por email
+        const key = `signin_failed_attempts:${normalizedEmail || 'anonymous'}`
+        const prev = Number(localStorage.getItem(key) || 0)
+        const next = isNetworkAuthError ? prev : prev + 1
+        if (!isNetworkAuthError) {
+          localStorage.setItem(key, String(next))
+          setFailedAttempts(next)
+        }
+        // increment session counter
+        if (!isNetworkAuthError) setAttemptsThisSession((s) => s + 1)
+
+        if (isNetworkAuthError) {
+          setError('No se pudo conectar con el servicio de autenticación. Intenta nuevamente en unos segundos.')
+        } else if (result.error === 'email_provider_disabled') {
+          setError('Inicio de sesión por correo deshabilitado en la configuración del servidor. Contacta al administrador.')
+        } else {
+          if (existsInPrUsers || existsInAuth) {
+            setError('Contraseña incorrecta')
+          } else {
+            setError('Usuario no existente')
+          }
+        }
+
+        // No redirigir automáticamente; mostramos enlace de restablecer cuando next >= 3
+      } else {
+        const session = await getSession()
+        if (session?.user) {
+          await update({ projectId: null, projectName: null })
+          keepBusyUntilRedirect = true
+          setRedirecting(true)
+          redirectToApp()
+          return
+        }
+        // login correcto -> resetear contador de fallos
+        const key = `signin_failed_attempts:${normalizedEmail || 'anonymous'}`
+        try { localStorage.removeItem(key); setFailedAttempts(0); setAttemptsThisSession(0); setHasAttempted(false) } catch {}
+      }
+    } catch {
       setError('Error al iniciar sesión')
     } finally {
-      setLoading(false)
+      if (!keepBusyUntilRedirect) {
+        setLoading(false)
+      }
     }
   }
 
@@ -77,8 +186,13 @@ export default function SignIn() {
         minHeight: '100vh',
         background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue3} 50%, ${colors.blue6} 100%)`,
         display: 'flex',
+        justifyContent: 'center',
         alignItems: 'center',
+        py: { xs: 1, sm: 3, md: 4 },
         position: 'relative',
+        '@media (max-height: 760px), (max-width: 1366px)': {
+          py: { md: 1.75 },
+        },
         '&::before': {
           content: '""',
           position: 'absolute',
@@ -91,7 +205,14 @@ export default function SignIn() {
         }
       }}
     >
-      <Container maxWidth="sm" sx={{ position: 'relative', zIndex: 1 }}>
+      <Container
+        maxWidth="sm"
+        sx={{
+          position: 'relative',
+          zIndex: 1,
+          px: { xs: 2, sm: 2.5, md: 3 },
+        }}
+      >
         <Box
           sx={{
             display: 'flex',
@@ -99,89 +220,50 @@ export default function SignIn() {
             alignItems: 'center',
           }}
         >
-          <Button
-            startIcon={<ArrowBack />}
-            onClick={() => router.push('/')}
-            sx={{ 
-              alignSelf: 'flex-start', 
-              mb: 3,
-              color: colors.white,
-              '&:hover': {
-                backgroundColor: `${colors.white}10`
-              }
-            }}
-          >
-            Volver al inicio
-          </Button>
-
           <Paper 
             elevation={8} 
             sx={{ 
-              padding: 4, 
-              width: '100%',
-              borderRadius: 3,
+              p: { xs: 1.35, sm: 3, md: 4 },
+              width: { xs: 'min(calc(100vw - 32px), 410px)', sm: '100%' },
+              mx: 'auto',
+              maxWidth: { xs: 410, sm: 500, md: 460 },
+              borderRadius: { xs: 3.5, sm: 3 },
               background: colors.white,
               backdropFilter: 'blur(10px)',
-              border: `1px solid ${colors.blue13}50`
+              border: `1px solid ${colors.blue13}50`,
+              '@media (max-height: 860px)': {
+                p: { sm: 2.25, md: 2.5 },
+                maxWidth: { md: 430 },
+              },
+              '@media (max-height: 760px), (max-width: 1366px)': {
+                p: { md: 2 },
+                maxWidth: { md: 390 },
+              },
             }}
           >
-            {/* Logo corporativo */}
-            <Box textAlign="center" mb={3}>
+            <Box
+              textAlign="center"
+              mb={{ xs: 1, sm: 2.5, md: 3 }}
+              onClick={() => router.push('/')}
+              sx={{ cursor: 'pointer' }}
+              role="link"
+              aria-label="Ir al inicio"
+            >
               <Image
                 src="/assets/logo_transparent_ingenIT.png"
                 alt="IngenIT Logo"
-                width={140}
-                height={55}
+                width={150}
+                height={58}
+                unoptimized
+                priority
                 style={{ 
                   maxWidth: '100%',
-                  height: 'auto'
+                  height: 'auto',
+                  marginTop: '20px',
                 }}
               />
             </Box>
 
-            <Typography 
-              component="h1" 
-              variant="h4" 
-              align="center" 
-              sx={{
-                color: colors.blue1,
-                fontWeight: 700,
-                mb: 1
-              }}
-            >
-              Bienvenido
-            </Typography>
-            
-            <Typography 
-              variant="h6" 
-              align="center" 
-              sx={{
-                color: colors.blue7,
-                mb: 2,
-                fontWeight: 400
-              }}
-            >
-              Sistema de Gestión de Personal
-            </Typography>
-            
-            <Typography 
-              variant="body2" 
-              align="center" 
-              sx={{
-                color: colors.gold3,
-                mb: 3,
-                fontWeight: 500,
-                backgroundColor: colors.gold7,
-                padding: 1,
-                borderRadius: 1,
-                border: `1px solid ${colors.gold3}`
-              }}
-            >
-              🔐 Acceso Administrativo
-            </Typography>
-
-            {/* Eliminado: tabs de selección de tipo de usuario */}
-          
             <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1 }}>
               {error && (
                 <Alert 
@@ -200,17 +282,18 @@ export default function SignIn() {
                 </Alert>
               )}
 
-              <Typography 
-                variant="body2" 
-                sx={{ 
-                  mb: 3, 
+              <Typography
+                variant="body2"
+                sx={{
+                  mb: { xs: 1.2, sm: 1.8, md: 2 },
                   textAlign: 'center',
-                  color: colors.blue7,
-                  fontWeight: 500,
-                  fontSize: '0.9rem'
+                  color: colors.blue11,
+                  fontWeight: 400,
+                  letterSpacing: 0.2,
+                  fontSize: { xs: '1.2rem', sm: '1.3rem', md: '1.4em' }
                 }}
               >
-                Acceso para administradores y personal de RRHH
+                Acceso al sistema
               </Typography>
               
               <TextField
@@ -224,8 +307,9 @@ export default function SignIn() {
                 autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                disabled={loading || redirecting}
                 sx={{
-                  mb: 2,
+                  mb: 1.35,
                   '& .MuiOutlinedInput-root': {
                     borderRadius: 2,
                     '&:hover fieldset': {
@@ -239,6 +323,8 @@ export default function SignIn() {
                     color: colors.blue6,
                   },
                 }}
+                size="small"
+                InputLabelProps={{ sx: { fontSize: { xs: '0.86rem', sm: '1rem' } } }}
               />
               
               <TextField
@@ -247,13 +333,14 @@ export default function SignIn() {
                 fullWidth
                 name="password"
                 label="Contraseña"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 id="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                disabled={loading || redirecting}
                 sx={{
-                  mb: 3,
+                  mb: 1.8,
                   '& .MuiOutlinedInput-root': {
                     borderRadius: 2,
                     '&:hover fieldset': {
@@ -267,17 +354,103 @@ export default function SignIn() {
                     color: colors.blue6,
                   },
                 }}
+                size="small"
+                InputLabelProps={{ sx: { fontSize: { xs: '0.86rem', sm: '1rem' } } }}
+                InputProps={{
+                  endAdornment: (
+                    <Button
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      sx={{ minWidth: 0, p: 0, ml: 1 }}
+                    >
+                      {showPassword ? (
+                        <EyeOff size={22} color={colors.gray8} />
+                      ) : (
+                        <Eye size={22} color={colors.gray8} />
+                      )}
+                    </Button>
+                  ),
+                }}
               />
+
+              {attemptsThisSession >= 3 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
+                  {resetError ? (
+                    <Typography variant="body2" color="error" sx={{ mb: 1 }}>{resetError}</Typography>
+                  ) : resetMessage ? (
+                    <Typography variant="body2" color="success.main" sx={{ mb: 1 }}>{resetMessage}</Typography>
+                  ) : null}
+
+                  <Button
+                    onClick={async () => {
+                      setResetError('')
+                      setResetMessage('')
+                      if (!email) {
+                        setResetError('Ingresa tu correo para enviar el enlace')
+                        return
+                      }
+                      setResetLoading(true)
+                        try {
+                          const res = await fetch('/api/auth/forgot', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ email })
+                          })
+                          const j = await res.json()
+                          if (!res.ok) {
+                            setResetError(j?.error || 'Error al solicitar restablecimiento')
+                          } else {
+                            // Consider success only when server returned a preview/reset URL (dev) or explicit ok (prod)
+                            if (j?.resetUrl || j?.previewUrl) {
+                              // show the resetUrl in dev for testing
+                              setResetMessage('Se envió el enlace. Revisa tu correo (o abre el enlace dev).')
+                              if (j.resetUrl) console.info('Reset URL (dev):', j.resetUrl)
+                              if (j.previewUrl) console.info('Email preview (Ethereal):', j.previewUrl)
+                            } else {
+                              // No URL returned — assume server attempted to send via real SMTP.
+                              // If server returned ok without URL, treat as success but inform user to check email.
+                              setResetMessage('Si existe una cuenta con ese correo, recibirás instrucciones por email.')
+                            }
+                            // refresh the page shortly after showing the message to reset UI
+                            setTimeout(() => {
+                              try { window.location.reload() } catch { router.refresh() }
+                            }, 3000)
+                          }
+                        } catch (err) {
+                          setResetError('Error de red')
+                        } finally {
+                          setResetLoading(false)
+                        }
+                    }}
+                    variant="text"
+                    disabled={resetLoading}
+                    sx={{
+                      textTransform: 'none',
+                      color: colors.blue6,
+                      fontWeight: 400,
+                      fontSize: '0.95rem',
+                      p: 0,
+                      minWidth: 0,
+                      '&:hover': { textDecoration: 'underline', backgroundColor: 'transparent', boxShadow: 'none' }
+                    }}
+                  >
+                    {resetLoading ? 'Enviando...' : '¿Olvidaste tu contraseña? Restablecer contraseña'}
+                  </Button>
+                </Box>
+              )}
               
               <Button
                 type="submit"
                 fullWidth
                 variant="contained"
-                disabled={loading}
+                disabled={loading || redirecting}
                 sx={{ 
-                  py: 1.5,
-                  fontSize: '1.1rem',
+                  py: { xs: 1.15, sm: 1.4, md: 1.5 },
+                  fontSize: { xs: '0.95rem', sm: '1.05rem', md: '1.08rem' },
                   fontWeight: 600,
+                  '@media (max-height: 760px), (max-width: 1366px)': {
+                    py: { md: 1 },
+                    fontSize: { md: '0.98rem' },
+                  },
                   borderRadius: 2,
                   textTransform: 'none',
                   background: `linear-gradient(135deg, ${colors.blue6} 0%, ${colors.blue8} 100%)`,
@@ -292,10 +465,10 @@ export default function SignIn() {
                   }
                 }}
               >
-                {loading ? (
+                {loading || redirecting ? (
                   <Box display="flex" alignItems="center" gap={2}>
                     <CircularProgress size={20} sx={{ color: colors.white }} />
-                    Iniciando sesión...
+                    {redirecting ? 'Ingresando...' : 'Iniciando sesión...'}
                   </Box>
                 ) : (
                   'Iniciar Sesión'

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabaseClient'
+import { supabase } from '../../../lib/supabaseClient'
 import { z } from 'zod'
 
 const employeeSchema = z.object({

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Table, TableBody, TableCell, TableHead, TableRow } from '@mui/material';
-import { Collaborator } from '@/types';
+import { Collaborator } from '../types';
 
 const CollaboratorsTable = ({ collaborators }: { collaborators: Collaborator[] }) => {
   return (
