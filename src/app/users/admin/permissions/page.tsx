@@ -19,6 +19,8 @@ import {
   Typography,
   Snackbar,
   Alert,
+  Tab,
+  Tabs,
 } from '@mui/material'
 import { colors } from '@/theme/theme'
 import UserHeader from '@/components/layout/UserHeader'
@@ -46,7 +48,7 @@ const RESOURCES = [
   { key: 'daily-report', label: 'Reporte diario' },
   { key: 'program', label: 'Programa' },
   { key: 'admin-permissions', label: 'Administración' },
-  { key: 'management', label: 'Gestión' },
+  { key: 'management', label: 'Gestión y Datos' },
   { key: 'settings', label: 'Ajustes' },
   { key: 'profile', label: 'Perfil' },
   { key: 'epp', label: 'EPP' },
@@ -54,13 +56,15 @@ const RESOURCES = [
 ]
 
 const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions'])
+const HIDDEN_RESOURCE_KEYS = new Set<string>(['epp', 'payroll'])
 
 export default function Page() {
   const { data: session } = useSession()
   const actorRole = String((session?.user as any)?.role || '').trim().toLowerCase()
   const visibleResources = useMemo(() => {
-    if (actorRole === 'dev') return RESOURCES
-    return RESOURCES.filter((r) => !NON_DELEGABLE_RESOURCE_KEYS.has(r.key))
+    const activeResources = RESOURCES.filter((r) => !HIDDEN_RESOURCE_KEYS.has(r.key))
+    if (actorRole === 'dev') return activeResources
+    return activeResources.filter((r) => !NON_DELEGABLE_RESOURCE_KEYS.has(r.key))
   }, [actorRole])
   const [users, setUsers] = useState<User[]>([])
   const [candidates, setCandidates] = useState<Candidate[]>([])
@@ -72,6 +76,7 @@ export default function Page() {
   const [saving, setSaving] = useState(false)
   const [convertingId, setConvertingId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [activeTab, setActiveTab] = useState<'users' | 'audit'>('users')
   const [toast, setToast] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning' }>({
     open: false,
     message: '',
@@ -206,6 +211,16 @@ export default function Page() {
             disableGutters
             sx={{ py: 3, width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 } }}
           >
+            <Tabs
+              value={activeTab}
+              onChange={(_event, value) => setActiveTab(value)}
+              sx={{ mb: 2, borderBottom: '1px solid #e5e7eb' }}
+            >
+              <Tab value="users" label="Usuarios y permisos" />
+              <Tab value="audit" label="Auditoría" />
+            </Tabs>
+
+            {activeTab === 'users' && (
             <Stack spacing={2}>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue6 }}>
@@ -374,6 +389,18 @@ export default function Page() {
                 </Paper>
               </Box>
             </Stack>
+            )}
+
+            {activeTab === 'audit' && (
+              <Paper sx={{ p: 3, borderRadius: 1.5 }}>
+                <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue6, mb: 1 }}>
+                  Auditoría
+                </Typography>
+                <Typography variant="body2" sx={{ color: colors.gray4 }}>
+                  La trazabilidad de acciones estará disponible próximamente.
+                </Typography>
+              </Paper>
+            )}
           </Container>
         </Box>
         <Snackbar

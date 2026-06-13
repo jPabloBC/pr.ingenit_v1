@@ -1,45 +1,38 @@
 'use client'
 
-import { Container, Typography, Box, Paper } from '@mui/material'
-import { Settings } from '@mui/icons-material'
+import { Box, Container, Paper, Typography } from '@mui/material'
+import UserHeader from '../../../components/layout/UserHeader'
 import { colors } from '../../../theme/theme'
 
 export default function SettingsPage() {
   return (
-    <Container
-      maxWidth={false}
-      disableGutters
-      sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}
-    >
-      <Box sx={{ mb: 4 }}>
-        <Box display="flex" alignItems="center" gap={2} mb={2}>
-          <Settings sx={{ color: colors.blue6, fontSize: 32 }} />
-          <Typography variant="h4" sx={{ color: colors.blue1, fontWeight: 700 }}>
-            Configuración
+    <>
+      <UserHeader title="Ajustes" />
+      <Container
+        maxWidth={false}
+        disableGutters
+        sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}
+      >
+        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 }, mb: 3 }}>
+          <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 800, mb: 0.75 }}>
+            Ajustes
           </Typography>
-        </Box>
-        <Typography variant="body1" sx={{ color: colors.blue7 }}>
-          Configura los parámetros del sistema
-        </Typography>
-      </Box>
+          <Typography sx={{ color: colors.blue7 }}>
+            Configuraciones de usuario y plataforma.
+          </Typography>
+        </Paper>
 
-      <Paper elevation={2} sx={{ p: 4, borderRadius: 2 }}>
-        <Typography variant="h6" sx={{ color: colors.blue1, mb: 2 }}>
-          Configuraciones Disponibles
-        </Typography>
-        <Typography variant="body2" sx={{ color: colors.blue7 }}>
-          Aquí podrás configurar:
-        </Typography>
-        <Box component="ul" sx={{ mt: 2, pl: 3 }}>
-          <li>Parámetros de la empresa</li>
-          <li>Configuración de horarios</li>
-          <li>Políticas de asistencia</li>
-          <li>Configuración de notificaciones</li>
-        </Box>
-      </Paper>
-    </Container>
+        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 } }}>
+          <Box sx={{ maxWidth: 720 }}>
+            <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 800, mb: 1 }}>
+              Configuraciones próximamente
+            </Typography>
+            <Typography sx={{ color: colors.blue7 }}>
+              Esta sección quedará disponible para centralizar preferencias y parámetros del usuario.
+            </Typography>
+          </Box>
+        </Paper>
+      </Container>
+    </>
   )
 }
-
-
-

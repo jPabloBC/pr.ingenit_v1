@@ -21,26 +21,31 @@ import {
   AdminPanelSettings,
   Work,
 } from '@mui/icons-material';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { colors } from '../../theme/theme';
-import { prettifySpecialty } from '../../lib/normalize';
 import { useSession, signOut } from 'next-auth/react';
 
-const drawerWidth = 240;
+const drawerWidth = 220;
+const collapsedDrawerWidth = 56;
+const mobileDrawerWidth = 236;
 const ASIDE_COLLAPSED_STORAGE_KEY = 'users_aside_collapsed_v1';
 
-const menuItemsUsers = [
-  { text: 'Dashboard', path: '/users/dashboard', icon: <Dashboard />, resourceKey: 'dashboard' },
-  { text: 'Colaboradores', path: '/users/collaborators', icon: <People />, resourceKey: 'collaborators' },
-  { text: 'Cuadrillas', path: '/users/crews', icon: <Construction />, resourceKey: 'crews' },
-  { text: 'Reportabilidad', path: '/users/field-reports', icon: <ViewList />, resourceKey: 'field-reports' },
-  { text: 'Reporte diario', path: '/users/daily-report', icon: <ReceiptLong />, resourceKey: 'daily-report', legacyResourceKey: 'admin-daily-report', visibleRoles: ['admin', 'dev', 'user'] },
-  { text: 'Programa', path: '/users/program', icon: <EventNote />, resourceKey: 'program' },
-  { text: 'Asistencia', path: '/users/attendance', icon: <AccessTime />, resourceKey: 'attendance' },
-  { text: 'Perfil', path: '/users/profile', icon: <AccountCircle />, resourceKey: 'profile' },
-  { text: 'Administración', path: '/users/admin/permissions', icon: <AdminPanelSettings />, resourceKey: 'admin-permissions', hideRoles: ['dev'] },
-  { text: 'Gestión y Datos', path: '/users/management', icon: <Work />, resourceKey: 'management' },
-  { text: 'Ajustes', path: '/users/settings', icon: <Settings />, resourceKey: 'settings' },
+const menuItemGroupsUsers = [
+  [
+    { text: 'Dashboard', path: '/users/dashboard', icon: <Dashboard />, resourceKey: 'dashboard' },
+    { text: 'Asistencia', path: '/users/attendance', icon: <AccessTime />, resourceKey: 'attendance' },
+    { text: 'Colaboradores', path: '/users/collaborators', icon: <People />, resourceKey: 'collaborators' },
+    { text: 'Cuadrillas', path: '/users/crews', icon: <Construction />, resourceKey: 'crews' },
+    { text: 'Gestión y Datos', path: '/users/management', icon: <Work />, resourceKey: 'management' },
+    { text: 'Programa', path: '/users/program', icon: <EventNote />, resourceKey: 'program' },
+    { text: 'Reportabilidad', path: '/users/field-reports', icon: <ViewList />, resourceKey: 'field-reports' },
+    { text: 'Reporte diario', path: '/users/daily-report', icon: <ReceiptLong />, resourceKey: 'daily-report', legacyResourceKey: 'admin-daily-report', visibleRoles: ['admin', 'dev', 'user'] },
+  ],
+  [
+    { text: 'Administración', path: '/users/admin/permissions', icon: <AdminPanelSettings />, resourceKey: 'admin-permissions', hideRoles: ['dev'] },
+    { text: 'Perfil', path: '/users/profile', icon: <AccountCircle />, resourceKey: 'profile' },
+    { text: 'Ajustes', path: '/users/settings', icon: <Settings />, resourceKey: 'settings' },
+  ],
 ];
 
 const Aside: React.FC = () => {
@@ -83,7 +88,7 @@ const Aside: React.FC = () => {
       if (isMobile) {
         document.documentElement.style.setProperty('--users-aside-width', '0px')
       } else {
-        document.documentElement.style.setProperty('--users-aside-width', collapsed ? '60px' : '240px')
+        document.documentElement.style.setProperty('--users-aside-width', collapsed ? `${collapsedDrawerWidth}px` : `${drawerWidth}px`)
       }
     } catch {
       // ignore DOM access issues
@@ -148,16 +153,6 @@ const Aside: React.FC = () => {
   // Fetch authoritative permissions from the server so the Aside reflects
   // the DB-controlled permissions immediately (independent of JWT cache).
   const [serverPermissions, setServerPermissions] = useState<string[] | null>(null)
-  const [collaborator, setCollaborator] = useState<any | null>(null)
-
-  function capitalizeWords(input: string) {
-    if (!input) return ''
-    return String(input)
-      .toLowerCase()
-      .split(/\s+/)
-      .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-      .join(' ')
-  }
   useEffect(() => {
     let mounted = true
     async function loadPerms() {
@@ -178,84 +173,9 @@ const Aside: React.FC = () => {
     return () => { mounted = false }
   }, [session?.user])
 
-  // prepare display first/last name for Aside
-  const displayFirstName = (() => {
-    if (collaborator) {
-      const first = collaborator.first_name || collaborator.name || collaborator.nombres || collaborator.nombre || ''
-      return capitalizeWords(first || (session?.user?.name ? String(session.user.name).split(/\s+/)[0] : String(session?.user?.id || '')))
-    }
-    if (session?.user?.name) {
-      const parts = String(session.user.name).trim().split(/\s+/)
-      return capitalizeWords(parts[0] || String(session.user.name))
-    }
-    return ''
-  })()
-
-  const displayLastName = (() => {
-    if (collaborator) {
-      const last = collaborator.last_name || collaborator.lastname || collaborator.apellidos || collaborator.surname || ''
-      return capitalizeWords(last || '')
-    }
-    if (session?.user?.name) {
-      const parts = String(session.user.name).trim().split(/\s+/)
-      if (parts.length > 1) return capitalizeWords(parts.slice(1).join(' '))
-    }
-    return ''
-  })()
-
-  useEffect(() => {
-    let mounted = true
-    async function loadCollaborator() {
-      if (!session?.user) return
-      try {
-        const res = await fetch('/api/collaborators/me')
-        if (!mounted) return
-        if (res.ok) {
-          const json = await res.json()
-          setCollaborator(json.collaborator || null)
-        } else {
-          setCollaborator(null)
-        }
-      } catch (e) {
-        if (mounted) setCollaborator(null)
-      }
-    }
-    loadCollaborator()
-    return () => { mounted = false }
-  }, [session?.user])
-
   const asideContent = (
     <>
-      {!isMobile ? (
-    <Box
-      component="nav"
-      sx={{ width: collapsed ? 60 : drawerWidth, flexShrink: 0, transition: 'width 0.3s', position: 'relative' }}
-    >
-      <IconButton
-        onClick={toggleDrawer}
-        size="small"
-        aria-label={collapsed ? 'Expandir menú lateral' : 'Colapsar menú lateral'}
-        sx={{
-          position: 'fixed',
-          bottom: 20,
-          left: (collapsed ? 60 : drawerWidth) - 14,
-          width: 28,
-          height: 28,
-          zIndex: 1201,
-          transition: 'left 0.3s',
-          border: `1px solid ${colors.gray7}`,
-          bgcolor: 'rgba(255, 255, 255, 0.25)',
-          color: colors.gray8,
-          boxShadow: 'none',
-          backdropFilter: 'blur(1px)',
-          '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.4)' }
-        }}
-      >
-        {collapsed ? <ChevronRight size={16} strokeWidth={2.2} /> : <ChevronLeft size={16} strokeWidth={2.2} />}
-      </IconButton>
-    </Box>
-      ) : null}
-      <Toolbar sx={{ alignItems: 'flex-start', minHeight: 'auto !important', py: 1, position: 'relative' }}>
+      <Toolbar sx={{ alignItems: 'flex-start', minHeight: 'auto !important', py: 0.75, px: 1, position: 'relative' }}>
         <Box sx={{ width: '100%' }}>
           <Box
             sx={{
@@ -274,7 +194,7 @@ const Aside: React.FC = () => {
                 flexDirection: (!isMobile && collapsed) ? 'column' : 'row',
                 justifyContent: 'center',
                 alignItems: 'center',
-                gap: (!isMobile && collapsed) ? 0.1 : 2,
+                gap: (!isMobile && collapsed) ? 0.1 : 1.5,
                 flex: 1
               }}
             >
@@ -282,8 +202,8 @@ const Aside: React.FC = () => {
                 src={'/assets/icon_ingenIT.png'}
                 alt="Default Logo"
                 style={{
-                  maxWidth: (!isMobile && collapsed) ? '58%' : '24%',
-                  minWidth: (!isMobile && collapsed) ? 28 : undefined,
+                  maxWidth: (!isMobile && collapsed) ? '56%' : '23%',
+                  minWidth: (!isMobile && collapsed) ? 24 : undefined,
                   height: 'auto',
                   borderRadius: (!isMobile && collapsed) ? 0 : 6,
                   marginBottom: (!isMobile && collapsed) ? 8 : 0,
@@ -294,8 +214,8 @@ const Aside: React.FC = () => {
                   src={companyLogoUrl}
                   alt="Company Logo"
                   style={{
-                    maxWidth: (!isMobile && collapsed) ? '70%' : '35%',
-                    minWidth: (!isMobile && collapsed) ? 36 : undefined,
+                    maxWidth: (!isMobile && collapsed) ? '68%' : '34%',
+                    minWidth: (!isMobile && collapsed) ? 32 : undefined,
                     height: 'auto',
                     borderRadius: (!isMobile && collapsed) ? 0 : 6,
                     marginTop: (!isMobile && collapsed) ? 8 : 0,
@@ -307,7 +227,9 @@ const Aside: React.FC = () => {
         </Box>
       </Toolbar>
       <List>
-        {menuItemsUsers.map((item) => {
+        {menuItemGroupsUsers.map((group, groupIndex) => (
+          <React.Fragment key={`menu-group-${groupIndex}`}>
+            {group.map((item) => {
           const isActive = pathname === item.path;
           const isPending = pendingPath === item.path
           const role = String(session?.user?.role || '').trim().toLowerCase()
@@ -339,6 +261,9 @@ const Aside: React.FC = () => {
                 userSelect: 'none',
                 WebkitUserSelect: 'none',
                 borderRadius: 0,
+                minHeight: 48,
+                px: collapsed && !isMobile ? 0 : 2,
+                justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
                 bgcolor: isActive || isPending ? colors.gray9 : undefined,
                 color: isActive || isPending ? colors.blue6 : undefined,
                 fontWeight: isActive || isPending ? 'bold' : undefined,
@@ -354,6 +279,9 @@ const Aside: React.FC = () => {
             >
               <ListItemIcon
                 sx={{
+                  minWidth: collapsed && !isMobile ? 0 : 48,
+                  width: collapsed && !isMobile ? '100%' : 'auto',
+                  justifyContent: 'center',
                   color: isActive || isPending ? colors.blue6 : undefined,
                   transition: 'color 0.2s',
                 }}
@@ -363,30 +291,22 @@ const Aside: React.FC = () => {
               {(isMobile || !collapsed) && <ListItemText primary={item.text} />}
             </ListItem>
           )
-        })}
+            })}
+            {groupIndex === 0 ? (
+              <Box
+                component="li"
+                sx={{
+                  borderTop: '1px solid #e5e7eb',
+                  mx: collapsed && !isMobile ? 1.25 : 2,
+                  my: 0.75,
+                  listStyle: 'none',
+                }}
+              />
+            ) : null}
+          </React.Fragment>
+        ))}
       </List>
-      <Box sx={{ width: '100%', mt: 'auto', pb: 2 }}>
-        {session?.user && (
-          <Box sx={{ px: 2, mb: 1, textAlign: 'center' }}>
-            {(isMobile || !collapsed) ? (
-              <>
-                <Box component="div" sx={{ fontWeight: 600 }}>{displayFirstName}</Box>
-                {displayLastName ? <Box component="div" sx={{ fontWeight: 600, mt: 0.25 }}>{displayLastName}</Box> : null}
-                <Box component="div" sx={{ fontSize: '0.9rem', color: 'text.secondary', mt: 0.25 }}>
-                  {(() => {
-                    const spec = (collaborator && (collaborator.specialty || collaborator.specialidad)) || ''
-                    return spec ? prettifySpecialty(spec) : null
-                  })()}
-                </Box>
-                <Box component="div" sx={{ fontSize: '0.85rem', color: 'text.secondary', wordBreak: 'break-all', mt: 0.25 }}>{session.user.email}</Box>
-              </>
-            ) : (
-              <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-                <AccountCircle />
-              </Box>
-            )}
-          </Box>
-        )}
+      <Box sx={{ width: '100%', mt: 'auto', pb: 1.5 }}>
         <List>
           <ListItem
             component="div"
@@ -401,6 +321,9 @@ const Aside: React.FC = () => {
               WebkitUserSelect: 'none',
               borderRadius: 0,
               mt: 1,
+              minHeight: 48,
+              px: collapsed && !isMobile ? 0 : 2,
+              justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
               '&:hover': {
                 bgcolor: colors.gray7,
                 color: colors.blue5,
@@ -410,12 +333,45 @@ const Aside: React.FC = () => {
               },
             }}
           >
-            <ListItemIcon sx={{ color: undefined }}>
+            <ListItemIcon sx={{ color: undefined, minWidth: collapsed && !isMobile ? 0 : 48, width: collapsed && !isMobile ? '100%' : 'auto', justifyContent: 'center' }}>
               <Logout sx={{ transform: 'scaleX(-1)' }} />
             </ListItemIcon>
             {(isMobile || !collapsed) && <ListItemText primary="Cerrar sesión" />}
           </ListItem>
         </List>
+        {!isMobile ? (
+          <Box
+            sx={{
+              display: 'flex',
+              width: '100%',
+              justifyContent: collapsed ? 'center' : 'flex-end',
+              px: collapsed ? 0 : 1.5,
+              pt: 0.5,
+            }}
+          >
+            <IconButton
+              onClick={toggleDrawer}
+              size="small"
+              aria-label={collapsed ? 'Expandir menú lateral' : 'Colapsar menú lateral'}
+              sx={{
+                width: 28,
+                height: 28,
+                border: 'none',
+                bgcolor: 'transparent',
+                color: '#64748b',
+                boxShadow: 'none',
+                transition: 'background-color 0.2s ease, color 0.2s ease',
+                '&:hover': {
+                  bgcolor: '#f8fafc',
+                  color: colors.blue5,
+                  boxShadow: 'none',
+                },
+              }}
+            >
+              {collapsed ? <PanelLeftOpen size={15} strokeWidth={1.75} /> : <PanelLeftClose size={15} strokeWidth={1.75} />}
+            </IconButton>
+          </Box>
+        ) : null}
         <Box sx={{ px: 2, pt: 1, textAlign: (isMobile || !collapsed) ? 'center' : 'center' }}>
           <Box
             component="div"
@@ -435,7 +391,7 @@ const Aside: React.FC = () => {
   )
 
   return (
-    <Box component="nav" sx={{ width: isMobile ? 0 : (collapsed ? 60 : drawerWidth), flexShrink: 0, transition: 'width 0.3s', position: 'relative' }}>
+    <Box component="nav" sx={{ width: isMobile ? 0 : (collapsed ? collapsedDrawerWidth : drawerWidth), flexShrink: 0, transition: 'width 0.25s ease', position: 'relative' }}>
       <Drawer
         variant={isMobile ? 'temporary' : 'permanent'}
         ModalProps={{ keepMounted: true }}
@@ -443,8 +399,8 @@ const Aside: React.FC = () => {
         sx={{
           '& .MuiDrawer-paper': {
             boxSizing: 'border-box',
-            width: isMobile ? drawerWidth : (collapsed ? 60 : drawerWidth),
-            transition: 'width 0.3s',
+            width: isMobile ? mobileDrawerWidth : (collapsed ? collapsedDrawerWidth : drawerWidth),
+            transition: 'width 0.25s ease',
             borderRadius: 0,
             display: 'flex',
             flexDirection: 'column',
