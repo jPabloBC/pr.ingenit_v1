@@ -105,6 +105,35 @@ const COLLABORATORS_SUMMARY_SELECT = [
   'user_id',
 ].join(', ')
 
+const COLLABORATORS_ATTENDANCE_SELECT = [
+  'id',
+  'company_id',
+  'first_name',
+  'last_name',
+  'document',
+  'position',
+  'specialty',
+  'worker_type',
+  'is_active',
+  'gender',
+].join(', ')
+
+const COLLABORATORS_CREWS_SELECT = [
+  'id',
+  'company_id',
+  'first_name',
+  'last_name',
+  'document',
+  'position',
+  'specialty',
+  'worker_type',
+  'is_active',
+  'phone',
+  'email',
+  'current_crew_id',
+  'is_assigned',
+].join(', ')
+
 const stripMissingSelectColumn = (select: string, errorMsg: string) => {
   const patterns = [
     /column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i,
@@ -309,6 +338,8 @@ export async function GET(request: NextRequest) {
     const excludeAssigned = url.searchParams.get('excludeAssigned') === 'true'
     const allowCrewId = url.searchParams.get('allowCrewId') || null
     const summary = url.searchParams.get('summary') === '1'
+    const attendance = url.searchParams.get('attendance') === '1'
+    const crewsMode = url.searchParams.get('crews') === '1'
     const asOfDate = String(url.searchParams.get('as_of_date') || '').trim().slice(0, 10)
     // ids to exclude (populated when excludeAssigned processing runs)
     let excludedAssignedIds: string[] = []
@@ -328,7 +359,12 @@ export async function GET(request: NextRequest) {
       return query
     }
 
-    let activeSummarySelect = COLLABORATORS_SUMMARY_SELECT
+    let activeSummarySelect = attendance
+      ? COLLABORATORS_ATTENDANCE_SELECT
+      : crewsMode
+        ? COLLABORATORS_CREWS_SELECT
+        : COLLABORATORS_SUMMARY_SELECT
+
     let collaboratorsQuery = buildCollaboratorsQuery(summary ? activeSummarySelect : '*')
 
     // If we need to exclude assigned collaborators, fetch assigned ids from pr_crew_members
@@ -361,8 +397,6 @@ export async function GET(request: NextRequest) {
       let filteredCrewIds = crewIds
       if (allowCrewId) filteredCrewIds = crewIds.filter(id => id !== String(allowCrewId))
       let assignedRows: any[] = []
-      // Collect ids that we will exclude from queries (non-supervisors assigned elsewhere)
-      let excludedAssignedIds: string[] = []
       if (filteredCrewIds.length > 0) {
         // Try to include role; if column doesn't exist, fallback to collaborator_id only
         try {

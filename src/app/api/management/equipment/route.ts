@@ -2,10 +2,37 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { writeAuditLog } from '@/lib/audit/writeAuditLog'
 
 export const dynamic = 'force-dynamic'
 
 const TABLE_NAME = 'pr_management_equipment_daily'
+
+const writeManagementEquipmentAudit = async (
+  session: any,
+  params: {
+    action: string
+    resourceId?: string | null
+    beforeData?: any
+    afterData?: any
+    metadata?: Record<string, any> | null
+  }
+) => {
+  await writeAuditLog({
+    supabaseAdmin,
+    companyId: String(session?.user?.companyId || ''),
+    projectId: session?.user?.projectId || null,
+    actorUserId: session?.user?.id || null,
+    actorEmail: session?.user?.email || null,
+    actorRole: session?.user?.role || null,
+    action: params.action as any,
+    resourceType: 'management_equipment',
+    resourceId: params.resourceId || null,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: params.metadata || null,
+  })
+}
 
 const toNum = (value: any) => {
   const parsed = Number(value)
@@ -23,6 +50,22 @@ const toDayNumber = (iso: string) => {
   const m = String(iso || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!m) return Number.NaN
   return Math.floor(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000)
+}
+
+const getLatestEquipmentChange = (rows: any[]) => {
+  const sorted = (Array.isArray(rows) ? rows : [])
+    .map((row: any) => ({
+      updated_at: String(row?.updated_at || '').trim(),
+      updated_by: String(row?.updated_by || '').trim(),
+    }))
+    .filter((row) => row.updated_at)
+    .sort((a, b) => a.updated_at.localeCompare(b.updated_at))
+
+  const latest = sorted.at(-1)
+  return {
+    last_updated_at: latest?.updated_at || null,
+    last_updated_by: latest?.updated_by || null,
+  }
 }
 
 const resolveSnapshotDate = async (companyId: string, requestedDate?: string | null) => {
@@ -102,7 +145,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await supabaseAdmin
       .from(TABLE_NAME)
-      .select('id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at')
+      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at, created_by, updated_by')
       .eq('company_id', companyId)
       .eq('report_date', date)
       .order('equipment_kind', { ascending: true })
@@ -112,12 +155,15 @@ export async function GET(req: NextRequest) {
     if (error) return NextResponse.json({ error: String(error.message || error) }, { status: 500 })
 
     const rows = Array.isArray(data) ? data : []
+    const latestChange = getLatestEquipmentChange(rows)
     return NextResponse.json({
       rows,
       snapshot_date: date,
       requested_date: requestedDate || null,
       used_fallback: Boolean(requestedDate && requestedDate !== date),
-      available_dates: availableDates
+      available_dates: availableDates,
+      last_updated_at: latestChange.last_updated_at,
+      last_updated_by: latestChange.last_updated_by,
     })
   } catch (err: any) {
     return NextResponse.json({ error: String(err?.message || err) }, { status: 500 })
@@ -161,6 +207,27 @@ export async function POST(req: NextRequest) {
         return row
       })
 
+    let beforeRows: any[] = []
+
+    try {
+      const { data: existingRows, error: beforeError } = await supabaseAdmin
+        .from(TABLE_NAME)
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('report_date', date)
+        .order('equipment_kind', { ascending: true })
+        .order('equipment_name', { ascending: true })
+        .order('patent', { ascending: true })
+
+      if (beforeError) {
+        console.warn('Could not read previous management equipment snapshot for audit:', beforeError)
+      } else {
+        beforeRows = Array.isArray(existingRows) ? existingRows : []
+      }
+    } catch (auditReadError) {
+      console.warn('Could not read previous management equipment snapshot for audit:', auditReadError)
+    }
+
     const { error: deleteError } = await supabaseAdmin
       .from(TABLE_NAME)
       .delete()
@@ -177,7 +244,7 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await supabaseAdmin
       .from(TABLE_NAME)
-      .select('id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at')
+      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at, created_by, updated_by')
       .eq('company_id', companyId)
       .eq('report_date', date)
       .order('equipment_kind', { ascending: true })
@@ -185,7 +252,32 @@ export async function POST(req: NextRequest) {
       .order('patent', { ascending: true })
     if (error) return NextResponse.json({ error: String(error.message || error) }, { status: 500 })
 
-    return NextResponse.json({ ok: true, rows: Array.isArray(data) ? data : [], snapshot_date: date })
+    const afterRows = Array.isArray(data) ? data : []
+    const latestChange = getLatestEquipmentChange(afterRows)
+
+    try {
+      await writeManagementEquipmentAudit(session, {
+        action: 'save_snapshot',
+        resourceId: date,
+        beforeData: beforeRows,
+        afterData: afterRows,
+        metadata: {
+          date,
+          previous_count: beforeRows.length,
+          next_count: afterRows.length,
+        },
+      })
+    } catch (auditError) {
+      console.warn('Could not write management equipment audit log:', auditError)
+    }
+
+    return NextResponse.json({
+      ok: true,
+      rows: afterRows,
+      snapshot_date: date,
+      last_updated_at: latestChange.last_updated_at,
+      last_updated_by: latestChange.last_updated_by,
+    })
   } catch (err: any) {
     return NextResponse.json({ error: String(err?.message || err) }, { status: 500 })
   }

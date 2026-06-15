@@ -5274,13 +5274,17 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
           const spec = normalize(c?.specialty)
           return pos.includes('rigger') || spec.includes('rigger')
         }) || null
-        const specialtyVal =
-          (riggerCandidate && riggerCandidate.specialty) ||
-          (crew && (crew.specialty || crew.especialidad || crew.discipline)) ||
-          (supCandidate && supCandidate.specialty) ||
-          (collaborators.find((c) => c && c.specialty) || {}).specialty ||
-          ''
-        setSpecialty(specialtyVal || '')
+        const reportSpecialty = String(selectedReport?.specialty || selectedReport?.especialidad || selectedReport?.discipline || '').trim()
+
+        const crewSpecialty = String(
+          (crew && (crew.specialty || crew.especialidad || crew.discipline)) || ''
+        ).trim()
+
+        const specialtyVal = reportSpecialty || crewSpecialty
+
+        if (!isViewOnly || !reportSpecialty) {
+          setSpecialty(specialtyVal || '')
+        }
       } catch (err) {
         console.warn('Could not load crew collaborators for header', err)
         // fallback to local crews
@@ -5288,7 +5292,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
         if (crew) {
           if (!isViewOnly || !selectedSupervisor) setSupervisor(crewSupervisorValue(crew))
           if (!isViewOnly || !selectedCapataz) setCapataz(crewCapatazValue(crew))
-          setSpecialty((crew.specialty as string) ?? (crew.especialidad as string) ?? (crew.discipline as string) ?? '')
+          const reportSpecialty = String(selectedReport?.specialty || selectedReport?.especialidad || selectedReport?.discipline || '').trim()
+          const crewSpecialty = String((crew.specialty as string) ?? (crew.especialidad as string) ?? (crew.discipline as string) ?? '').trim()
+
+          if (!isViewOnly || !reportSpecialty) {
+            setSpecialty(reportSpecialty || crewSpecialty || '')
+          }
           setCrewMembers((crew && (crew.members || crew.collaborators)) || [])
         }
       }

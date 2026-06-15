@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Drawer, List, ListItem, ListItemIcon, ListItemText, Toolbar, Box, IconButton, CircularProgress } from '@mui/material';
 import { useTheme, useMediaQuery } from '@mui/material';
 import { useRouter, usePathname } from 'next/navigation';
@@ -60,6 +60,8 @@ const Aside: React.FC = () => {
   const [companyLogoUrl, setCompanyLogoUrl] = useState<string>('');
   const [, setIsLoading] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const companyLogoLoadedRef = useRef<string | null>(null);
+  const permissionsLoadedRef = useRef<string | null>(null);
 
   useEffect(() => {
     setPendingPath(null)
@@ -103,22 +105,30 @@ const Aside: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    if (status === 'loading' || !session?.user?.id) {
+    if (status !== 'authenticated' || !session?.user?.id) {
       return;
     }
 
-    const companyId = session.user.companyId;
+    const companyId = String(session.user.companyId || '').trim();
+
     if (!companyId) {
       setIsLoading(false);
       return;
     }
+
+    if (companyLogoLoadedRef.current === companyId) return;
+    companyLogoLoadedRef.current = companyId;
 
     let mounted = true;
 
     const fetchCompanyLogo = async () => {
       try {
         setIsLoading(true);
-        const response = await fetch(`/api/companies/${companyId}`);
+
+        const response = await fetch(`/api/companies/${encodeURIComponent(companyId)}`, {
+          cache: 'no-store',
+        });
+
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
@@ -127,10 +137,12 @@ const Aside: React.FC = () => {
         }
 
         const logoUrl = String((payload as any)?.logo_url || (payload as any)?.logoUrl || '').trim();
+
         if (mounted) {
           setCompanyLogoUrl(logoUrl);
         }
       } catch (error) {
+        companyLogoLoadedRef.current = null;
         console.error('Error fetching company logo:', error);
       } finally {
         if (mounted) setIsLoading(false);
@@ -153,12 +165,27 @@ const Aside: React.FC = () => {
   // Fetch authoritative permissions from the server so the Aside reflects
   // the DB-controlled permissions immediately (independent of JWT cache).
   const [serverPermissions, setServerPermissions] = useState<string[] | null>(null)
+
   useEffect(() => {
+    if (status !== 'authenticated' || !session?.user?.id) return
+
+    const userId = String(session.user.id || '').trim()
+    const companyId = String(session.user.companyId || '').trim()
+    const loadKey = `${userId}:${companyId}`
+
+    if (permissionsLoadedRef.current === loadKey) return
+    permissionsLoadedRef.current = loadKey
+
     let mounted = true
+
     async function loadPerms() {
       try {
-        const res = await fetch('/api/session/permissions')
+        const res = await fetch('/api/session/permissions', {
+          cache: 'no-store',
+        })
+
         if (!mounted) return
+
         if (res.ok) {
           const json = await res.json()
           setServerPermissions(Array.isArray(json.permissions) ? json.permissions : [])
@@ -166,12 +193,17 @@ const Aside: React.FC = () => {
           setServerPermissions([])
         }
       } catch (e) {
+        permissionsLoadedRef.current = null
         if (mounted) setServerPermissions([])
       }
     }
-    if (session?.user) loadPerms()
-    return () => { mounted = false }
-  }, [session?.user])
+
+    loadPerms()
+
+    return () => {
+      mounted = false
+    }
+  }, [status, session?.user?.id, session?.user?.companyId])
 
   const asideContent = (
     <>

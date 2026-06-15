@@ -57,7 +57,20 @@ export async function GET(req: NextRequest) {
     const buildQuery = (useOriginFilter: boolean) => {
       let query = supabaseAdmin
         .from('pr_program')
-        .select('*')
+        .select(`
+          id,
+          item_id,
+          sub_id,
+          activity,
+          description,
+          area,
+          discipline,
+          unit,
+          quantity,
+          package,
+          activity_origin,
+          created_at
+        `)
         .eq('company_id', session.user.companyId)
         .order('created_at', { ascending: false })
 

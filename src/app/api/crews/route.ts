@@ -217,6 +217,38 @@ export async function GET(req: NextRequest) {
             .map((m: any) => ({ ...m, role: null }))
         }
 
+        if (summary) {
+          const byCrew = new Map<string, { supervisors: string[]; foremen: string[]; members: string[] }>()
+
+          const ensure = (id: string) => {
+            if (!byCrew.has(id)) byCrew.set(id, { supervisors: [], foremen: [], members: [] })
+            return byCrew.get(id)!
+          }
+
+          ;(memberRows || []).forEach((m: any) => {
+            const crewId = String(m?.crew_id || '')
+            const collaboratorId = String(m?.collaborator_id || '')
+            if (!crewId || !collaboratorId) return
+
+            const role = normalizeCrewMemberRole(m?.role, '')
+            const slot = ensure(crewId)
+
+            if (role === 'supervisor') slot.supervisors.push(collaboratorId)
+            else if (role === 'foreman') slot.foremen.push(collaboratorId)
+            else slot.members.push(collaboratorId)
+          })
+
+          rows.forEach((r: any) => {
+            const crewId = String(r?.id || '')
+            const slot = byCrew.get(crewId)
+            r.supervisors = Array.from(new Set(slot?.supervisors || []))
+            r.foremen = Array.from(new Set(slot?.foremen || []))
+            r.members = Array.from(new Set(slot?.members || []))
+          })
+
+          return NextResponse.json(rows)
+        }
+
         const collabIds = Array.from(new Set(
           (memberRows || [])
             .map((m: any) => String(m?.collaborator_id || ''))
@@ -286,9 +318,12 @@ export async function GET(req: NextRequest) {
           r.supervisors = Array.from(new Set(slot?.supervisors || []))
           r.foremen = Array.from(new Set(slot?.foremen || []))
           r.members = Array.from(new Set(slot?.members || []))
-          r.crew_member_details = Array.from(
-            new Map((slot?.memberDetails || []).map((c: any) => [String(c?.id || ''), c])).values()
-          )
+
+          if (!summary) {
+            r.crew_member_details = Array.from(
+              new Map((slot?.memberDetails || []).map((c: any) => [String(c?.id || ''), c])).values()
+            )
+          }
         })
       }
     } catch {

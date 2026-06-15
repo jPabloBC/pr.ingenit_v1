@@ -116,6 +116,8 @@ export default function CrewsPage() {
   const collaboratorsCacheRef = useRef<any[] | null>(null)
   const collaboratorsInFlightRef = useRef<Promise<any[]> | null>(null)
   const crewsInFlightRef = useRef<Promise<any[]> | null>(null)
+  const programActivitiesLoadedKeyRef = useRef<string>('')
+  const programActivitiesInFlightRef = useRef<Promise<void> | null>(null)
 
   const setOverflowTitle = (e: React.MouseEvent<HTMLElement>, fullText: string) => {
     const el = e.currentTarget as HTMLElement
@@ -269,6 +271,7 @@ export default function CrewsPage() {
   const [attendanceDatesLoading, setAttendanceDatesLoading] = useState(false)
   const attendanceDatesLoadedRef = useRef(false)
   const initialLoadCompanyRef = useRef<string>('')
+  const reportFrontsLoadedRef = useRef(false)
   const [createLateOverride, setCreateLateOverride] = useState(false)
   const [collaborators, setCollaborators] = useState<any[]>([])
   const [specialtyOptions, setSpecialtyOptions] = useState<string[]>([])
@@ -317,18 +320,25 @@ export default function CrewsPage() {
   }, [])
 
   useEffect(() => {
+    if (!showCreateForm && !showEditModal) return
     void loadAttendanceWorkDates()
-  }, [loadAttendanceWorkDates])
+  }, [showCreateForm, showEditModal, loadAttendanceWorkDates])
 
   useEffect(() => {
+    if (reportFrontsLoadedRef.current) return
+    reportFrontsLoadedRef.current = true
+
     let cancelled = false
+
     const loadReportFronts = async () => {
       setReportFrontsLoading(true)
+
       try {
         const res = await fetch('/api/report-fronts', { cache: 'no-store' })
         const json = await res.json().catch(() => null)
         const fronts = Array.isArray(json?.fronts) ? json.fronts : []
         const seen = new Set<string>()
+
         const options = fronts
           .map((front: any) => ({
             id: front?.id ? String(front.id) : null,
@@ -342,6 +352,7 @@ export default function CrewsPage() {
             seen.add(key)
             return true
           })
+
         if (!cancelled) setReportFrontOptions(options)
       } catch {
         if (!cancelled) setReportFrontOptions([])
@@ -349,7 +360,9 @@ export default function CrewsPage() {
         if (!cancelled) setReportFrontsLoading(false)
       }
     }
+
     void loadReportFronts()
+
     return () => {
       cancelled = true
     }
@@ -399,6 +412,8 @@ export default function CrewsPage() {
   const [turnoIdsByDate, setTurnoIdsByDate] = useState<Record<string, string[]>>({})
   const [turnoLoadingByDate, setTurnoLoadingByDate] = useState<Record<string, boolean>>({})
   const turnoLoadedDatesRef = useRef<Set<string>>(new Set())
+  const dateNotesLoadedRef = useRef<Set<string>>(new Set())
+  const dateNotesInFlightRef = useRef<Map<string, Promise<Record<string, string>>>>(new Map())
   const [initialAssigned, setInitialAssigned] = useState<Set<string>>(new Set())
   const [editingCrew, setEditingCrew] = useState<any>(null)
   const [supervisorsTouched, setSupervisorsTouched] = useState(false)
@@ -562,7 +577,7 @@ export default function CrewsPage() {
     if (!options?.force && collaboratorsInFlightRef.current) return collaboratorsInFlightRef.current
 
     const promise = (async () => {
-      const res = await fetch('/api/collaborators')
+      const res = await fetch('/api/collaborators?summary=1')
       if (!res.ok) return collaboratorsCacheRef.current || []
       const data = await res.json()
       const dedup = normalizeCollaboratorsList(data || [], { normalizeSpecialty: options?.normalizeSpecialty })
@@ -640,14 +655,16 @@ export default function CrewsPage() {
   }, [])
 
   useEffect(() => {
+    if (!showCreateForm) return
     if (!createWorkDate) return
     loadTurnoByDate(createWorkDate)
-  }, [createWorkDate, loadTurnoByDate])
+  }, [showCreateForm, createWorkDate, loadTurnoByDate])
 
   useEffect(() => {
+    if (!showEditModal) return
     if (!editWorkDate) return
     loadTurnoByDate(editWorkDate)
-  }, [editWorkDate, loadTurnoByDate])
+  }, [showEditModal, editWorkDate, loadTurnoByDate])
 
   useEffect(() => {
     if (!programDialogOpen) return
@@ -1115,48 +1132,71 @@ export default function CrewsPage() {
     return dateKeys.filter((key) => !collapsedDateGroups.has(key))
   }, [crewsGroupedByDate, collapsedDateGroups])
 
-  useEffect(() => {
-    // Precarga solo fechas expandidas; cargar todo el histórico genera demasiadas
-    // llamadas y egress innecesario.
-    const dateKeys = getPreloadDateKeys()
-    dateKeys.forEach((key) => {
-      void loadTurnoByDate(key)
-    })
-  }, [getPreloadDateKeys, loadTurnoByDate])
-
   const loadDateCollaboratorNotes = useCallback(async (dateKey: string) => {
     const key = String(dateKey || '').trim()
     if (!key || key === '__sin_fecha__') return {}
-    try {
-      const res = await fetch(`/api/crews/daily-exceptions?date=${encodeURIComponent(key)}`, { cache: 'no-store' })
-      if (!res.ok) return {}
-      const json = await res.json()
-      const rows = Array.isArray(json?.rows) ? json.rows : []
-      const assignedIds: string[] = Array.isArray(json?.assigned_collaborator_ids)
-        ? Array.from(new Set<string>(json.assigned_collaborator_ids.map((id: any) => String(id || '').trim()).filter(Boolean)))
-        : []
-      const map: Record<string, string> = {}
-      rows.forEach((r: any) => {
-        const cid = String(r?.collaborator_id || '').trim()
-        const note = String(r?.note || '').trim()
-        if (!cid || !note) return
-        map[cid] = note
-      })
-      setDateCollaboratorNotesByDate((prev) => ({ ...prev, [key]: map }))
-      setDateAssignedIdsByDate((prev) => ({ ...prev, [key]: assignedIds }))
-      return map
-    } catch {
-      return {}
+
+    if (dateNotesLoadedRef.current.has(key)) {
+      return dateCollaboratorNotesByDate[key] || {}
     }
-  }, [])
+
+    const existing = dateNotesInFlightRef.current.get(key)
+    if (existing) return existing
+
+    const promise = (async () => {
+      try {
+        const res = await fetch(`/api/crews/daily-exceptions?date=${encodeURIComponent(key)}`, { cache: 'no-store' })
+        if (!res.ok) {
+          dateNotesLoadedRef.current.add(key)
+          return {}
+        }
+
+        const json = await res.json()
+        const rows = Array.isArray(json?.rows) ? json.rows : []
+
+        const assignedIds: string[] = Array.isArray(json?.assigned_collaborator_ids)
+          ? Array.from(new Set<string>(json.assigned_collaborator_ids.map((id: any) => String(id || '').trim()).filter(Boolean)))
+          : []
+
+        const map: Record<string, string> = {}
+
+        rows.forEach((r: any) => {
+          const cid = String(r?.collaborator_id || '').trim()
+          const note = String(r?.note || '').trim()
+          if (!cid || !note) return
+          map[cid] = note
+        })
+
+        setDateCollaboratorNotesByDate((prev) => ({ ...prev, [key]: map }))
+        setDateAssignedIdsByDate((prev) => ({ ...prev, [key]: assignedIds }))
+        dateNotesLoadedRef.current.add(key)
+
+        return map
+      } catch {
+        dateNotesLoadedRef.current.add(key)
+        return {}
+      } finally {
+        dateNotesInFlightRef.current.delete(key)
+      }
+    })()
+
+    dateNotesInFlightRef.current.set(key, promise)
+    return promise
+  }, [dateCollaboratorNotesByDate])
 
   useEffect(() => {
     if (!canViewDateNotes) return
+
     const dateKeys = getPreloadDateKeys()
-    dateKeys.forEach((key) => {
-      void loadDateCollaboratorNotes(key)
+    if (dateKeys.length === 0) return
+
+    void loadCollaboratorsCached().then(() => {
+      dateKeys.forEach((key) => {
+        void loadTurnoByDate(key)
+        void loadDateCollaboratorNotes(key)
+      })
     })
-  }, [canViewDateNotes, getPreloadDateKeys, loadDateCollaboratorNotes])
+  }, [canViewDateNotes, getPreloadDateKeys, loadCollaboratorsCached, loadTurnoByDate, loadDateCollaboratorNotes]) 
 
   const getDateAvailableCollaborators = useCallback((dateKey: string) => {
     const validDate = String(dateKey || '').trim()
@@ -2684,11 +2724,6 @@ export default function CrewsPage() {
     setEditWorkDate(crew.work_date || toChileDateKey(crew.created_at) || getChileToday())
     setShowEditModal(true)
 
-    try {
-      await loadCrews({ silent: true, force: true })
-    } catch (e) {
-      // keep opening with current state if refresh fails
-    }
     // fetch latest crew data from server to ensure supervisors/foremen/members fields are present
     try {
       const res = await fetch(`/api/crews/${targetId}`, { cache: 'no-store' })
@@ -2848,8 +2883,8 @@ export default function CrewsPage() {
       if (opts?.force) crewsInFlightRef.current = null
       if (!crewsInFlightRef.current) {
         crewsInFlightRef.current = (async () => {
-          const res = await fetch("/api/crews", { cache: 'no-store' })
-          if (!res.ok) return crews
+          const res = await fetch("/api/crews?summary=1", { cache: 'no-store' })
+          if (!res.ok) return []
           const data = await res.json()
           return data || []
         })().finally(() => {
@@ -2862,7 +2897,7 @@ export default function CrewsPage() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [crews, deriveAssignedIds])
+  }, [deriveAssignedIds])
 
   useEffect(() => {
     const companyId = String(session?.user?.companyId || '').trim()
@@ -2887,16 +2922,10 @@ export default function CrewsPage() {
           // ignore — we'll fallback to deriving from collaborators
         }
 
-        // Always load collaborators to populate candidate lists
-        try {
-          const data = await loadCollaboratorsCached()
-          // If specialties endpoint failed, derive list from collaborators as fallback
-          if (!specialtiesFromApi) {
-            const fromCollab: string[] = Array.from(new Set(((data || []) as any[]).map((c: any) => normalizeText(String((c && c.specialty) || ''))).filter(Boolean)))
-            setSpecialtyOptions(fromCollab)
-          }
-        } catch (e) {
-          console.warn('Error fetching collaborators for crews:', e)
+        // Do not load collaborators on initial list load.
+        // Collaborators are loaded only when creating/editing a crew.
+        if (!specialtiesFromApi) {
+          setSpecialtyOptions([])
         }
       } catch (e) {
         console.warn('Error initializing collaborators/specialties for crews:', e)
@@ -2941,34 +2970,15 @@ export default function CrewsPage() {
   }, [session?.user?.companyId, loadCrews, refreshAssignedIds, loadExportDates])
 
   useEffect(() => {
-    const companyId = session?.user?.companyId
-    if (!companyId) return
-    const tick = async () => {
-      await loadCrews({ silent: true })
-      await loadExportDates()
-    }
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') tick()
-    }
-    const onFocus = () => tick()
-
-    window.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('focus', onFocus)
-
-    return () => {
-      window.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [session?.user?.companyId, loadCrews, loadExportDates])
-
-  useEffect(() => {
     if (!programDialogOpen) return
+
     if (programQuery && programQuery.trim().length >= 3) {
-      loadProgramActivities(programQuery)
-    } else {
-      loadProgramActivities()
+      void loadProgramActivities(programQuery)
+      return
     }
-  }, [programDialogOpen, showAllProgramDisciplines, userSpecialty])
+
+    void loadProgramActivities()
+  }, [programDialogOpen, showAllProgramDisciplines])
 
   useEffect(() => {
     const loadMySpecialty = async () => {
@@ -3000,26 +3010,44 @@ export default function CrewsPage() {
     return `/api/activities?${params.toString()}`
   }
 
-  const loadProgramActivities = async (q?: string) => {
-    try {
-      setLoadingProgram(true)
-      const res = await fetch(buildProgramUrl(q))
-      if (res.ok) {
-        const data = await res.json()
-        if (q && q.trim().length >= 3) {
-          setProgramResults(data || [])
-        } else {
-          setProgramActivities(data || [])
+  const loadProgramActivities = async (q?: string, force = false) => {
+    const url = buildProgramUrl(q)
+    const isSearch = !!(q && q.trim().length >= 3)
+
+    if (!force && !isSearch && programActivitiesLoadedKeyRef.current === url) return
+    if (!force && !isSearch && programActivitiesInFlightRef.current) return programActivitiesInFlightRef.current
+
+    const promise = (async () => {
+      try {
+        setLoadingProgram(true)
+
+        const res = await fetch(url)
+
+        if (res.ok) {
+          const data = await res.json()
+
+          if (isSearch) {
+            setProgramResults(data || [])
+          } else {
+            setProgramActivities(data || [])
+            programActivitiesLoadedKeyRef.current = url
+          }
         }
+      } catch (e) {
+        console.warn('Could not load program activities', e)
+
+        if (isSearch) {
+          setProgramResults([])
+        }
+      } finally {
+        setLoadingProgram(false)
+        if (!isSearch) programActivitiesInFlightRef.current = null
       }
-    } catch (e) {
-      console.warn('Could not load program activities', e)
-      if (q && q.trim().length >= 3) {
-        setProgramResults([])
-      }
-    } finally {
-      setLoadingProgram(false)
-    }
+    })()
+
+    if (!isSearch) programActivitiesInFlightRef.current = promise
+
+    return promise
   }
 
   const openProgramDialogForCrew = (crew: any) => {
@@ -3036,6 +3064,8 @@ export default function CrewsPage() {
     setProgramQuery('')
     setProgramResults([])
     setProgramAssignedActivities([])
+    programActivitiesLoadedKeyRef.current = ''
+    programActivitiesInFlightRef.current = null
   }
 
   const quickQuantityRaw = String(newActivity.quantity || '').trim()
