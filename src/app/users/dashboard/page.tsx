@@ -2,7 +2,7 @@
 
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Box,
   Paper,
@@ -85,6 +85,7 @@ export default function Dashboard() {
   const [opsView, setOpsView] = useState<'hh' | 'accum' | 'growth'>('hh')
   const [companyDisplayName, setCompanyDisplayName] = useState('')
   const [loading, setLoading] = useState(true)
+  const dashboardLoadedRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -93,22 +94,36 @@ export default function Dashboard() {
   }, [status, router])
 
   useEffect(() => {
+    const companyId = String(session?.user?.companyId || '')
+    const role = String(session?.user?.role || '')
+    const isDev = role === 'dev'
+
+    if (status !== 'authenticated') return
+
+    if (!isDev && !companyId) {
+      setLoading(false)
+      return
+    }
+
+    const loadKey = `${companyId || 'dev'}:${role}`
+
+    if (dashboardLoadedRef.current === loadKey) return
+    dashboardLoadedRef.current = loadKey
+
     const fetchDashboardData = async () => {
-      const role = String(session?.user?.role || '')
-      const isDev = role === 'dev'
-      if (!isDev && !session?.user?.companyId) {
-        setLoading(false)
-        return
-      }
-      
       try {
-        // Fetch all dashboard data in parallel
-        const [statsResponse, departmentsResponse, alertsResponse, monthlyResponse, hhHistoryResponse] = await Promise.all([
-          fetch('/api/dashboard/stats'),
-          fetch('/api/dashboard/departments'),
-          fetch('/api/dashboard/alerts'),
-          fetch('/api/dashboard/monthly'),
-          fetch('/api/management/hh-history')
+        const [
+          statsResponse,
+          departmentsResponse,
+          alertsResponse,
+          monthlyResponse,
+          hhHistoryResponse
+        ] = await Promise.all([
+          fetch('/api/dashboard/stats', { cache: 'no-store' }),
+          fetch('/api/dashboard/departments', { cache: 'no-store' }),
+          fetch('/api/dashboard/alerts', { cache: 'no-store' }),
+          fetch('/api/dashboard/monthly', { cache: 'no-store' }),
+          fetch('/api/management/hh-history', { cache: 'no-store' })
         ])
 
         if (statsResponse.ok) {
@@ -136,16 +151,15 @@ export default function Dashboard() {
           setHhHistory(Array.isArray(hhHistoryData) ? hhHistoryData : [])
         }
       } catch (error) {
+        dashboardLoadedRef.current = null
         console.error('Error fetching dashboard data:', error)
       } finally {
         setLoading(false)
       }
     }
 
-    if (session?.user?.companyId || String(session?.user?.role || '') === 'dev') {
-      fetchDashboardData()
-    }
-  }, [session])
+    fetchDashboardData()
+  }, [status, session?.user?.companyId, session?.user?.role])
 
   useEffect(() => {
     const sessionCompanyName = String(session?.user?.companyName || '').trim()

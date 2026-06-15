@@ -17,7 +17,17 @@ export async function GET(req: NextRequest, ctx: any) {
     const id = ctx.params.id
     const { data: crew, error: crewErr } = await supabaseAdmin
       .from('pr_crews')
-      .select('*')
+      .select(`
+        id,
+        company_id,
+        name,
+        description,
+        specialty,
+        work_date,
+        field_boss_id,
+        created_at,
+        updated_at
+      `)
       .eq('company_id', session.user.companyId)
       .eq('id', id)
       .single()

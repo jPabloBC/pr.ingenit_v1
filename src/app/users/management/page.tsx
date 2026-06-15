@@ -1222,6 +1222,8 @@ export default function ManagementPage() {
   const [equipmentDate, setEquipmentDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [equipmentAvailableDates, setEquipmentAvailableDates] = useState<string[]>([]);
   const [equipmentLoadedFromDate, setEquipmentLoadedFromDate] = useState<string>('');
+  const [equipmentLastUpdatedAt, setEquipmentLastUpdatedAt] = useState<string>('');
+  const [equipmentLastUpdatedBy, setEquipmentLastUpdatedBy] = useState<string>('');
   const [equipmentDateAnchorEl, setEquipmentDateAnchorEl] = useState<HTMLElement | null>(null);
   const [equipmentRows, setEquipmentRows] = useState<ManagementEquipmentRow[]>([]);
   const [equipmentLoading, setEquipmentLoading] = useState(false);
@@ -3021,16 +3023,28 @@ export default function ManagementPage() {
         ? payload.available_dates.map((d: any) => String(d || '').slice(0, 10)).filter(Boolean)
         : [];
       setEquipmentAvailableDates(availableDates);
-      if (availableDates.length > 0 && !availableDates.includes(dateParam)) {
-        setEquipmentDate(availableDates[0]);
-        return;
+
+      let payloadToUse = payload;
+
+      if (availableDates.length > 0 && dateParam && !availableDates.includes(dateParam)) {
+        const fallbackResponse = await fetch(`/api/management/equipment?date=${encodeURIComponent(dateParam)}&fallback=on_or_before`);
+        const fallbackPayload = await fallbackResponse.json().catch(() => null);
+
+        if (fallbackResponse.ok && fallbackPayload) {
+          payloadToUse = fallbackPayload;
+        }
       }
-      const snapshotDate = String(payload?.snapshot_date || dateParam || '').slice(0, 10);
+
+      const snapshotDate = String(payloadToUse?.snapshot_date || dateParam || '').slice(0, 10);
       setEquipmentLoadedFromDate(snapshotDate);
-      setEquipmentRows(normalizeEquipmentApiRows(Array.isArray(payload?.rows) ? payload.rows : [], snapshotDate));
+      setEquipmentLastUpdatedAt(String(payloadToUse?.last_updated_at || '').trim());
+      setEquipmentLastUpdatedBy(String(payloadToUse?.last_updated_by || '').trim());
+      setEquipmentRows(normalizeEquipmentApiRows(Array.isArray(payloadToUse?.rows) ? payloadToUse.rows : [], snapshotDate));
     } catch (err: any) {
       setEquipmentRows([]);
       setEquipmentLoadedFromDate('');
+      setEquipmentLastUpdatedAt('');
+      setEquipmentLastUpdatedBy('');
       setEquipmentError(err?.message || 'No se pudieron cargar los equipos.');
     } finally {
       setEquipmentLoading(false);
@@ -3093,6 +3107,8 @@ export default function ManagementPage() {
       setEquipmentLoadedFromDate(String(payload?.snapshot_date || targetDate).slice(0, 10));
       setEquipmentAvailableDates((prev) => Array.from(new Set([...prev, targetDate])).sort((a, b) => b.localeCompare(a)));
       setEquipmentDate(targetDate);
+      setEquipmentLastUpdatedAt(String(payload?.last_updated_at || '').trim());
+      setEquipmentLastUpdatedBy(String(payload?.last_updated_by || '').trim());
       return true;
     } catch (err: any) {
       setEquipmentError(err?.message || 'No se pudieron guardar los equipos.');
@@ -5763,7 +5779,7 @@ export default function ManagementPage() {
                   </Stack>
                 </Paper>
               ) : activeTab === 'equipment' ? (
-                <Box sx={{ position: 'relative', minWidth: 0, width: '100%' }}>
+                <Box sx={{ position: 'relative', minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
                   <Stack spacing={0.75} sx={{ width: '100%' }}>
                     <Stack
                       direction={{ xs: 'column', md: 'row' }}
@@ -5771,7 +5787,19 @@ export default function ManagementPage() {
                       justifyContent="flex-start"
                       alignItems={{ xs: 'stretch', md: 'center' }}
                     >
-                      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
+                      <Box
+                        sx={{
+                          display: 'grid',
+                          gridTemplateColumns: {
+                            xs: '32px minmax(0, 1fr) 32px',
+                            sm: 'auto 220px auto minmax(0, 1fr)',
+                          },
+                          gap: 0.75,
+                          alignItems: 'center',
+                          width: '100%',
+                          minWidth: 0,
+                        }}
+                      >
                         <IconButton
                           size="small"
                           disabled={equipmentAvailableDates.length === 0 || equipmentAvailableDates.indexOf(String(equipmentDate || '').slice(0, 10)) <= 0}
@@ -5799,7 +5827,7 @@ export default function ManagementPage() {
                             ),
                           }}
                           sx={{
-                            width: { xs: '100%', md: 220 },
+                            width: '100%',
                             cursor: 'pointer',
                             '& .MuiInputBase-input': { textAlign: 'center' },
                           }}
@@ -5841,13 +5869,22 @@ export default function ManagementPage() {
                         >
                           <ChevronRight fontSize="small" />
                         </IconButton>
-                        <Typography sx={{ color: '#bfcad9', fontSize: 13, fontWeight: 500, ml: { xs: 0, sm: 0.5 } }}>
-                          | Editando fecha: {formatSpanishShortDate(String(equipmentDate || '').slice(0, 10)) || String(equipmentDate || '').slice(0, 10)}
-                          {equipmentLoadedFromDate && equipmentLoadedFromDate !== String(equipmentDate || '').slice(0, 10)
-                            ? ` · Base cargada desde: ${formatSpanishShortDate(equipmentLoadedFromDate) || equipmentLoadedFromDate}`
-                            : ''}
+                        <Typography
+                          sx={{
+                            color: '#bfcad9',
+                            fontSize: 13,
+                            fontWeight: 500,
+                            ml: { xs: 0, sm: 0.5 },
+                            minWidth: 0,
+                            gridColumn: { xs: '1 / -1', sm: 'auto' },
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: { xs: 'normal', sm: 'nowrap' },
+                          }}
+                        >
+                          | Registro del día: {formatSpanishShortDate(String(equipmentDate || '').slice(0, 10)) || String(equipmentDate || '').slice(0, 10)}
                         </Typography>
-                      </Stack>
+                      </Box>
                     </Stack>
 
                     {equipmentError ? <Alert severity="error">{equipmentError}</Alert> : null}
@@ -5867,7 +5904,181 @@ export default function ManagementPage() {
                           <Typography sx={{ fontWeight: 800, color: '#1f2937', mb: 0.75 }}>
                             {kind === 'MAYOR' ? 'Equipos Mayores' : 'Equipos Menores'}
                           </Typography>
-                          <TableContainer sx={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 1, backgroundColor: '#ffffff' }}>
+                          <Box
+                            sx={{
+                              display: { xs: 'grid', xl: 'none' },
+                              gap: 1,
+                              width: '100%',
+                              minWidth: 0,
+                            }}
+                          >
+                            {indexedRows.length === 0 ? (
+                              <Box
+                                sx={{
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: 1,
+                                  bgcolor: '#ffffff',
+                                  p: 1.5,
+                                  color: '#64748b',
+                                  fontStyle: 'italic',
+                                }}
+                              >
+                                Sin equipos cargados para este tipo.
+                              </Box>
+                            ) : indexedRows.map(({ row, index }) => {
+                              const statusItems = [
+                                { label: 'Operativa', active: Boolean(row.is_operational), color: colors.blue6 },
+                                { label: 'Mantención', active: Boolean(row.in_maintenance), color: colors.blue8 },
+                                { label: 'Acreditación', active: Boolean(row.in_accreditation), color: colors.blue10 },
+                                { label: 'Panne', active: Boolean(row.in_breakdown), color: colors.blue12 },
+                              ];
+                              const metricItems = [
+                                ['Cantidad', row.quantity === null || row.quantity === undefined ? '1' : String(row.quantity)],
+                                ['Canaletas', row.canaletas_qty === null || row.canaletas_qty === undefined ? '-' : String(row.canaletas_qty)],
+                                ['Piscinas', row.piscinas_qty === null || row.piscinas_qty === undefined ? '-' : String(row.piscinas_qty)],
+                                ['Kilometraje', row.mileage_km === null || row.mileage_km === undefined ? '-' : String(row.mileage_km)],
+                              ];
+
+                              return (
+                                <Box
+                                  key={`${kind}-card-${index}`}
+                                  sx={{
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: 1,
+                                    bgcolor: '#ffffff',
+                                    p: { xs: 1.25, sm: 1.5 },
+                                    minWidth: 0,
+                                  }}
+                                >
+                                  <Stack spacing={1}>
+                                    <Box
+                                      sx={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                        gap: 1,
+                                        alignItems: 'start',
+                                      }}
+                                    >
+                                      <Box sx={{ minWidth: 0 }}>
+                                        <Typography sx={{ fontWeight: 850, color: '#111827', fontSize: 15, lineHeight: 1.25, wordBreak: 'break-word' }}>
+                                          {String(row.equipment_name || '-').toUpperCase()}
+                                        </Typography>
+                                        <Typography sx={{ color: '#64748b', fontSize: 12.5, mt: 0.25, wordBreak: 'break-word' }}>
+                                          Patente: {String(row.patent || '-').toUpperCase()}
+                                        </Typography>
+                                      </Box>
+                                      <Stack direction="row" spacing={0.15} sx={{ flex: '0 0 auto' }}>
+                                        <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: '#2563eb', p: 0.5 }}>
+                                          <EditOutlined sx={{ fontSize: 18 }} />
+                                        </IconButton>
+                                        <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: '#ef4444', p: 0.5 }}>
+                                          <DeleteOutline sx={{ fontSize: 18 }} />
+                                        </IconButton>
+                                      </Stack>
+                                    </Box>
+
+                                    <Box
+                                      sx={{
+                                        display: 'grid',
+                                        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
+                                        gap: 0.6,
+                                      }}
+                                    >
+                                      {statusItems.map((item) => (
+                                        <Box
+                                          key={item.label}
+                                          sx={{
+                                            minWidth: 0,
+                                            border: '1px solid #e5eaf2',
+                                            borderRadius: 1,
+                                            px: 0.75,
+                                            py: 0.6,
+                                            bgcolor: '#f8fafc',
+                                          }}
+                                        >
+                                          <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', lineHeight: 1.1 }}>
+                                            {item.label}
+                                          </Typography>
+                                          <Box
+                                            sx={{
+                                              mt: 0.45,
+                                              height: 22,
+                                              borderRadius: 999,
+                                              border: `1px solid ${item.active ? item.color : colors.blue11}`,
+                                              bgcolor: item.active ? colors.blue15 : '#ffffff',
+                                              color: item.active ? item.color : colors.blue7,
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              fontSize: 11.5,
+                                              fontWeight: 800,
+                                              minWidth: 0,
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap',
+                                            }}
+                                          >
+                                            {item.active ? item.label : '—'}
+                                          </Box>
+                                        </Box>
+                                      ))}
+                                    </Box>
+
+                                    <Box
+                                      sx={{
+                                        display: 'grid',
+                                        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
+                                        gap: 0.6,
+                                      }}
+                                    >
+                                      {metricItems.map(([label, value]) => (
+                                        <Box
+                                          key={label}
+                                          sx={{
+                                            minWidth: 0,
+                                            border: '1px solid #e5eaf2',
+                                            borderRadius: 1,
+                                            px: 0.75,
+                                            py: 0.55,
+                                            bgcolor: '#fbfdff',
+                                          }}
+                                        >
+                                          <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', lineHeight: 1.1 }}>
+                                            {label}
+                                          </Typography>
+                                          <Typography sx={{ color: '#111827', fontSize: 13, fontWeight: 800, mt: 0.4, wordBreak: 'break-word' }}>
+                                            {value}
+                                          </Typography>
+                                        </Box>
+                                      ))}
+                                    </Box>
+
+                                    {String(row.notes || '').trim() ? (
+                                      <Box
+                                        sx={{
+                                          minWidth: 0,
+                                          border: '1px solid #e5eaf2',
+                                          borderRadius: 1,
+                                          px: 0.75,
+                                          py: 0.6,
+                                          bgcolor: '#fbfdff',
+                                        }}
+                                      >
+                                        <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase' }}>
+                                          Notas
+                                        </Typography>
+                                        <Typography sx={{ color: '#111827', fontSize: 13, wordBreak: 'break-word' }}>
+                                          {String(row.notes || '-')}
+                                        </Typography>
+                                      </Box>
+                                    ) : null}
+                                  </Stack>
+                                </Box>
+                              );
+                            })}
+                          </Box>
+
+                          <TableContainer sx={{ display: { xs: 'none', xl: 'block' }, width: '100%', border: '1px solid #e5e7eb', borderRadius: 1, backgroundColor: '#ffffff' }}>
                             <Table size="small" sx={{ minWidth: 1160 }}>
                               <TableHead>
                                 <TableRow>

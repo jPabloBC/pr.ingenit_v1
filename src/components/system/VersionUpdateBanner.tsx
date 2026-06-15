@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Box, Button, Snackbar, Typography } from '@mui/material'
 
 const POLL_INTERVAL_MS = 60_000
@@ -12,30 +12,45 @@ export default function VersionUpdateBanner() {
   )
   const [latestVersion, setLatestVersion] = useState<string>(currentVersion)
   const [open, setOpen] = useState(false)
+  const versionCheckedRef = useRef(false)
+  const versionCheckingRef = useRef(false)
 
   useEffect(() => {
     let mounted = true
 
-    const checkVersion = async () => {
+    const checkVersion = async (force = false) => {
+      if (!force && versionCheckingRef.current) return
+
       try {
+        versionCheckingRef.current = true
+
         const response = await fetch('/api/version', { cache: 'no-store' })
         if (!response.ok) return
+
         const payload = (await response.json()) as { version?: string }
         const nextVersion = String(payload?.version || '').trim()
-        if (!nextVersion) return
-        if (!mounted) return
+
+        if (!nextVersion || !mounted) return
+
         setLatestVersion(nextVersion)
+        versionCheckedRef.current = true
+
         if (nextVersion !== currentVersion) {
           setOpen(true)
         }
       } catch {
         // Silently ignore temporary network failures
+      } finally {
+        versionCheckingRef.current = false
       }
     }
 
-    void checkVersion()
-    const timer = window.setInterval(() => {
+    if (!versionCheckedRef.current) {
       void checkVersion()
+    }
+
+    const timer = window.setInterval(() => {
+      void checkVersion(true)
     }, POLL_INTERVAL_MS)
 
     return () => {

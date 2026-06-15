@@ -366,7 +366,7 @@ export default function AttendancePage() {
       if (!attendanceCollaboratorsInFlight) {
         attendanceCollaboratorsInFlight = (async () => {
           if (attendanceCollaboratorsCache) return attendanceCollaboratorsCache
-          const response = await fetch('/api/collaborators?summary=1')
+          const response = await fetch('/api/collaborators?summary=1&attendance=1')
           if (!response.ok) return []
           const data = await response.json()
           const options: CollaboratorOption[] = (Array.isArray(data) ? data : [])

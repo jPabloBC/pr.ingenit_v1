@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AppBar, Badge, Box, Button, IconButton, Popover, Stack, Toolbar, Typography } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
@@ -24,20 +24,39 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
   const [notifications, setNotifications] = useState<InternalNotification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
+  const notificationsLoadedRef = useRef(false)
+  const notificationsLoadingRef = useRef(false)
 
-  const loadNotifications = async () => {
+  const loadNotifications = async (force = false) => {
+    if (!force && notificationsLoadingRef.current) return
+
     try {
-      const res = await fetch('/api/internal-notifications?limit=8', { cache: 'no-store' })
+      notificationsLoadingRef.current = true
+
+      const res = await fetch('/api/internal-notifications?limit=8', {
+        cache: 'no-store',
+      })
+
       if (!res.ok) return
+
       const json = await res.json().catch(() => null)
       setNotifications(Array.isArray(json?.notifications) ? json.notifications : [])
       setUnreadCount(Number(json?.unread_count || 0))
-    } catch {}
+      notificationsLoadedRef.current = true
+    } catch {
+      // ignore notification errors
+    } finally {
+      notificationsLoadingRef.current = false
+    }
   }
 
   useEffect(() => {
-    void loadNotifications()
-    const id = window.setInterval(() => void loadNotifications(), 45000)
+    if (!notificationsLoadedRef.current) {
+      void loadNotifications()
+    }
+
+    const id = window.setInterval(() => void loadNotifications(true), 60000)
+
     return () => window.clearInterval(id)
   }, [])
 
