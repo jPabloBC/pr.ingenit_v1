@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Script from 'next/script';
 import {
   Accordion,
@@ -66,6 +66,86 @@ import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
 
 type FieldReportRecord = Record<string, any>;
+
+const MANAGEMENT_FETCH_CACHE_TTL_MS = 30_000;
+const fieldReportsPromiseCache = new Map<string, { promise: Promise<FieldReportRecord[]>; expiresAt: number }>();
+let collaboratorSummaryPromiseCache: { promise: Promise<any[]>; expiresAt: number } | null = null;
+const hhSummaryPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
+
+const fetchManagementFieldReports = (queryString: string): Promise<FieldReportRecord[]> => {
+  const now = Date.now();
+  const cached = fieldReportsPromiseCache.get(queryString);
+  if (cached && cached.expiresAt > now) return cached.promise;
+
+  const promise = fetch(`/api/field-reports?${queryString}`)
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return Array.isArray(payload) ? payload : [];
+    })
+    .catch((err) => {
+      fieldReportsPromiseCache.delete(queryString);
+      throw err;
+    });
+
+  fieldReportsPromiseCache.set(queryString, {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  });
+
+  return promise;
+};
+
+const fetchCollaboratorSummary = (): Promise<any[]> => {
+  const now = Date.now();
+  if (collaboratorSummaryPromiseCache && collaboratorSummaryPromiseCache.expiresAt > now) {
+    return collaboratorSummaryPromiseCache.promise;
+  }
+
+  const promise = fetch('/api/collaborators?summary=1')
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return Array.isArray(payload) ? payload : [];
+    })
+    .catch((err) => {
+      collaboratorSummaryPromiseCache = null;
+      throw err;
+    });
+
+  collaboratorSummaryPromiseCache = {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  };
+
+  return promise;
+};
+
+const fetchManagementHhSummary = (queryString: string): Promise<any> => {
+  const now = Date.now();
+  const cached = hhSummaryPromiseCache.get(queryString);
+  if (cached && cached.expiresAt > now) return cached.promise;
+
+  const url = queryString ? `/api/management/hh-summary?${queryString}` : '/api/management/hh-summary';
+  const promise = fetch(url)
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return payload || {};
+    })
+    .catch((err) => {
+      hhSummaryPromiseCache.delete(queryString);
+      throw err;
+    });
+
+  hhSummaryPromiseCache.set(queryString, {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  });
+
+  return promise;
+};
+
 declare global {
   interface Window {
     PptxGenJS?: any;
@@ -177,6 +257,21 @@ type HhMatrixRow = {
   hhExtras: number;
   byDate: Record<string, number>;
   byWeek: Record<string, number>;
+};
+
+type HhSummaryPayload = {
+  date_from?: string;
+  date_to?: string;
+  weeks?: Array<{ key: string; label: string; start: string; end: string }>;
+  dates?: string[];
+  direct_hh_by_day_specialty?: DirectHhSummaryRow[];
+  dashboard_by_day?: DayDashboardRow[];
+  matrix_rows?: HhMatrixRow[];
+  matrix_totals_by_week?: Record<string, number>;
+  total_hh_directas?: number;
+  total_hh_extras_directas?: number;
+  directos_declarados?: number;
+  report_count?: number;
 };
 
 type ManagementActivityRow = {
@@ -346,6 +441,20 @@ const getWeekRangeFromDateKey = (value: string) => {
   const start = dateToKey(date);
   const end = addDaysToDateKey(start, 6);
   return { start, end };
+};
+const PROJECT_WEEK_ANCHOR_START = '2026-06-15';
+const PROJECT_WEEK_ANCHOR_NUMBER = 11;
+const getDateKeyDayNumber = (value: string) => {
+  const match = String(value || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return Math.floor(new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime() / 86400000);
+};
+const getProjectWeekNumber = (value: string) => {
+  const weekStart = getWeekRangeFromDateKey(value).start;
+  const target = getDateKeyDayNumber(weekStart);
+  const anchor = getDateKeyDayNumber(PROJECT_WEEK_ANCHOR_START);
+  if (target == null || anchor == null) return PROJECT_WEEK_ANCHOR_NUMBER;
+  return PROJECT_WEEK_ANCHOR_NUMBER + Math.floor((target - anchor) / 7);
 };
 const getLastCompletedWeekRange = () => {
   const today = dateToKey(new Date());
@@ -1181,7 +1290,7 @@ export default function ManagementPage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [reports, setReports] = useState<FieldReportRecord[]>([]);
-  const [dailyStatusRows, setDailyStatusRows] = useState<any[]>([]);
+  const [hhSummary, setHhSummary] = useState<HhSummaryPayload | null>(null);
   const [collaboratorRows, setCollaboratorRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1195,10 +1304,13 @@ export default function ManagementPage() {
   });
   const [hhMatrixStartDate, setHhMatrixStartDate] = useState('');
   const [hhMatrixEndDate, setHhMatrixEndDate] = useState('');
+  const [hhSummaryReloadNonce, setHhSummaryReloadNonce] = useState(0);
   const [hhMatrixDialogOpen, setHhMatrixDialogOpen] = useState(false);
   const [hhMatrixRangeAnchorEl, setHhMatrixRangeAnchorEl] = useState<HTMLElement | null>(null);
   const [hhMatrixTempStartDate, setHhMatrixTempStartDate] = useState<Date | null>(null);
   const [hhMatrixTempEndDate, setHhMatrixTempEndDate] = useState<Date | null>(null);
+  const hhMatrixRangeHydratedFromSummaryRef = useRef(false);
+  const hhMatrixManualRangeChangeRef = useRef(false);
   const [crewPersonnelDateFilter, setCrewPersonnelDateFilter] = useState('');
   const [crewPersonnelDateAnchorEl, setCrewPersonnelDateAnchorEl] = useState<HTMLElement | null>(null);
   const [crewPersonnelFrontFilter, setCrewPersonnelFrontFilter] = useState('');
@@ -1282,6 +1394,7 @@ export default function ManagementPage() {
   const [includedPhotoEvidenceOrder, setIncludedPhotoEvidenceOrder] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'error' | 'info' } | null>(null);
   const equipmentAvailableDatesSet = useMemo(() => new Set(equipmentAvailableDates), [equipmentAvailableDates]);
+  const needsDetailedReports = activeTab === 'crew-personnel' || activeTab === 'activities' || activeTab === 'photo-report';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2772,22 +2885,25 @@ export default function ManagementPage() {
   }, [photoConfigHydratedKey]);
 
   useEffect(() => {
+    if (!needsDetailedReports) {
+      setLoading(false);
+      return;
+    }
+
     let mounted = true;
     setLoading(true);
     setError('');
 
     const params = new URLSearchParams({ limit: '500' });
+
     if (photoPeriodStartDate && photoPeriodEndDate) {
       params.set('date_from', photoPeriodStartDate);
       params.set('date_to', photoPeriodEndDate);
     }
 
-    fetch(`/api/field-reports?${params.toString()}`)
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
-        return Array.isArray(payload) ? payload : [];
-      })
+    const fetchKey = params.toString();
+
+    fetchManagementFieldReports(fetchKey)
       .then((payload) => {
         if (mounted) setReports(payload);
       })
@@ -2804,16 +2920,56 @@ export default function ManagementPage() {
     return () => {
       mounted = false;
     };
-  }, [photoPeriodStartDate, photoPeriodEndDate]);
+  }, [needsDetailedReports, photoPeriodStartDate, photoPeriodEndDate]);
+
+  useEffect(() => {
+    if (activeTab !== 'hh') return;
+
+    if (hhMatrixStartDate && hhMatrixEndDate && hhMatrixRangeHydratedFromSummaryRef.current && !hhMatrixManualRangeChangeRef.current) {
+      hhMatrixRangeHydratedFromSummaryRef.current = false;
+      return;
+    }
+
+    let mounted = true;
+    setLoading(true);
+    setError('');
+
+    const params = new URLSearchParams();
+    if (hhMatrixStartDate && hhMatrixEndDate) {
+      params.set('date_from', hhMatrixStartDate);
+      params.set('date_to', hhMatrixEndDate);
+    }
+    const fetchKey = params.toString();
+
+    fetchManagementHhSummary(fetchKey)
+      .then((payload: HhSummaryPayload) => {
+        if (!mounted) return;
+        setHhSummary(payload);
+        if (!hhMatrixStartDate && !hhMatrixEndDate && payload?.date_from && payload?.date_to) {
+          hhMatrixRangeHydratedFromSummaryRef.current = true;
+          setHhMatrixStartDate(String(payload.date_from));
+          setHhMatrixEndDate(String(payload.date_to));
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setHhSummary(null);
+          setError(err?.message || 'No se pudo cargar el resumen HH.');
+        }
+      })
+      .finally(() => {
+        hhMatrixManualRangeChangeRef.current = false;
+        if (mounted) setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab, hhMatrixEndDate, hhMatrixStartDate, hhSummaryReloadNonce]);
 
   useEffect(() => {
     let mounted = true;
-    fetch('/api/collaborators?summary=1')
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
-        return Array.isArray(payload) ? payload : [];
-      })
+    fetchCollaboratorSummary()
       .then((payload) => {
         if (mounted) setCollaboratorRows(payload);
       })
@@ -2834,16 +2990,8 @@ export default function ManagementPage() {
         if (key && !map.has(key)) map.set(key, row);
       });
     });
-    dailyStatusRows.forEach((row) => {
-      const collaborator = row?.collaborator;
-      if (!collaborator || typeof collaborator !== 'object') return;
-      [collaborator?.id, collaborator?.user_id, collaborator?.collaborator_id, row?.collaborator_id].forEach((value) => {
-        const key = String(value || '').trim();
-        if (key && !map.has(key)) map.set(key, collaborator);
-      });
-    });
     return map;
-  }, [collaboratorRows, dailyStatusRows]);
+  }, [collaboratorRows]);
 
   const loadInterferences = React.useCallback(async () => {
     setInterferencesLoading(true);
@@ -3243,88 +3391,9 @@ export default function ManagementPage() {
     }
   };
 
-  useEffect(() => {
-    const reportDates = Array.from(
-      new Set(
-        reports
-          .map((report) => String(report?.date || report?.report_date || '').slice(0, 10))
-          .filter(Boolean)
-      )
-    ).sort();
-
-    if (reportDates.length === 0) {
-      setDailyStatusRows([]);
-      return;
-    }
-
-    const dateFrom = reportDates[0];
-    const dateTo = reportDates[reportDates.length - 1];
-    let mounted = true;
-
-    fetch(`/api/collaborators/daily-status?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`)
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null);
-        if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
-        return Array.isArray(payload?.rows) ? payload.rows : [];
-      })
-      .then((rows) => {
-        if (!mounted) return;
-        setDailyStatusRows(rows);
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setDailyStatusRows([]);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [reports]);
-
-  const directHhByDaySpecialty = useMemo<DirectHhSummaryRow[]>(() => {
-    const map = new Map<string, DirectHhSummaryRow>();
-    const peopleByKey = new Map<string, Set<string>>();
-
-    reports.forEach((report) => {
-      const date = String(report?.date || report?.report_date || '').slice(0, 10);
-      if (!date) return;
-
-      const directRows = getReportDirectRows(report);
-      const reportedSpecialties = new Set<string>();
-
-      directRows.forEach((row) => {
-        if (row.hh <= 0 && row.hhExtras <= 0) return;
-        const specialty = row.specialty || getReportSpecialty(report);
-        const key = `${date}__${specialty}`;
-        const current = map.get(key) || { date, specialty, reports: 0, peopleRows: 0, hh: 0, hhExtras: 0 };
-        const reportKey = `${key}__${String(report?.id || '')}`;
-        if (!reportedSpecialties.has(reportKey)) {
-          current.reports += 1;
-          reportedSpecialties.add(reportKey);
-        }
-        const peopleSet = peopleByKey.get(key) || new Set<string>();
-        if (row.personKey) peopleSet.add(String(row.personKey));
-        peopleByKey.set(key, peopleSet);
-        current.peopleRows = peopleSet.size;
-        current.hh += row.hh;
-        current.hhExtras += row.hhExtras;
-        map.set(key, current);
-      });
-    });
-
-    return Array.from(map.values()).sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date);
-      return a.specialty.localeCompare(b.specialty, 'es');
-    });
-  }, [reports]);
-
   const reportDateKeys = useMemo(() => {
-    return Array.from(new Set(
-      reports
-        .map((report) => String(report?.date || report?.report_date || '').slice(0, 10))
-        .filter(Boolean)
-    )).sort();
-  }, [reports]);
+    return Array.isArray(hhSummary?.dates) ? hhSummary.dates.slice().sort() : [];
+  }, [hhSummary]);
 
   useEffect(() => {
     if (reportDateKeys.length === 0) return;
@@ -3342,265 +3411,81 @@ export default function ManagementPage() {
     };
   }, [hhMatrixEndDate, hhMatrixStartDate]);
 
-  const hhMatrixDates = useMemo(() => {
-    return listDateKeysBetween(hhMatrixRange.start, hhMatrixRange.end);
+  const hhVisibleWeekLabel = useMemo(() => {
+    if (!hhMatrixRange.start || !hhMatrixRange.end) return 'Semana HH: cargando...';
+    return `Semana HH ${getProjectWeekNumber(hhMatrixRange.start)}: ${formatSpanishShortDate(hhMatrixRange.start)} al ${formatSpanishShortDate(hhMatrixRange.end)}`;
   }, [hhMatrixRange.end, hhMatrixRange.start]);
+
+  const currentCalendarWeekRange = useMemo(() => getWeekRangeFromDateKey(dateToKey(new Date())), []);
+  const latestAvailableWeekRange = useMemo(() => {
+    if (hhSummary?.date_from || hhSummary?.date_to) {
+      return getWeekRangeFromDateKey(String(hhSummary.date_from || hhSummary.date_to || ''));
+    }
+    return { start: '', end: '' };
+  }, [hhSummary?.date_from, hhSummary?.date_to]);
+  const canNavigateHhWeek = Boolean(hhMatrixRange.start || hhSummary?.date_from);
+  const nextHhWeekStart = useMemo(() => {
+    const baseStart = hhMatrixRange.start || hhSummary?.date_from || hhSummary?.date_to || '';
+    if (!baseStart) return '';
+    const normalized = getWeekRangeFromDateKey(baseStart);
+    return addDaysToDateKey(normalized.start || baseStart, 7);
+  }, [hhMatrixRange.start, hhSummary?.date_from, hhSummary?.date_to]);
+  const isViewingLatestAvailableHhWeek = Boolean(
+    hhMatrixRange.start &&
+    latestAvailableWeekRange.start &&
+    hhMatrixRange.start === latestAvailableWeekRange.start
+  );
+  const canNavigateHhNextWeek = canNavigateHhWeek && Boolean(
+    nextHhWeekStart &&
+    currentCalendarWeekRange.start &&
+    nextHhWeekStart <= currentCalendarWeekRange.start
+  );
+
+  const moveHhWeek = React.useCallback((direction: -1 | 1) => {
+    const baseStart = hhMatrixRange.start || hhSummary?.date_from || '';
+    const baseEnd = hhMatrixRange.end || hhSummary?.date_to || '';
+    if (!baseStart && !baseEnd) return;
+    const normalized = getWeekRangeFromDateKey(baseStart || baseEnd);
+    const start = addDaysToDateKey(normalized.start || baseStart || baseEnd, direction * 7);
+    const end = addDaysToDateKey(start, 6);
+    if (!start || !end) return;
+    if (direction > 0 && currentCalendarWeekRange.start && start > currentCalendarWeekRange.start) return;
+    hhMatrixManualRangeChangeRef.current = true;
+    setHhMatrixStartDate(start);
+    setHhMatrixEndDate(end);
+  }, [currentCalendarWeekRange.start, hhMatrixRange.end, hhMatrixRange.start, hhSummary?.date_from, hhSummary?.date_to]);
+
+  const loadLatestHhWeek = React.useCallback(() => {
+    if (isViewingLatestAvailableHhWeek) return;
+    hhMatrixManualRangeChangeRef.current = false;
+    hhMatrixRangeHydratedFromSummaryRef.current = false;
+    setHhMatrixStartDate('');
+    setHhMatrixEndDate('');
+    setHhSummaryReloadNonce((value) => value + 1);
+  }, [isViewingLatestAvailableHhWeek]);
 
   const hhMatrixWeeks = useMemo(() => {
+    if (Array.isArray(hhSummary?.weeks) && hhSummary.weeks.length > 0) return hhSummary.weeks;
     return buildProjectWeeksBetween(hhMatrixRange.start, hhMatrixRange.end);
-  }, [hhMatrixRange.end, hhMatrixRange.start]);
+  }, [hhMatrixRange.end, hhMatrixRange.start, hhSummary]);
 
   const hhMatrixRows = useMemo<HhMatrixRow[]>(() => {
-    const dateSet = new Set(hhMatrixDates);
-    if (dateSet.size === 0) return [];
-
-    const rowsByKey = new Map<string, HhMatrixRow & { people: Set<string>; reportSet: Set<string> }>();
-    reports.forEach((report, reportIdx) => {
-      const date = String(report?.date || report?.report_date || '').slice(0, 10);
-      if (!dateSet.has(date)) return;
-
-      const reportId = String(report?.id || `report-${reportIdx}`);
-      const directRowsByPerson = new Map(getReportDirectRows(report).map((row) => [String(row.personKey), row]));
-
-      getReportDirectFrontRows(report).forEach((frontRow) => {
-        const person = directRowsByPerson.get(String(frontRow.personKey));
-        const specialty = frontRow.specialty || person?.specialty || getReportSpecialty(report);
-        const position = person?.position || 'SIN CARGO';
-        const front = frontRow.front || 'SIN FRENTE';
-        const key = `${specialty}__${position}__${front}`;
-        const current = rowsByKey.get(key) || {
-          key,
-          specialty,
-          position,
-          front,
-          peopleRows: 0,
-          reports: 0,
-          hh: 0,
-          hhExtras: 0,
-          byDate: {},
-          byWeek: {},
-          people: new Set<string>(),
-          reportSet: new Set<string>(),
-        };
-        const totalHh = Number(frontRow.hh || 0) + Number(frontRow.hhExtras || 0);
-        const weekKey = getSequentialWeekKeyForDate(date, hhMatrixWeeks);
-        current.hh += Number(frontRow.hh || 0);
-        current.hhExtras += Number(frontRow.hhExtras || 0);
-        current.byDate[date] = Number(current.byDate[date] || 0) + totalHh;
-        if (weekKey) current.byWeek[weekKey] = Number(current.byWeek[weekKey] || 0) + totalHh;
-        if (frontRow.personKey) current.people.add(String(frontRow.personKey));
-        current.reportSet.add(reportId);
-        current.peopleRows = current.people.size;
-        current.reports = current.reportSet.size;
-        rowsByKey.set(key, current);
-      });
-    });
-
-    return Array.from(rowsByKey.values())
-      .map(({ people: _people, reportSet: _reportSet, ...row }) => row)
-      .sort((a, b) => {
-        if (a.specialty !== b.specialty) return a.specialty.localeCompare(b.specialty, 'es');
-        if (a.position !== b.position) return a.position.localeCompare(b.position, 'es');
-        return a.front.localeCompare(b.front, 'es');
-      });
-  }, [hhMatrixDates, hhMatrixWeeks, reports]);
+    return Array.isArray(hhSummary?.matrix_rows) ? hhSummary.matrix_rows : [];
+  }, [hhSummary]);
 
   const hhMatrixTotalsByWeek = useMemo(() => {
-    const totals: Record<string, number> = {};
-    hhMatrixRows.forEach((row) => {
-      hhMatrixWeeks.forEach((week) => {
-        totals[week.key] = Number(totals[week.key] || 0) + Number(row.byWeek[week.key] || 0);
-      });
-    });
-    return totals;
-  }, [hhMatrixRows, hhMatrixWeeks]);
+    return hhSummary?.matrix_totals_by_week || {};
+  }, [hhSummary]);
 
   const hhMatrixGrandTotal = hhMatrixRows.reduce((acc, row) => acc + Number(row.hh || 0) + Number(row.hhExtras || 0), 0);
 
   const dashboardByDay = useMemo<DayDashboardRow[]>(() => {
-    const indirectTurnoByDateAndPosition = new Map<string, Map<string, GroupSummary>>();
-    dailyStatusRows.forEach((row) => {
-      const workDate = String(row?.work_date || '').slice(0, 10);
-      if (!workDate) return;
-      const status = normalizeText(row?.status);
-      const workerType = normalizeText(row?.collaborator?.worker_type);
-      if (status !== 'turno' || workerType !== 'indirecto') return;
-      const position = normalizeLabel(row?.collaborator?.position || 'SIN CARGO');
-      const byPosition = indirectTurnoByDateAndPosition.get(workDate) || new Map<string, GroupSummary>();
-      upsertGroup(byPosition, position, 11, 0);
-      indirectTurnoByDateAndPosition.set(workDate, byPosition);
-    });
+    return Array.isArray(hhSummary?.dashboard_by_day) ? hhSummary.dashboard_by_day : [];
+  }, [hhSummary]);
 
-    const dayMap = new Map<string, {
-      date: string;
-      hh: number;
-      hhExtras: number;
-      peopleRows: number;
-      directPeople: Set<string>;
-      reports: Set<string>;
-      bySpecialty: Map<string, GroupSummary>;
-      byFront: Map<string, GroupSummary>;
-      byFrontSpecialty: Map<string, Map<string, GroupSummary>>;
-      frontPersonHH: Map<string, Map<string, number>>;
-      frontSpecialtyPeople: Map<string, Map<string, Set<string>>>;
-      frontPeople: Map<string, Set<string>>;
-      byPosition: Map<string, GroupSummary>;
-      specialtyPeople: Map<string, Set<string>>;
-      positionPeople: Map<string, Set<string>>;
-      specialtyAudit: Map<string, { declaredRows: number; byPerson: Map<string, { personKey: string; name: string; document: string; reports: Set<string> }> }>;
-    }>();
-
-    reports.forEach((report, reportIdx) => {
-      const date = String(report?.date || report?.report_date || '').slice(0, 10);
-      if (!date) return;
-
-      const directRows = getReportDirectRows(report);
-      if (directRows.length === 0) return;
-
-      const reportId = String(report?.id || `report-${reportIdx}`);
-      const current = dayMap.get(date) || {
-        date,
-        hh: 0,
-        hhExtras: 0,
-        peopleRows: 0,
-        directPeople: new Set<string>(),
-        reports: new Set<string>(),
-        bySpecialty: new Map<string, GroupSummary>(),
-        byFront: new Map<string, GroupSummary>(),
-        byFrontSpecialty: new Map<string, Map<string, GroupSummary>>(),
-        frontPersonHH: new Map<string, Map<string, number>>(),
-        frontSpecialtyPeople: new Map<string, Map<string, Set<string>>>(),
-        frontPeople: new Map<string, Set<string>>(),
-        byPosition: new Map<string, GroupSummary>(),
-        specialtyPeople: new Map<string, Set<string>>(),
-        positionPeople: new Map<string, Set<string>>(),
-        specialtyAudit: new Map(),
-      };
-
-      current.reports.add(reportId);
-      directRows.forEach((row) => {
-        const personKey = String(row.personKey || '');
-        const specialty = row.specialty || getReportSpecialty(report);
-        current.hh += row.hh;
-        current.hhExtras += row.hhExtras;
-        current.directPeople.add(personKey);
-        current.peopleRows = current.directPeople.size;
-
-        const specialtyPeopleSet = current.specialtyPeople.get(specialty) || new Set<string>();
-        specialtyPeopleSet.add(personKey);
-        current.specialtyPeople.set(specialty, specialtyPeopleSet);
-
-        const positionPeopleSet = current.positionPeople.get(row.position) || new Set<string>();
-        positionPeopleSet.add(personKey);
-        current.positionPeople.set(row.position, positionPeopleSet);
-
-        upsertGroup(current.bySpecialty, specialty, row.hh, row.hhExtras, 0);
-        upsertGroup(current.byPosition, row.position, row.hh, row.hhExtras, 0);
-
-        const specialtyGroup = current.bySpecialty.get(specialty);
-        if (specialtyGroup) specialtyGroup.peopleRows = specialtyPeopleSet.size;
-        const positionGroup = current.byPosition.get(row.position);
-        if (positionGroup) positionGroup.peopleRows = positionPeopleSet.size;
-
-        const audit = current.specialtyAudit.get(specialty) || { declaredRows: 0, byPerson: new Map() };
-        audit.declaredRows += 1;
-        const personAudit = audit.byPerson.get(personKey) || {
-          personKey,
-          name: row.name || 'SIN NOMBRE',
-          document: row.document || '-',
-          reports: new Set<string>(),
-        };
-        personAudit.reports.add(reportId);
-        audit.byPerson.set(personKey, personAudit);
-        current.specialtyAudit.set(specialty, audit);
-      });
-      const directFrontRows = getReportDirectFrontRows(report);
-      directFrontRows.forEach((row) => {
-        const specialty = row.specialty || getReportSpecialty(report);
-        // Keep the same counting semantics as Field Reports:
-        // "Directos" is the sum of declared direct rows, not unique people deduplicated across reports.
-        upsertGroup(current.byFront, row.front, row.hh, row.hhExtras, 0, row.directCount);
-
-        const bySpecialtyMap = current.byFrontSpecialty.get(row.front) || new Map<string, GroupSummary>();
-        upsertGroup(bySpecialtyMap, specialty, row.hh, row.hhExtras, 0, row.directCount);
-        current.byFrontSpecialty.set(row.front, bySpecialtyMap);
-
-        const frontSpecPeopleMap = current.frontSpecialtyPeople.get(row.front) || new Map<string, Set<string>>();
-        const frontSpecPeopleSet = frontSpecPeopleMap.get(specialty) || new Set<string>();
-        if (row.personKey) frontSpecPeopleSet.add(String(row.personKey));
-        frontSpecPeopleMap.set(specialty, frontSpecPeopleSet);
-        current.frontSpecialtyPeople.set(row.front, frontSpecPeopleMap);
-
-        const personKey = String(row.personKey || '').trim();
-        if (personKey) {
-          const personByFront = current.frontPersonHH.get(personKey) || new Map<string, number>();
-          personByFront.set(row.front, Number(personByFront.get(row.front) || 0) + Number(row.hh || 0));
-          current.frontPersonHH.set(personKey, personByFront);
-        }
-      });
-
-      dayMap.set(date, current);
-    });
-
-    return Array.from(dayMap.values()).map((day) => {
-      const sortedByFront = sortGroups(Array.from(day.byFront.values()));
-      const directAssigneeByFront = new Map<string, number>();
-      const primaryFrontByPerson = new Map<string, string>();
-      Array.from(day.frontPersonHH.entries()).forEach(([personKey, frontsMap]) => {
-        const ranked = Array.from(frontsMap.entries()).sort((a, b) => {
-          if (b[1] !== a[1]) return b[1] - a[1];
-          return a[0].localeCompare(b[0], 'es');
-        });
-        const primaryFront = ranked[0]?.[0];
-        if (!primaryFront) return;
-        primaryFrontByPerson.set(personKey, primaryFront);
-        directAssigneeByFront.set(primaryFront, Number(directAssigneeByFront.get(primaryFront) || 0) + 1);
-      });
-      return ({
-      date: day.date,
-      hh: day.hh,
-      hhExtras: day.hhExtras,
-      peopleRows: day.peopleRows,
-      reports: day.reports.size,
-      indirectTurnoTotal: Array.from((indirectTurnoByDateAndPosition.get(day.date) || new Map<string, GroupSummary>()).values())
-        .reduce((acc, item) => acc + Number(item.peopleRows || 0), 0),
-      bySpecialty: sortGroups(Array.from(day.bySpecialty.values())),
-      byFront: sortedByFront.map((frontGroup) => ({
-        ...frontGroup,
-        peopleRows: Number(directAssigneeByFront.get(frontGroup.label) || 0),
-      })),
-      byFrontSpecialty: sortedByFront.map((frontGroup) => ({
-        front: frontGroup.label,
-        specialties: sortGroups(Array.from((day.byFrontSpecialty.get(frontGroup.label) || new Map<string, GroupSummary>()).values()))
-          .map((specialtyGroup) => {
-            const peopleSet = day.frontSpecialtyPeople.get(frontGroup.label)?.get(specialtyGroup.label) || new Set<string>();
-            const counted = Array.from(peopleSet).filter((personKey) => primaryFrontByPerson.get(personKey) === frontGroup.label).length;
-            return { ...specialtyGroup, peopleRows: counted };
-          }),
-      })),
-      byPosition: sortGroups(Array.from(day.byPosition.values())),
-      indirectTurnoByPosition: Array.from((indirectTurnoByDateAndPosition.get(day.date) || new Map<string, GroupSummary>()).values())
-        .sort((a, b) => a.label.localeCompare(b.label, 'es')),
-      specialtyAudit: Array.from(day.specialtyAudit.entries()).map(([specialty, audit]) => ({
-        specialty,
-        declaredRows: Number(audit.declaredRows || 0),
-        uniquePeople: audit.byPerson.size,
-        people: Array.from(audit.byPerson.values())
-          .map((p) => ({
-            personKey: p.personKey,
-            name: p.name,
-            document: p.document,
-            reports: p.reports.size,
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name, 'es')),
-      })).sort((a, b) => a.specialty.localeCompare(b.specialty, 'es')),
-    });
-    }).sort((a, b) => b.date.localeCompare(a.date));
-  }, [reports, dailyStatusRows]);
-
-  const totalDirectHh = directHhByDaySpecialty.reduce((acc, row) => acc + row.hh, 0);
-  const totalDirectHhExtras = directHhByDaySpecialty.reduce((acc, row) => acc + row.hhExtras, 0);
-  const totalDirectRows = dashboardByDay.reduce((acc, row) => acc + row.peopleRows, 0);
+  const totalDirectHh = Number(hhSummary?.total_hh_directas || 0);
+  const totalDirectHhExtras = Number(hhSummary?.total_hh_extras_directas || 0);
+  const totalDirectRows = Number(hhSummary?.directos_declarados || 0);
 
   const crewPersonnelRows = useMemo<ManagementCrewPersonnelRow[]>(() => {
     const rows: ManagementCrewPersonnelRow[] = [];
@@ -4581,16 +4466,79 @@ export default function ManagementPage() {
             <Box sx={{ px: { xs: 0.1, md: 0.1 }, pb: { xs: 0.75, md: 1 }, pt: { xs: 5.7, md: 6.1 } }}>
               {activeTab === 'hh' ? (
               <>
+              <Paper
+                variant="outlined"
+                sx={{
+                  mb: { xs: 1, md: 1.25 },
+                  mx: 'auto',
+                  p: { xs: 1, md: 1.1 },
+                  width: { xs: '100%', lg: '70%' },
+                  maxWidth: 1400,
+                  borderColor: '#d8dee9',
+                  display: 'flex',
+                  flexDirection: { xs: 'column', md: 'row' },
+                  alignItems: { xs: 'stretch', md: 'center' },
+                  justifyContent: 'space-between',
+                  gap: 1,
+                }}
+              >
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={!canNavigateHhWeek}
+                  onClick={() => moveHhWeek(-1)}
+                  sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap' }}
+                >
+                  Semana anterior
+                </Button>
+                <Typography
+                  sx={{
+                    color: '#0f172a',
+                    fontWeight: 900,
+                    textAlign: 'center',
+                    flex: 1,
+                    minWidth: { md: 280 },
+                    whiteSpace: { md: 'nowrap' },
+                  }}
+                >
+                  {hhVisibleWeekLabel}
+                </Typography>
+                <Stack direction="row" spacing={1} justifyContent={{ xs: 'stretch', md: 'flex-end' }} sx={{ flexShrink: 0 }}>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    disabled={isViewingLatestAvailableHhWeek}
+                    onClick={loadLatestHhWeek}
+                    sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
+                  >
+                    Última semana
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    disabled={!canNavigateHhNextWeek}
+                    onClick={() => moveHhWeek(1)}
+                    sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
+                  >
+                    Semana siguiente
+                  </Button>
+                </Stack>
+              </Paper>
+
               <Box
                 sx={{
                   mb: { xs: 1.25, md: 1.5 },
                   display: 'grid',
                   gap: 1,
-                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(3, minmax(0, 1fr)) auto' },
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: 'repeat(2, minmax(0, 1fr))',
+                    lg: 'repeat(4, minmax(0, 1fr))',
+                  },
                   alignItems: 'stretch',
                 }}
               >
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
                     <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
                       Total HH directas
@@ -4600,7 +4548,7 @@ export default function ManagementPage() {
                     </Typography>
                   </Stack>
                 </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
                     <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
                       Directos declarados
@@ -4610,7 +4558,7 @@ export default function ManagementPage() {
                     </Typography>
                   </Stack>
                 </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
                     <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
                       HH extras directas
@@ -4626,6 +4574,7 @@ export default function ManagementPage() {
                   sx={{
                     minHeight: 46,
                     px: 2,
+                    width: '100%',
                     fontWeight: 800,
                     textTransform: 'none',
                     whiteSpace: 'nowrap',
@@ -4754,6 +4703,7 @@ export default function ManagementPage() {
                               const start = formatIsoFromDate(hhMatrixTempStartDate);
                               const end = formatIsoFromDate(hhMatrixTempEndDate || hhMatrixTempStartDate);
                               if (start && end) {
+                                hhMatrixManualRangeChangeRef.current = true;
                                 setHhMatrixStartDate(start <= end ? start : end);
                                 setHhMatrixEndDate(start <= end ? end : start);
                               }

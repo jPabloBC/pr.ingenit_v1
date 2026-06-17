@@ -28,12 +28,16 @@ import {
 import { DateCalendar, LocalizationProvider } from "@mui/x-date-pickers"
 import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns"
 import { es } from "date-fns/locale"
-import { Cloud, CloudRain, Eye, History, Pencil, Plus, RefreshCw, Snowflake, Sun, Trash2, Wind } from "lucide-react"
+import { ChevronLeft, ChevronRight, Cloud, CloudRain, Eye, History, Pencil, Plus, RefreshCw, Snowflake, Sun, Trash2, Wind } from "lucide-react"
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
 
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_DATE = "2026-05-09"
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_NO = 32
+const PROJECT_WEEK_ANCHOR_START = "2026-06-15"
+const PROJECT_WEEK_ANCHOR_NUMBER = 11
+
+type WeekRange = { start: string; end: string }
 
 const getUtcDayNumber = (date: string) => {
   const m = String(date || "").slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
@@ -278,6 +282,44 @@ const dateToYmd = (date: Date | null) => {
   const m = String(date.getMonth() + 1).padStart(2, "0")
   const d = String(date.getDate()).padStart(2, "0")
   return `${y}-${m}-${d}`
+}
+const addDaysToYmd = (value: string, days: number) => {
+  const date = parseYmdToDate(value)
+  if (!date) return ""
+  date.setDate(date.getDate() + days)
+  return dateToYmd(date)
+}
+const getWeekRangeFromYmd = (value: string): WeekRange => {
+  const date = parseYmdToDate(value)
+  if (!date) return { start: "", end: "" }
+  const day = date.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  date.setDate(date.getDate() + mondayOffset)
+  const start = dateToYmd(date)
+  return { start, end: addDaysToYmd(start, 6) }
+}
+const getProjectWeekNumber = (value: string) => {
+  const weekStart = getWeekRangeFromYmd(value).start
+  const target = getUtcDayNumber(weekStart)
+  const anchor = getUtcDayNumber(PROJECT_WEEK_ANCHOR_START)
+  if (target == null || anchor == null) return PROJECT_WEEK_ANCHOR_NUMBER
+  return PROJECT_WEEK_ANCHOR_NUMBER + Math.floor((target - anchor) / 7)
+}
+const formatDateDisplaySlash = (value: string) => {
+  const m = String(value || "").slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return value
+  return `${m[3]}/${m[2]}/${m[1]}`
+}
+const buildWeekRangesFromDates = (dates: string[]) => {
+  const byStart = new Map<string, WeekRange>()
+  dates
+    .map((date) => String(date || "").slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .forEach((date) => {
+      const range = getWeekRangeFromYmd(date)
+      if (range.start) byStart.set(range.start, range)
+    })
+  return Array.from(byStart.values()).sort((a, b) => b.start.localeCompare(a.start))
 }
 
 const allocateIntegerByWeights = (total: number, weights: Record<string, number>) => {
@@ -5157,6 +5199,7 @@ export default function DailyReportPage() {
   const [saving, setSaving] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [records, setRecords] = useState<DailyReportRecord[]>([])
+  const [dailyReportWeekRange, setDailyReportWeekRange] = useState<WeekRange | null>(null)
   const [fieldReportDates, setFieldReportDates] = useState<string[]>([])
   const [frontBaselines, setFrontBaselines] = useState<Partial<Record<"CANALETAS" | "PISCINAS", FrontBaseline>>>({})
   const [frontHistoryRows, setFrontHistoryRows] = useState<FrontHistoryRow[]>([])
@@ -5575,6 +5618,59 @@ export default function DailyReportPage() {
     }
     return availableReportDatesForCreate
   }, [editingId, form.report_date, availableReportDatesForCreate])
+
+  const dailyReportWeeks = useMemo(() => {
+    const dates = records
+      .map((record) => String(record.report_date || "").slice(0, 10))
+      .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    return buildWeekRangesFromDates(dates)
+  }, [records])
+  const currentCalendarWeekRange = useMemo(() => getWeekRangeFromYmd(todayKey()), [])
+  const latestDailyReportWeek = useMemo(
+    () => dailyReportWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || dailyReportWeeks[0] || currentCalendarWeekRange,
+    [currentCalendarWeekRange, dailyReportWeeks]
+  )
+
+  useEffect(() => {
+    if (dailyReportWeeks.length === 0) {
+      if (!dailyReportWeekRange) setDailyReportWeekRange(currentCalendarWeekRange)
+      return
+    }
+    if (!dailyReportWeekRange) {
+      setDailyReportWeekRange(latestDailyReportWeek)
+      return
+    }
+    const stillExists = dailyReportWeeks.some((range) => range.start === dailyReportWeekRange.start)
+    if (!stillExists) setDailyReportWeekRange(latestDailyReportWeek)
+  }, [currentCalendarWeekRange, dailyReportWeekRange, dailyReportWeeks, latestDailyReportWeek])
+
+  const selectedDailyReportWeekIndex = dailyReportWeekRange
+    ? dailyReportWeeks.findIndex((range) => range.start === dailyReportWeekRange.start)
+    : -1
+  const previousDailyReportWeek = selectedDailyReportWeekIndex >= 0
+    ? dailyReportWeeks[selectedDailyReportWeekIndex + 1] || null
+    : null
+  const nextDailyReportWeekCandidate = selectedDailyReportWeekIndex > 0
+    ? dailyReportWeeks[selectedDailyReportWeekIndex - 1] || null
+    : null
+  const nextDailyReportWeek = nextDailyReportWeekCandidate && nextDailyReportWeekCandidate.start <= currentCalendarWeekRange.start
+    ? nextDailyReportWeekCandidate
+    : null
+  const isViewingLatestDailyReportWeek = Boolean(
+    dailyReportWeekRange &&
+    latestDailyReportWeek &&
+    dailyReportWeekRange.start === latestDailyReportWeek.start
+  )
+  const dailyReportWeekLabel = dailyReportWeekRange
+    ? `Semana ${getProjectWeekNumber(dailyReportWeekRange.start)}: ${formatDateDisplaySlash(dailyReportWeekRange.start)} al ${formatDateDisplaySlash(dailyReportWeekRange.end)}`
+    : "Semana de reporte diario"
+  const visibleDailyRecords = useMemo(() => {
+    if (!dailyReportWeekRange?.start || !dailyReportWeekRange?.end) return records
+    return records.filter((record) => {
+      const date = String(record.report_date || "").slice(0, 10)
+      return date >= dailyReportWeekRange.start && date <= dailyReportWeekRange.end
+    })
+  }, [dailyReportWeekRange, records])
 
   const normalizeWorkerType = (value: string) =>
     String(value || "")
@@ -11812,6 +11908,75 @@ export default function DailyReportPage() {
           </Tooltip>
         </Stack>
         <Box component="main" sx={{ py: { xs: 3.5, sm: 4 }, px: { xs: 1, sm: 1.5, md: 2 } }}>
+          <Paper
+            variant="outlined"
+            sx={{
+              mb: { xs: 1.5, sm: 2 },
+              mx: "auto",
+              px: { xs: 1, sm: 1.25 },
+              py: 1,
+              width: { xs: "100%", lg: "70%" },
+              maxWidth: 1400,
+              borderColor: "#bfdbfe",
+              borderRadius: 1.5,
+              bgcolor: "#ffffff"
+            }}
+          >
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 1,
+                flexWrap: { xs: "wrap", md: "nowrap" }
+              }}
+            >
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={!previousDailyReportWeek}
+                onClick={() => previousDailyReportWeek && setDailyReportWeekRange(previousDailyReportWeek)}
+                startIcon={<ChevronLeft size={16} />}
+                sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+              >
+                Semana anterior
+              </Button>
+              <Typography
+                sx={{
+                  flex: "1 1 auto",
+                  minWidth: { xs: "100%", md: 260 },
+                  textAlign: "center",
+                  fontSize: { xs: 14, sm: 16 },
+                  fontWeight: 900,
+                  color: "#0f172a",
+                  order: { xs: -1, md: 0 }
+                }}
+              >
+                {dailyReportWeekLabel}
+              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", justifyContent: { xs: "space-between", md: "flex-end" }, gap: 1, flex: { xs: "1 1 100%", md: "0 0 auto" } }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={isViewingLatestDailyReportWeek}
+                  onClick={() => setDailyReportWeekRange(latestDailyReportWeek)}
+                  sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+                >
+                  Última semana
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={!nextDailyReportWeek}
+                  onClick={() => nextDailyReportWeek && setDailyReportWeekRange(nextDailyReportWeek)}
+                  endIcon={<ChevronRight size={16} />}
+                  sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+                >
+                  Semana siguiente
+                </Button>
+              </Box>
+            </Box>
+          </Paper>
           <Box sx={{ overflowX: "auto" }}>
                 <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900, border: "1px solid #cbd5e1" }}>
                   <colgroup>
@@ -11841,9 +12006,9 @@ export default function DailyReportPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {records.map((r, idx) => {
+                    {visibleDailyRecords.map((r, idx) => {
                       const rowFront = detectRecordFrontStrict(r) || getRecordFront(r)
-                      const reportBlockChanged = idx > 0 && Number(records[idx - 1]?.report_no || 0) !== Number(r?.report_no || 0)
+                      const reportBlockChanged = idx > 0 && Number(visibleDailyRecords[idx - 1]?.report_no || 0) !== Number(r?.report_no || 0)
                       const rowBg = rowFront === "PISCINAS"
                         ? "#e0f2fe"
                         : "#f0f9ff"
@@ -11955,9 +12120,9 @@ export default function DailyReportPage() {
                         ) : null}
                       </tr>
                     )})}
-                    {records.length === 0 ? (
+                    {visibleDailyRecords.length === 0 ? (
                       <tr>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center" }} colSpan={10}>No hay informes diarios guardados.</td>
+                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center" }} colSpan={10}>No hay informes diarios guardados para esta semana.</td>
                       </tr>
                     ) : null}
                   </tbody>

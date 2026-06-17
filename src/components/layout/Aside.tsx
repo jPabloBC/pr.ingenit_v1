@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Drawer, List, ListItem, ListItemIcon, ListItemText, Toolbar, Box, IconButton, CircularProgress } from '@mui/material';
-import { useTheme, useMediaQuery } from '@mui/material';
+import { useTheme, useMediaQuery, alpha } from '@mui/material';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Dashboard,
@@ -116,8 +116,7 @@ const Aside: React.FC = () => {
       return;
     }
 
-    if (companyLogoLoadedRef.current === companyId) return;
-    companyLogoLoadedRef.current = companyId;
+    if (companyLogoLoadedRef.current === companyId && companyLogoUrl) return;
 
     let mounted = true;
 
@@ -138,8 +137,15 @@ const Aside: React.FC = () => {
 
         const logoUrl = String((payload as any)?.logo_url || (payload as any)?.logoUrl || '').trim();
 
+        console.log('[Aside company logo]', {
+          companyId,
+          payload,
+          logoUrl,
+        });
+
         if (mounted) {
           setCompanyLogoUrl(logoUrl);
+          companyLogoLoadedRef.current = companyId;
         }
       } catch (error) {
         companyLogoLoadedRef.current = null;
@@ -231,7 +237,7 @@ const Aside: React.FC = () => {
               }}
             >
               <img
-                src={'/assets/icon_ingenIT.png'}
+                src={'/assets/icon_ingenIT_wt.png'}
                 alt="Default Logo"
                 style={{
                   maxWidth: (!isMobile && collapsed) ? '56%' : '23%',
@@ -242,17 +248,35 @@ const Aside: React.FC = () => {
                 }}
               />
               {companyLogoUrl && (
-                <img
-                  src={companyLogoUrl}
-                  alt="Company Logo"
-                  style={{
-                    maxWidth: (!isMobile && collapsed) ? '68%' : '34%',
-                    minWidth: (!isMobile && collapsed) ? 32 : undefined,
-                    height: 'auto',
-                    borderRadius: (!isMobile && collapsed) ? 0 : 6,
-                    marginTop: (!isMobile && collapsed) ? 8 : 0,
+                <Box
+                  sx={{
+                    mt: (!isMobile && collapsed) ? 1 : 0,
+                    width: (!isMobile && collapsed) ? 46 : 58,
+                    minHeight: (!isMobile && collapsed) ? 46 : 40,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                    flexShrink: 0,
                   }}
-                />
+                >
+                  <img
+                    src={companyLogoUrl}
+                    alt="Company Logo"
+                    onLoad={() => {
+                      console.log('[Aside company logo] image loaded:', companyLogoUrl);
+                    }}
+                    onError={() => {
+                      console.error('[Aside company logo] image failed to load:', companyLogoUrl);
+                    }}
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: (!isMobile && collapsed) ? 40 : 34,
+                      objectFit: 'contain',
+                      display: 'block',
+                    }}
+                  />
+                </Box>
               )}
             </Box>
           </Box>
@@ -296,15 +320,15 @@ const Aside: React.FC = () => {
                 minHeight: 48,
                 px: collapsed && !isMobile ? 0 : 2,
                 justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
-                bgcolor: isActive || isPending ? colors.gray9 : undefined,
-                color: isActive || isPending ? colors.blue6 : undefined,
+                bgcolor: isActive || isPending ? alpha(colors.white, 0.14) : undefined,
+                color: colors.white,
                 fontWeight: isActive || isPending ? 'bold' : undefined,
                 opacity: pendingPath && !isPending ? 0.65 : 1,
                 '&:hover': {
-                  bgcolor: colors.gray7,
-                  color: colors.blue5,
+                  bgcolor: alpha(colors.white, 0.10),
+                  color: colors.white,
                   '& .MuiListItemIcon-root': {
-                    color: colors.blue5,
+                    color: colors.white,
                   },
                 },
               }}
@@ -314,7 +338,7 @@ const Aside: React.FC = () => {
                   minWidth: collapsed && !isMobile ? 0 : 48,
                   width: collapsed && !isMobile ? '100%' : 'auto',
                   justifyContent: 'center',
-                  color: isActive || isPending ? colors.blue6 : undefined,
+                  color: isActive || isPending ? colors.white : alpha(colors.white, 0.82),
                   transition: 'color 0.2s',
                 }}
               >
@@ -328,7 +352,7 @@ const Aside: React.FC = () => {
               <Box
                 component="li"
                 sx={{
-                  borderTop: '1px solid #e5e7eb',
+                  borderTop: `1px solid ${alpha(colors.white, 0.16)}`,
                   mx: collapsed && !isMobile ? 1.25 : 2,
                   my: 0.75,
                   listStyle: 'none',
@@ -357,10 +381,10 @@ const Aside: React.FC = () => {
               px: collapsed && !isMobile ? 0 : 2,
               justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
               '&:hover': {
-                bgcolor: colors.gray7,
-                color: colors.blue5,
+                bgcolor: alpha(colors.white, 0.10),
+                color: colors.white,
                 '& .MuiListItemIcon-root': {
-                  color: colors.blue5,
+                  color: colors.white,
                 },
               },
             }}
@@ -390,12 +414,12 @@ const Aside: React.FC = () => {
                 height: 28,
                 border: 'none',
                 bgcolor: 'transparent',
-                color: '#64748b',
+                color: alpha(colors.white, 0.82),
                 boxShadow: 'none',
                 transition: 'background-color 0.2s ease, color 0.2s ease',
                 '&:hover': {
-                  bgcolor: '#f8fafc',
-                  color: colors.blue5,
+                  bgcolor: alpha(colors.white, 0.10),
+                  color: colors.white,
                   boxShadow: 'none',
                 },
               }}
@@ -437,7 +461,17 @@ const Aside: React.FC = () => {
             display: 'flex',
             flexDirection: 'column',
             overflowY: 'auto',
-            overflowX: 'hidden'
+            overflowX: 'hidden',
+            background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue3} 100%)`,
+            color: colors.white,
+            borderRight: `1px solid ${alpha(colors.white, 0.12)}`,
+            '& .MuiListItemIcon-root': {
+              color: alpha(colors.white, 0.82),
+            },
+            '& .MuiListItemText-primary': {
+              color: colors.white,
+              fontWeight: 600,
+            },
           },
         }}
         open={isMobile ? mobileOpen : true}

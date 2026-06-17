@@ -402,6 +402,8 @@ export default function CollaboratorsPage() {
   const [pinnedColumns, setPinnedColumns] = useState<PinColumnKey[]>(['avatar', 'name', 'document', 'email'])
   const [searchTerm, setSearchTerm] = useState('')
   const [workerTypeFilter, setWorkerTypeFilter] = useState<string>('all')
+  const [activeStatusFilter, setActiveStatusFilter] = useState<'all' | 'active' | 'terminated'>('all')
+  const [activeStatusFilterAnchor, setActiveStatusFilterAnchor] = useState<null | HTMLElement>(null)
   const [dailyStatusDate, setDailyStatusDate] = useState<string>(new Date().toISOString().slice(0, 10))
   const [roleEffectiveDate, setRoleEffectiveDate] = useState<string>(new Date().toISOString().slice(0, 10))
   const [historyPosition, setHistoryPosition] = useState('')
@@ -2478,8 +2480,12 @@ export default function CollaboratorsPage() {
 
     const currentWorkerType = String(collab.worker_type || '').trim()
     const matchesWorkerType = workerTypeFilter === 'all' || currentWorkerType === workerTypeFilter
+    const matchesActiveStatus =
+      activeStatusFilter === 'all' ||
+      (activeStatusFilter === 'active' && collab.is_active !== false) ||
+      (activeStatusFilter === 'terminated' && collab.is_active === false)
 
-    return matchesSearch && matchesWorkerType
+    return matchesSearch && matchesWorkerType && matchesActiveStatus
   })
 
   const getTableSortValue = (collab: Collaborator, field: TableSortField): string | number => {
@@ -2779,9 +2785,52 @@ export default function CollaboratorsPage() {
                   InputLabelProps={{ shrink: true }}
                   sx={{ minWidth: 190 }}
                 />
-                <IconButton>
-                  <FilterList />
-                </IconButton>
+                <Tooltip title="Filtrar vigencia">
+                  <IconButton
+                    color={activeStatusFilter === 'all' ? 'default' : 'primary'}
+                    onClick={(event) => setActiveStatusFilterAnchor(event.currentTarget)}
+                    aria-label="Filtrar vigencia"
+                    aria-controls={activeStatusFilterAnchor ? 'active-status-filter-menu' : undefined}
+                    aria-haspopup="true"
+                    aria-expanded={activeStatusFilterAnchor ? 'true' : undefined}
+                  >
+                    <FilterList />
+                  </IconButton>
+                </Tooltip>
+                <Menu
+                  id="active-status-filter-menu"
+                  anchorEl={activeStatusFilterAnchor}
+                  open={Boolean(activeStatusFilterAnchor)}
+                  onClose={() => setActiveStatusFilterAnchor(null)}
+                >
+                  <MenuItem
+                    selected={activeStatusFilter === 'all'}
+                    onClick={() => {
+                      setActiveStatusFilter('all')
+                      setActiveStatusFilterAnchor(null)
+                    }}
+                  >
+                    Todos
+                  </MenuItem>
+                  <MenuItem
+                    selected={activeStatusFilter === 'active'}
+                    onClick={() => {
+                      setActiveStatusFilter('active')
+                      setActiveStatusFilterAnchor(null)
+                    }}
+                  >
+                    Vigentes
+                  </MenuItem>
+                  <MenuItem
+                    selected={activeStatusFilter === 'terminated'}
+                    onClick={() => {
+                      setActiveStatusFilter('terminated')
+                      setActiveStatusFilterAnchor(null)
+                    }}
+                  >
+                    Finiquitados
+                  </MenuItem>
+                </Menu>
               </Box>
               <Box display="flex" gap={1}>
                 <Button

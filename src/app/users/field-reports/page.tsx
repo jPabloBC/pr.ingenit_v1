@@ -91,8 +91,12 @@ interface ReportFrontOption {
   title_prefix?: string | null
 }
 
-let fieldReportsSummaryCache: FieldReport[] | null = null
-let fieldReportsSummaryInFlight: Promise<FieldReport[]> | null = null
+type FieldReportWeekRange = { start: string; end: string }
+
+const fieldReportsSummaryCacheByKey = new Map<string, FieldReport[]>()
+const fieldReportsSummaryInFlightByKey = new Map<string, Promise<FieldReport[]>>()
+let fieldReportDatesCache: string[] | null = null
+let fieldReportDatesInFlight: Promise<string[]> | null = null
 let collaboratorsSummaryCache: any[] | null = null
 let collaboratorsSummaryInFlight: Promise<any[] | null> | null = null
 const collaboratorsSummaryCacheByDate = new Map<string, any[]>()
@@ -243,6 +247,8 @@ const ACTIVITY_TIME_REASON_OPTIONS: Record<string, string[]> = {
 
 const FIELD_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-31'
 const FIELD_REPORT_BASE_SEQUENCE_ANCHOR_NO = 54
+const PROJECT_WEEK_ANCHOR_START = '2026-06-15'
+const PROJECT_WEEK_ANCHOR_NUMBER = 11
 const FIELD_REPORT_NOC_SEQUENCE_SEEDS: Array<{ match: string[]; next: number }> = [
   { match: ['NOC', '001', 'CALAMIN'], next: 10 },
   { match: ['NOC', '002', 'PISCINA', 'AGUA', 'SALADA'], next: 23 },
@@ -257,6 +263,54 @@ const getUtcDayNumber = (date: string) => {
   if (!m) return null
   return Math.floor(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000)
 }
+
+const isDateKey = (value: any) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').slice(0, 10))
+
+const dateKeyToUtcDate = (dateKey: string) => {
+  const [year, month, day] = String(dateKey || '').slice(0, 10).split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
+const utcDateToDateKey = (date: Date) => date.toISOString().slice(0, 10)
+
+const addDaysToDateKey = (dateKey: string, days: number) => {
+  const date = dateKeyToUtcDate(dateKey)
+  date.setUTCDate(date.getUTCDate() + days)
+  return utcDateToDateKey(date)
+}
+
+const getWeekRangeFromDateKey = (dateKey: string): FieldReportWeekRange => {
+  const date = dateKeyToUtcDate(dateKey)
+  const utcDay = date.getUTCDay()
+  const mondayOffset = utcDay === 0 ? -6 : 1 - utcDay
+  date.setUTCDate(date.getUTCDate() + mondayOffset)
+  const start = utcDateToDateKey(date)
+  return { start, end: addDaysToDateKey(start, 6) }
+}
+
+const getProjectWeekNumber = (dateKey: string) => {
+  const weekStart = getWeekRangeFromDateKey(dateKey).start
+  const target = getUtcDayNumber(weekStart)
+  const anchor = getUtcDayNumber(PROJECT_WEEK_ANCHOR_START)
+  if (target == null || anchor == null) return PROJECT_WEEK_ANCHOR_NUMBER
+  return PROJECT_WEEK_ANCHOR_NUMBER + Math.floor((target - anchor) / 7)
+}
+
+const formatDateKeyCl = (dateKey: string) => {
+  const [year, month, day] = String(dateKey || '').slice(0, 10).split('-')
+  return year && month && day ? `${day}/${month}/${year}` : dateKey
+}
+
+const buildAvailableWeekRanges = (dates: string[]) => {
+  const byStart = new Map<string, FieldReportWeekRange>()
+  dates.filter(isDateKey).forEach((date) => {
+    const range = getWeekRangeFromDateKey(date)
+    byStart.set(range.start, range)
+  })
+  return Array.from(byStart.values()).sort((a, b) => b.start.localeCompare(a.start))
+}
+
+const getFieldReportWeekKey = (range: FieldReportWeekRange) => `${range.start}:${range.end}`
 
 const getBaseContractSequenceNo = (date: string) => {
   const target = getUtcDayNumber(date)
@@ -592,6 +646,8 @@ export default function FieldReportsPage() {
   const [notifyingCompletedDate, setNotifyingCompletedDate] = useState<string>('')
   const [reportsLoading, setReportsLoading] = useState(true)
   const [reportsLoadError, setReportsLoadError] = useState<string>('')
+  const [availableReportDates, setAvailableReportDates] = useState<string[]>([])
+  const [fieldReportWeekRange, setFieldReportWeekRange] = useState<FieldReportWeekRange | null>(null)
   const [exportDateFilter, setExportDateFilter] = useState<string>('')
   const [exportCrewFilter, setExportCrewFilter] = useState<string>('')
   const [exportFrontFilter, setExportFrontFilter] = useState<string>('')
@@ -613,6 +669,7 @@ export default function FieldReportsPage() {
   const fetchReportsDoneAtRef = useRef<number | null>(null)
   const fetchReportsInFlightRef = useRef<Promise<FieldReport[]> | null>(null)
   const fetchReportsLoadedOnceRef = useRef(false)
+  const activeFieldReportWeekRangeRef = useRef<FieldReportWeekRange | null>(null)
   const dateDetailsInFlightRef = useRef<Map<string, Promise<FieldReport[]>>>(new Map())
   const collaboratorsCacheRef = useRef<any[] | null>(null)
   const collaboratorsInFlightRef = useRef<Promise<any[] | null> | null>(null)
@@ -2276,30 +2333,46 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
     if (status === 'unauthenticated') router.push('/auth/signin')
   }, [status, router])
 
-  // Obtener reportes desde la API
-	  const fetchReports = async (options?: { force?: boolean }) => {
+  const loadAvailableFieldReportDates = async (force = false) => {
+    if (!force && fieldReportDatesCache) return fieldReportDatesCache
+    if (!force && fieldReportDatesInFlight) return fieldReportDatesInFlight
+    fieldReportDatesInFlight = (async () => {
+      const res = await fetch('/api/field-reports?dates=1')
+      if (!res.ok) throw new Error(`No se pudieron cargar las fechas de reportes (${res.status})`)
+      const data = await res.json()
+      const dates: string[] = Array.isArray(data?.dates)
+        ? data.dates
+            .map((date: any) => String(date || '').slice(0, 10))
+            .filter((date: string) => isDateKey(date))
+        : []
+      const uniqueDates = Array.from(new Set<string>(dates)).sort((a, b) => b.localeCompare(a))
+      fieldReportDatesCache = uniqueDates
+      return uniqueDates
+    })()
+    try {
+      return await fieldReportDatesInFlight
+    } finally {
+      fieldReportDatesInFlight = null
+    }
+  }
+
+  // Obtener reportes desde la API, acotados por semana para reducir egress.
+	  const fetchReports = async (options?: { force?: boolean; range?: FieldReportWeekRange | null }) => {
 	    const force = options?.force === true
 	    if (force) {
-	      fieldReportsSummaryCache = null
-	      fieldReportsSummaryInFlight = null
+	      fieldReportsSummaryCacheByKey.clear()
+	      fieldReportsSummaryInFlightByKey.clear()
+	      fieldReportDatesCache = null
+	      fieldReportDatesInFlight = null
 	      fetchReportsLoadedOnceRef.current = false
-	      dateDetailsInFlightRef.current.clear()
-	      setDateDetailsLoadedByDate({})
-	      setDateDetailsLoadingByDate({})
 	    }
-	    if (!force && fetchReportsLoadedOnceRef.current) {
-	      return
-	    }
-	    if (!force && fieldReportsSummaryCache) {
-	      setReportsLoading(false)
-	      setReportsLoadError('')
-	      setReports(fieldReportsSummaryCache)
-	      fetchReportsLoadedOnceRef.current = true
-	      fetchReportsDoneAtRef.current = nowMs()
-	      return
-	    }
+	    dateDetailsInFlightRef.current.clear()
+	    setDateDetailsLoadedByDate({})
+	    setDateDetailsLoadingByDate({})
+	    setCollapsedDateGroups({})
 	    setReportsLoading(true)
 	    setReportsLoadError('')
+	    setReports([])
 	    const startedAt = nowMs()
 	    fetchReportsStartedAtRef.current = startedAt
 	    fetchReportsDoneAtRef.current = null
@@ -2307,30 +2380,54 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
 	    perfMark('fr-initial-fetch-start')
 	    try {
 	      initialLoadExtraRequestsRef.current = 0
-	      if (!fetchReportsInFlightRef.current && !fieldReportsSummaryInFlight) {
-	        perfCountRequest('initial-load', '/api/field-reports?summary=1&slim=1')
-	        fieldReportsSummaryInFlight = (async () => {
-	          const res = await fetch('/api/field-reports?summary=1&slim=1')
+	      const availableDates = await loadAvailableFieldReportDates(force)
+	      setAvailableReportDates(availableDates)
+	      const currentWeek = getWeekRangeFromDateKey(format(new Date(), 'yyyy-MM-dd'))
+	      const availableWeeks = buildAvailableWeekRanges(availableDates)
+	      const latestAvailableWeek = availableWeeks.find((range) => range.start <= currentWeek.start) || availableWeeks[0] || currentWeek
+	      let targetRange = options?.range || fieldReportWeekRange || latestAvailableWeek
+	      if (targetRange.start > currentWeek.start) targetRange = currentWeek
+	      activeFieldReportWeekRangeRef.current = targetRange
+	      setFieldReportWeekRange(targetRange)
+
+	      const cacheKey = getFieldReportWeekKey(targetRange)
+	      if (!force && fieldReportsSummaryCacheByKey.has(cacheKey)) {
+	        const cached = fieldReportsSummaryCacheByKey.get(cacheKey) || []
+	        setReports(cached)
+	        fetchReportsLoadedOnceRef.current = true
+	        fetchReportsDoneAtRef.current = nowMs()
+	        return
+	      }
+
+	      const url = `/api/field-reports?summary=1&slim=1&date_from=${encodeURIComponent(targetRange.start)}&date_to=${encodeURIComponent(targetRange.end)}&limit=200`
+	      let inFlight = !force ? fieldReportsSummaryInFlightByKey.get(cacheKey) : null
+	      if (!inFlight) {
+	        perfCountRequest('initial-load', url)
+	        inFlight = (async () => {
+	          const res = await fetch(url)
 	          if (!res.ok) throw new Error(`No se pudieron cargar los reportes (${res.status})`)
 	          const data = await res.json()
 	          return Array.isArray(data) ? data : []
 	        })()
+	        fieldReportsSummaryInFlightByKey.set(cacheKey, inFlight)
 	      }
-	      fetchReportsInFlightRef.current = fetchReportsInFlightRef.current || fieldReportsSummaryInFlight
-	      const data = await fetchReportsInFlightRef.current
+	      fetchReportsInFlightRef.current = inFlight
+	      const data = await inFlight
+	      fieldReportsSummaryInFlightByKey.delete(cacheKey)
+	      if (activeFieldReportWeekRangeRef.current && getFieldReportWeekKey(activeFieldReportWeekRangeRef.current) !== cacheKey) return
 	      perfMark('fr-initial-fetch-response')
-	      fieldReportsSummaryCache = data || []
+	      fieldReportsSummaryCacheByKey.set(cacheKey, data || [])
 	      setReports(data || [])
 	      fetchReportsLoadedOnceRef.current = true
 	      fetchReportsDoneAtRef.current = nowMs()
 	    } catch (e) {
+	      fieldReportsSummaryInFlightByKey.clear()
 	      setReports([])
 	      setReportsLoadError(e instanceof Error ? e.message : 'No se pudieron cargar los reportes')
 	      console.warn('No se pudieron obtener los reportes', e)
 	      fetchReportsDoneAtRef.current = nowMs()
 	    } finally {
 	      fetchReportsInFlightRef.current = null
-	      fieldReportsSummaryInFlight = null
 	      setReportsLoading(false)
 	    }
 	  }
@@ -2338,6 +2435,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
   const loadReportsForDate = useCallback(async (dateKey: string) => {
     const safeDate = String(dateKey || '').slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) return []
+    const activeRange = activeFieldReportWeekRangeRef.current
+    if (activeRange && (safeDate < activeRange.start || safeDate > activeRange.end)) return []
     if (dateDetailsLoadedByDate[safeDate]) {
       return (reports || []).filter((r: any) => String(r?.date || '').slice(0, 10) === safeDate)
     }
@@ -2351,6 +2450,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
       if (!res.ok) throw new Error(`No se pudieron cargar reportes de ${safeDate}`)
       const data = await res.json()
       const rows = Array.isArray(data) ? data : []
+      const activeRangeAfterFetch = activeFieldReportWeekRangeRef.current
+      if (activeRangeAfterFetch && (safeDate < activeRangeAfterFetch.start || safeDate > activeRangeAfterFetch.end)) {
+        return []
+      }
       setReports((prev) => {
         const byId = new Map(rows.map((row: any) => [String(row?.id || ''), row]))
         let insertedDateRows = false
@@ -2671,9 +2774,11 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
     const channel = supabase.channel('public:pr_field_reports')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pr_field_reports', filter: companyFilter }, (payload) => {
         const n = payload.new as unknown as FieldReport
-        fieldReportsSummaryCache = null
+        fieldReportsSummaryCacheByKey.clear()
         if (String((payload.new as any).company_id) === String(session.user.companyId)) {
           if (!reportMatchesUserSpecialty((payload.new as any).specialty)) return
+          const dateKey = String((payload.new as any)?.date || '').slice(0, 10)
+          if (fieldReportWeekRange && (!isDateKey(dateKey) || dateKey < fieldReportWeekRange.start || dateKey > fieldReportWeekRange.end)) return
           setReports((prev) => {
             if (prev.some((r) => r.id === n.id)) return prev
             return [n, ...prev]
@@ -2682,8 +2787,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'pr_field_reports', filter: companyFilter }, (payload) => {
         const n = payload.new as unknown as FieldReport
-        fieldReportsSummaryCache = null
+        fieldReportsSummaryCacheByKey.clear()
+        const dateKey = String((payload.new as any)?.date || '').slice(0, 10)
         setReports((prev) => {
+          if (fieldReportWeekRange && (!isDateKey(dateKey) || dateKey < fieldReportWeekRange.start || dateKey > fieldReportWeekRange.end)) {
+            return prev.filter((r) => r.id !== n.id)
+          }
           if (!reportMatchesUserSpecialty((payload.new as any).specialty)) {
             return prev.filter((r) => r.id !== n.id)
           }
@@ -2692,7 +2801,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'pr_field_reports', filter: companyFilter }, (payload) => {
         const old = payload.old
-        fieldReportsSummaryCache = null
+        fieldReportsSummaryCacheByKey.clear()
         setReports((prev) => prev.filter(r => r.id !== old.id))
       })
       .subscribe()
@@ -2700,7 +2809,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
     return () => {
       try { channel.unsubscribe() } catch (e) {}
     }
-  }, [session?.user?.companyId, reportMatchesUserSpecialty])
+  }, [session?.user?.companyId, reportMatchesUserSpecialty, fieldReportWeekRange])
 
   // Real-time subscription: mantener cuadrillas pendientes actualizadas sin abrir/cerrar modal
   useEffect(() => {
@@ -5813,7 +5922,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
       // Recargar lista de reportes
       perfSaveRefreshStartAtRef.current = nowMs()
       perfMark('fr-save-refresh-start')
-      await fetchReports({ force: true })
+      const savedReportWeek = getWeekRangeFromDateKey(String(savedData?.date || reportDate || new Date().toISOString().slice(0, 10)))
+      await fetchReports({ force: true, range: savedReportWeek })
       perfSaveRefreshEndAtRef.current = nowMs()
       perfMark('fr-save-refresh-end')
       const startedAt = perfSaveStartedAtRef.current || nowMs()
@@ -9630,17 +9740,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     }
   }, [reportsGroupedByReportDate, reports.length])
   useEffect(() => {
-    const defaultExpandedDate = String(
-      reportsGroupedByReportDate.find((group) => group.date !== 'sin-fecha')?.date ||
-      reportsGroupedByReportDate[0]?.date ||
-      ''
-    )
     setCollapsedDateGroups((prev) => {
       let changed = false
       const next = { ...prev }
       reportsGroupedByReportDate.forEach((group) => {
         if (typeof next[group.date] === 'undefined') {
-          next[group.date] = group.date !== defaultExpandedDate
+          next[group.date] = true
           changed = true
         }
       })
@@ -9671,6 +9776,40 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     return Array.from(out).sort((a, b) => a.localeCompare(b))
   }, [reports])
   const exportAvailableDateSet = useMemo(() => new Set(exportAvailableReportDates), [exportAvailableReportDates])
+  const availableReportWeeks = useMemo(() => buildAvailableWeekRanges(availableReportDates), [availableReportDates])
+  const currentCalendarWeekRange = useMemo(() => getWeekRangeFromDateKey(format(new Date(), 'yyyy-MM-dd')), [])
+  const latestAvailableReportWeek = useMemo(
+    () => availableReportWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || availableReportWeeks[0] || currentCalendarWeekRange,
+    [availableReportWeeks, currentCalendarWeekRange]
+  )
+  const selectedReportWeekIndex = fieldReportWeekRange
+    ? availableReportWeeks.findIndex((range) => range.start === fieldReportWeekRange.start)
+    : -1
+  const previousReportWeek = selectedReportWeekIndex >= 0
+    ? availableReportWeeks[selectedReportWeekIndex + 1] || null
+    : null
+  const nextReportWeekCandidate = selectedReportWeekIndex > 0
+    ? availableReportWeeks[selectedReportWeekIndex - 1] || null
+    : null
+  const nextReportWeek = nextReportWeekCandidate && nextReportWeekCandidate.start <= currentCalendarWeekRange.start
+    ? nextReportWeekCandidate
+    : null
+  const isViewingLatestReportWeek = Boolean(
+    fieldReportWeekRange &&
+    latestAvailableReportWeek &&
+    fieldReportWeekRange.start === latestAvailableReportWeek.start
+  )
+  const fieldReportWeekLabel = fieldReportWeekRange
+    ? `Semana ${getProjectWeekNumber(fieldReportWeekRange.start)}: ${formatDateKeyCl(fieldReportWeekRange.start)} al ${formatDateKeyCl(fieldReportWeekRange.end)}`
+    : 'Semana de reportes'
+  const loadFieldReportWeek = (range: FieldReportWeekRange | null) => {
+    if (!range) return
+    void fetchReports({ range })
+  }
+  const loadLatestFieldReportWeek = () => {
+    if (isViewingLatestReportWeek) return
+    void fetchReports({ range: latestAvailableReportWeek })
+  }
   const exportDateValue = useMemo(() => {
     if (!exportDateFilter) return null
     const d = parseISO(`${exportDateFilter}T00:00:00`)
@@ -9908,6 +10047,77 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
               <Box display="flex" justifyContent="space-between" alignItems="center">
                 <Stack direction="row" spacing={1} />
               </Box>
+
+              <Paper
+                variant="outlined"
+                sx={{
+                  mt: { xs: 1, sm: 1.5 },
+                  mb: { xs: 1.5, sm: 2 },
+                  mx: 'auto',
+                  px: { xs: 1, sm: 1.25 },
+                  py: 1,
+                  width: { xs: '100%', lg: '70%' },
+                  maxWidth: 1400,
+                  borderColor: '#bfdbfe',
+                  borderRadius: 1.5,
+                  bgcolor: '#ffffff'
+                }}
+              >
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1,
+                    flexWrap: { xs: 'wrap', md: 'nowrap' }
+                  }}
+                >
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => loadFieldReportWeek(previousReportWeek)}
+                    disabled={reportsLoading || !previousReportWeek}
+                    startIcon={<ChevronLeft size={16} />}
+                    sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                  >
+                    Semana anterior
+                  </Button>
+                  <Typography
+                    sx={{
+                      flex: '1 1 auto',
+                      minWidth: { xs: '100%', md: 260 },
+                      textAlign: 'center',
+                      fontSize: { xs: 14, sm: 16 },
+                      fontWeight: 900,
+                      color: '#0f172a',
+                      order: { xs: -1, md: 0 }
+                    }}
+                  >
+                    {fieldReportWeekLabel}
+                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', md: 'flex-end' }, gap: 1, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={loadLatestFieldReportWeek}
+                      disabled={reportsLoading || isViewingLatestReportWeek}
+                      sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                    >
+                      Última semana
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => loadFieldReportWeek(nextReportWeek)}
+                      disabled={reportsLoading || !nextReportWeek}
+                      endIcon={<ChevronRight size={16} />}
+                      sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                    >
+                      Semana siguiente
+                    </Button>
+                  </Box>
+                </Box>
+              </Paper>
 
               <Box sx={{ mt: 0 }}>
                 {/* Activities removed here to avoid loading large program lists; use Programa screen instead. */}
