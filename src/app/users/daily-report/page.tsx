@@ -31,6 +31,17 @@ import { es } from "date-fns/locale"
 import { ChevronLeft, ChevronRight, Cloud, CloudRain, Eye, History, Pencil, Plus, RefreshCw, Snowflake, Sun, Trash2, Wind } from "lucide-react"
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
+import {
+  getCurrentWorkdayMetadata,
+  resolveCalculationVersion,
+  resolvePersonWorkdayHours,
+  resolveMachineWorkdayHours,
+  resolveHalfDayHours,
+  resolvePersonDotationFromHours,
+  resolveMachineDotationFromHours,
+  isLegacyCalculation,
+  isCurrentCalculation
+} from "@/lib/workdayConfig"
 
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_DATE = "2026-05-09"
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_NO = 32
@@ -38,6 +49,62 @@ const PROJECT_WEEK_ANCHOR_START = "2026-06-15"
 const PROJECT_WEEK_ANCHOR_NUMBER = 11
 
 type WeekRange = { start: string; end: string }
+
+const WORKDAY_METADATA_KEYS = [
+  "calculationVersion",
+  "personWorkdayHours",
+  "machineWorkdayHours",
+  "halfDayHours",
+  "maxPersonHoursWithOvertime",
+  "maxMachineHoursWithOvertime"
+]
+
+const parsePlainObject = (value: any): Record<string, any> | null => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, any>
+  if (typeof value !== "string") return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, any> : null
+  } catch {
+    return null
+  }
+}
+
+const parseJsonArray = (value: any): any[] => {
+  if (Array.isArray(value)) return value
+  if (typeof value !== "string") return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const hasExplicitWorkdayMetadata = (source: any): boolean => {
+  const obj = parsePlainObject(source)
+  if (!obj) return false
+  if (WORKDAY_METADATA_KEYS.some((key) => obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== "")) return true
+  return ["notes", "v2_form_snapshot", "v2_runtime_snapshot"].some((key) => hasExplicitWorkdayMetadata(obj[key]))
+}
+
+const getFieldReportWorkdaySource = (report: any) => {
+  if (hasExplicitWorkdayMetadata(report)) return report
+  const personnelWithMetadata = parseJsonArray(report?.personnel).find((row) => hasExplicitWorkdayMetadata(row))
+  if (personnelWithMetadata) return personnelWithMetadata
+  const equipmentWithMetadata = parseJsonArray(report?.equipment_entries).find((row) => hasExplicitWorkdayMetadata(row))
+  if (equipmentWithMetadata) return equipmentWithMetadata
+  return report
+}
+
+const buildWorkdayMetadataForSource = (source: any) => ({
+  calculationVersion: resolveCalculationVersion(source),
+  personWorkdayHours: resolvePersonWorkdayHours(source),
+  machineWorkdayHours: resolveMachineWorkdayHours(source),
+  halfDayHours: resolveHalfDayHours(source),
+  maxPersonHoursWithOvertime: Number((source as any)?.maxPersonHoursWithOvertime || getCurrentWorkdayMetadata().maxPersonHoursWithOvertime),
+  maxMachineHoursWithOvertime: Number((source as any)?.maxMachineHoursWithOvertime || getCurrentWorkdayMetadata().maxMachineHoursWithOvertime)
+})
 
 const getUtcDayNumber = (date: string) => {
   const m = String(date || "").slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
@@ -516,7 +583,8 @@ const emptyForm = (date = todayKey()): DailyForm => ({
   validated_by_role: "",
   validated_by_date: date,
   prepared_by_signature_url: "",
-  approved_by_signature_url: ""
+  approved_by_signature_url: "",
+  ...getCurrentWorkdayMetadata()
 })
 
 // Baseline manual para iniciar acumulados cuando aún no existen reportes previos en BD.
@@ -567,6 +635,8 @@ const normalizeRecordToForm = (r: Partial<DailyReportRecord>): DailyForm => {
     const parsed = Number(normalized)
     return Number.isFinite(parsed) ? parsed : 0
   }
+  const workdayMetadata = hasExplicitWorkdayMetadata(r) ? buildWorkdayMetadataForSource(r) : null
+  const personWorkdayHours = resolvePersonWorkdayHours(workdayMetadata || r)
   const parseArrayLike = (value: any): any[] => {
     if (Array.isArray(value)) return value
     if (value && typeof value === "object") return Object.values(value)
@@ -653,8 +723,8 @@ const normalizeRecordToForm = (r: Partial<DailyReportRecord>): DailyForm => {
 
   const indirectDot = toNum(indirectDotRaw)
   const directDot = toNum(directDotRaw)
-  const indirectHh = indirectHhRaw != null && String(indirectHhRaw).trim() !== "" ? toNum(indirectHhRaw) : indirectDot * 10
-  const directHh = directHhRaw != null && String(directHhRaw).trim() !== "" ? toNum(directHhRaw) : directDot * 10
+  const indirectHh = indirectHhRaw != null && String(indirectHhRaw).trim() !== "" ? toNum(indirectHhRaw) : indirectDot * personWorkdayHours
+  const directHh = directHhRaw != null && String(directHhRaw).trim() !== "" ? toNum(directHhRaw) : directDot * personWorkdayHours
   const totalDot =
     totalDotRaw != null && String(totalDotRaw).trim() !== ""
       ? toNum(totalDotRaw)
@@ -675,8 +745,8 @@ const normalizeRecordToForm = (r: Partial<DailyReportRecord>): DailyForm => {
   }
   const detailIndirectDot = detailIndirectRows.reduce((acc, row) => acc + detailRowVisibleDot(row), 0)
   const detailDirectDot = detailDirectRows.reduce((acc, row) => acc + detailRowVisibleDot(row), 0)
-  const detailIndirectHh = detailIndirectDot * 10
-  const detailDirectHh = detailDirectDot * 10
+  const detailIndirectHh = detailIndirectDot * personWorkdayHours
+  const detailDirectHh = detailDirectDot * personWorkdayHours
   const detailEquipmentQty = (row: any) => {
     const directTotal = toNum((row as any)?.totalEqMaq ?? (row as any)?.totalEqObra)
     if (directTotal > 0) return directTotal
@@ -722,6 +792,7 @@ const normalizeRecordToForm = (r: Partial<DailyReportRecord>): DailyForm => {
     ...(r?.notes && typeof r.notes === "object" ? r.notes : {}),
     ...(r?.v2_form_snapshot && typeof r.v2_form_snapshot === "object" ? r.v2_form_snapshot : {}),
     ...(r?.v2_runtime_snapshot && typeof r.v2_runtime_snapshot === "object" ? r.v2_runtime_snapshot : {}),
+    ...(workdayMetadata ? workdayMetadata : {}),
     v2_detail_indirect_rows: detailIndirectRows,
     v2_detail_direct_rows: detailDirectRows,
     report_no: r?.report_no != null ? String(r.report_no) : "",
@@ -848,7 +919,7 @@ const getPersistedRowsGenericFromForm = (form: Partial<DailyForm>, key: string) 
 const hydratePersistedV2Rows = (rows: any[]) =>
   rows.map((row) => ({
     ...(row || {}),
-    hhTurnoDia: Number((row || {})?.hhTurnoDia) === 11 ? 10 : Number((row || {})?.hhTurnoDia || 0),
+    hhTurnoDia: Number((row || {})?.hhTurnoDia || 0),
     __persistedDailySnapshot: true
   }))
 
@@ -1975,6 +2046,11 @@ function DetailPersonnelEquipmentV2({
   const [equipmentSnapshotResolvedDate, setEquipmentSnapshotResolvedDate] = useState<string>("")
   const [frontDistributionDrafts, setFrontDistributionDrafts] = useState<Record<string, string>>({})
   const [equipmentFrontDrafts, setEquipmentFrontDrafts] = useState<Record<string, string>>({})
+  const personWorkdayHours = resolvePersonWorkdayHours(form)
+  const machineWorkdayHours = resolveMachineWorkdayHours(form)
+  const halfDayHours = resolveHalfDayHours(form)
+  const personDotationFromHours = (hours: unknown, source?: any) =>
+    resolvePersonDotationFromHours(hours, hasExplicitWorkdayMetadata(source) ? source : form)
   const centeredInputProps = { style: { textAlign: "center" as const } }
   const personalColumns = [
     "HH TURNO/DÍA",
@@ -2214,15 +2290,15 @@ function DetailPersonnelEquipmentV2({
         hhTotalObra: 0
       }]
   const defaultMajorEquipmentRows: MajorEquipmentRow[] = [
-    { name: "Retroexcavadora PDGV-54", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Grua Horquilla RKRL-48", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
-    { name: "Camion Pluma RGJD-42", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
-    { name: "Camion Aljibe HSDC-63", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Camion Tolva TSJH-64", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Cargador Frontal VTCZ-83", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Excavadora TRSV-73", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Camion 3/4 VFHR-70", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-    { name: "Tracto Pluma TVFX-62", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
+    { name: "Retroexcavadora PDGV-54", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Grua Horquilla RKRL-48", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
+    { name: "Camion Pluma RGJD-42", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
+    { name: "Camion Aljibe HSDC-63", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Camion Tolva TSJH-64", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Cargador Frontal VTCZ-83", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Excavadora TRSV-73", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Camion 3/4 VFHR-70", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+    { name: "Tracto Pluma TVFX-62", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
   ]
   const fieldReportEquipmentFrontUsageByKey = useMemo(() => {
     type Usage = { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number }
@@ -2286,6 +2362,7 @@ function DetailPersonnelEquipmentV2({
     }
     const usageByKey = new Map<string, Usage>()
     ;(fieldReportsForDate || []).forEach((report: any) => {
+      const reportPersonWorkdayHours = resolvePersonWorkdayHours(getFieldReportWorkdaySource(report))
       const reportId = String(report?.id || "").trim()
       const reportFrontRaw = String(report?.work_front || report?.front || report?.frente || "").trim()
       const reportBaseFront = resolveBaseFront(reportFrontRaw)
@@ -2547,7 +2624,7 @@ function DetailPersonnelEquipmentV2({
       })
       return {
         name: [String(row.equipment_name || "").trim(), String(row.patent || "").trim()].filter(Boolean).join(" ").trim() || String(row.equipment_name || "").trim(),
-        hmTurnoDia: 10,
+        hmTurnoDia: machineWorkdayHours,
         totalEquipos,
         operacion,
         disponibles,
@@ -2649,18 +2726,18 @@ function DetailPersonnelEquipmentV2({
     borderLeft: "1px solid #111"
   }
   const defaultMinorEqRows: MinorEquipmentRow[] = [
-    { name: "Camioneta RSXY31", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Camioneta TGJK47", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Camioneta RRZT32", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Camioneta TGJK56", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Camioneta TYTL46", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "BUS PFXD84", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Rodillo RC", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Placa Comp 3500kg N°100341920599", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Placa Comp 5500kg N°11487266", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Placa Comp 5500kg N°11815737", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 },
-    { name: "Container", hmTurnoDia: 10, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 6, front2: 4, totalEqObra: 11.5, hmTotal: 115 },
-    { name: "BUS SHYW97", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: 5 }
+    { name: "Camioneta RSXY31", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Camioneta TGJK47", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Camioneta RRZT32", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Camioneta TGJK56", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Camioneta TYTL46", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "BUS PFXD84", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Rodillo RC", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Placa Comp 3500kg N°100341920599", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Placa Comp 5500kg N°11487266", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Placa Comp 5500kg N°11815737", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours },
+    { name: "Container", hmTurnoDia: machineWorkdayHours, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 6, front2: 4, totalEqObra: 11.5, hmTotal: 11.5 * machineWorkdayHours },
+    { name: "BUS SHYW97", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, oficinaFuera: 0, front1: 0.5, front2: 0, totalEqObra: 0.5, hmTotal: halfDayHours }
   ]
   const persistedMinorEqRows: MinorEquipmentRow[] = (Array.isArray((form as any)?.v2_detail_minor_equipment_rows)
     ? (form as any).v2_detail_minor_equipment_rows
@@ -2686,7 +2763,7 @@ function DetailPersonnelEquipmentV2({
       const operacion = row.is_operational ? 1 : 0
       const panne = row.in_breakdown ? 1 : 0
       const disponibles = !operacion && !hasMaintOrAccred && !panne ? 1 : 0
-      const hmTurnoDia = 10
+      const hmTurnoDia = machineWorkdayHours
       const declaredQuantity = Math.max(0, parseQty(row.quantity || 0))
       const canaletasQty = Math.max(0, parseQty(row.canaletas_qty || 0))
       const piscinasQty = Math.max(0, parseQty(row.piscinas_qty || 0))
@@ -2914,7 +2991,7 @@ function DetailPersonnelEquipmentV2({
       const fallbackDot = Number(persistedDotTotal || 0) > 0
         ? Number(persistedDotTotal || 0)
         : Number(persistedHhTotal || 0) > 0
-          ? Number(persistedHhTotal || 0) / 10
+          ? personDotationFromHours(persistedHhTotal, rowAny)
           : 0
       const safeInstalacion = Number(persistedInstalacion || 0)
       const safeFrente = Number(persistedFrente || 0)
@@ -2940,7 +3017,7 @@ function DetailPersonnelEquipmentV2({
       Number(persistedDotTotal || 0) > 0
         ? Number(persistedDotTotal || 0)
         : Number(persistedHhTotal || 0) > 0
-          ? Number(persistedHhTotal || 0) / 10
+          ? personDotationFromHours(persistedHhTotal, rowAny)
           : Number(baseDotFromRow || 0)
     const hasBrokenPersistedFrontSplit =
       rowAny?.__persistedDailySnapshot === true &&
@@ -3111,7 +3188,7 @@ function DetailPersonnelEquipmentV2({
             baseDotRaw,
             action: "excluded-presence-overrides-all-fronts"
           })
-          return debugReturn("C", [0, 0, excludedHours / 10])
+          return debugReturn("C", [0, 0, personDotationFromHours(excludedHours)])
         }
         if (appearsOnlyInExcludedFront) {
           if (false) console.debug("[daily-report][mant-front-row]", {
@@ -3147,9 +3224,9 @@ function DetailPersonnelEquipmentV2({
         }
         if (selectedFrontHours > 0 || ifaHours > 0 || selectedNocHours > 0) {
           const fromFieldReportHours = selectedFrontHours
-          const fromFieldReportDot = fromFieldReportHours / 10
-          const fromNocDot = selectedNocHours / 10
-          const fromIfaDot = ifaHours / 10 / 2
+          const fromFieldReportDot = personDotationFromHours(fromFieldReportHours)
+          const fromNocDot = personDotationFromHours(selectedNocHours)
+          const fromIfaDot = personDotationFromHours(ifaHours) / 2
           if (false) console.debug("[daily-report][mant-front-row]", {
             reportDate: form.report_date,
             workFront: form.work_front,
@@ -3479,7 +3556,7 @@ function DetailPersonnelEquipmentV2({
     ) {
       return snapshotNumber((row as any)?.hhTotalObra)
     }
-    return getVisibleDotTotal(row) * 10
+    return getVisibleDotTotal(row) * personWorkdayHours
   }
   const visibleIndirectDotTotal = matrixRows.reduce((acc, r) => acc + getVisibleDotTotal(r as any), 0)
   const visibleDirectDotTotal = directMatrixRows.reduce((acc, r) => acc + getVisibleDotTotal(r as any), 0)
@@ -3518,7 +3595,7 @@ function DetailPersonnelEquipmentV2({
       const visibleDotTotal = shouldUseSavedSnapshotTotal(row) ? snapshotNumber((row as any)?.dotacionTotalObra) : sumBaseFrontValues(vals)
       const visibleHhTotal = strictSnapshotView && Object.prototype.hasOwnProperty.call(row as any, "hhTotalObra")
         ? snapshotNumber((row as any)?.hhTotalObra)
-        : visibleDotTotal * 10
+        : visibleDotTotal * personWorkdayHours
       return {
         ...row,
         instalacionFaena: visibleInstalacionFaena,
@@ -3536,7 +3613,7 @@ function DetailPersonnelEquipmentV2({
       const visibleDotTotal = shouldUseSavedSnapshotTotal(row) ? snapshotNumber((row as any)?.dotacionTotalObra) : sumBaseFrontValues(vals)
       const visibleHhTotal = strictSnapshotView && Object.prototype.hasOwnProperty.call(row as any, "hhTotalObra")
         ? snapshotNumber((row as any)?.hhTotalObra)
-        : visibleDotTotal * 10
+        : visibleDotTotal * personWorkdayHours
       return {
         ...row,
         instalacionFaena: visibleInstalacionFaena,
@@ -4289,7 +4366,7 @@ function SummaryInformationToDateV2({
   const totalPrevHh = metrics.previous.indirectHh + metrics.previous.directHh
   const totalCurrDot = metrics.current.indirectDot + metrics.current.directDot
   const totalCurrHh = metrics.current.indirectHh + metrics.current.directHh
-  const equipQtyFromHm = (hm: number) => Number(((Number(hm) || 0) / 10).toFixed(2))
+  const equipQtyFromHm = (hm: number) => Number(resolveMachineDotationFromHours(hm, form).toFixed(2))
   const prevMajorEquipQty = equipQtyFromHm(metrics.previous.majorHm)
   const prevMinorEquipQty = equipQtyFromHm(metrics.previous.minorHm)
   const currMajorEquipQty = equipQtyFromHm(metrics.current.majorHm)
@@ -5225,6 +5302,9 @@ export default function DailyReportPage() {
   const [activeActionRecordId, setActiveActionRecordId] = useState<string | null>(null)
   const dailyReportPdfRef = useRef<HTMLDivElement | null>(null)
   const [form, setForm] = useState<DailyForm>(emptyForm())
+  const activePersonWorkdayHours = resolvePersonWorkdayHours(form)
+  const activeMachineWorkdayHours = resolveMachineWorkdayHours(form)
+  const activeHalfDayHours = resolveHalfDayHours(form)
   const [toast, setToast] = useState<{ open: boolean; msg: string; sev: "success" | "error" | "info" }>({ open: false, msg: "", sev: "info" })
   const sessionCompanyName = String((session?.user as any)?.companyName || "").trim()
   const lastBootstrappedDateRef = useRef<string>("")
@@ -6065,7 +6145,7 @@ export default function DailyReportPage() {
       if (isExcludedFromBase) return
 
       const basePerFront = 1 / validFrontCount
-      const overridePerFront = Number(manualHours) / 10 / frontDivisor
+      const overridePerFront = resolvePersonDotationFromHours(manualHours, form) / frontDivisor
       const delta = overridePerFront - basePerFront
       out[pos] = Number(out[pos] || 0) + delta
     })
@@ -6159,7 +6239,7 @@ export default function DailyReportPage() {
       if (!groups.has(key)) {
         groups.set(key, {
           position: key,
-          hhTurnoDia: 10,
+          hhTurnoDia: activePersonWorkdayHours,
           contratados: 0,
           contratacionProceso: 0,
           apoyoOficina: 0,
@@ -6214,10 +6294,10 @@ export default function DailyReportPage() {
         if (posText.includes("PREVENCIONISTA")) {
           // PREVENCIONISTA se maneja en unidades enteras.
           row.dotacionTotalObra += 1
-          row.hhTotalObra += 10
+          row.hhTotalObra += activePersonWorkdayHours
         } else {
           row.dotacionTotalObra += 1
-          row.hhTotalObra += 10
+          row.hhTotalObra += activePersonWorkdayHours
         }
       }
       if (code === "FO" || normalizedStatus === "Fuera de Obra") row.apoyoOficina += 1
@@ -6287,7 +6367,7 @@ export default function DailyReportPage() {
           discipline: disc,
           specialty: spec,
           position: pos,
-          hhTurnoDia: 10,
+          hhTurnoDia: activePersonWorkdayHours,
           contratados: 0,
           contratacionProceso: 0,
           apoyoOficina: 0,
@@ -6363,7 +6443,7 @@ export default function DailyReportPage() {
       const isTurno = normalizedStatus === "Turno" || reasonCode === "11" || reasonCode === "10" || statusCode === "11" || statusCode === "10"
       if (isTurno) {
         row.dotacionTotalObra += 0.5
-        row.hhTotalObra += 5
+        row.hhTotalObra += activeHalfDayHours
       }
       if (code === "FO" || normalizedStatus === "Fuera de Obra") row.apoyoOficina += 1
       if (reasonCode === "D") row.descansoCambioTurno += 1
@@ -6382,7 +6462,7 @@ export default function DailyReportPage() {
       if (bySpec !== 0) return bySpec
       return a.position.localeCompare(b.position, "es", { sensitivity: "base" })
     })
-  }, [dailyStatusRows, collaborators, form.report_date, editingId, form, isViewingHistoryVersion, viewOpen])
+  }, [dailyStatusRows, collaborators, form.report_date, editingId, form, activePersonWorkdayHours, activeHalfDayHours, isViewingHistoryVersion, viewOpen])
 
   const v2RenderDebugRef = useRef<{
     indirectCount: number
@@ -6416,7 +6496,7 @@ export default function DailyReportPage() {
       const parsed = Number(value)
       return Number.isFinite(parsed) ? parsed : 0
     }
-    const hhToDot = (hh: unknown) => Number((n(hh) / 10).toFixed(2))
+    const hhToDot = (hh: unknown) => Number(resolvePersonDotationFromHours(n(hh), form).toFixed(2))
     const currentFront: "CANALETAS" | "PISCINAS" =
       String(form.work_front || "").toUpperCase() === "PISCINAS" ? "PISCINAS" : "CANALETAS"
     const visibleDotFromV2Row = (row: any) => {
@@ -6426,8 +6506,8 @@ export default function DailyReportPage() {
     }
     const dayIndirectDotFromRows = Number(v2IndirectAttendanceRows.reduce((acc, row) => acc + visibleDotFromV2Row(row), 0).toFixed(2))
     const dayDirectDotFromRows = Number(v2DirectAttendanceRows.reduce((acc, row) => acc + visibleDotFromV2Row(row), 0).toFixed(2))
-    const dayIndirectHhFromRows = Number((dayIndirectDotFromRows * 10).toFixed(2))
-    const dayDirectHhFromRows = Number((dayDirectDotFromRows * 10).toFixed(2))
+    const dayIndirectHhFromRows = Number((dayIndirectDotFromRows * activePersonWorkdayHours).toFixed(2))
+    const dayDirectHhFromRows = Number((dayDirectDotFromRows * activePersonWorkdayHours).toFixed(2))
 
     const currentDate = String(form.report_date || "")
     const currentReportNo = Number(form.report_no || 0)
@@ -7514,6 +7594,7 @@ export default function DailyReportPage() {
     }
 
     ;(fieldReportsForDate || []).forEach((report: any) => {
+      const reportPersonWorkdayHours = resolvePersonWorkdayHours(getFieldReportWorkdaySource(report))
       const reportId = String(report?.id || "").trim()
       const rawReportFront = String(report?.work_front || report?.front || report?.frente || "").trim()
       const normalizedReportFront = normalize(rawReportFront)
@@ -7662,8 +7743,8 @@ export default function DailyReportPage() {
             if (f === "excluded") excludedHours += hh
           })
           const totalRoleHours = canHours + pisHours + nocCanHours + nocPisHours + ifaHours + excludedHours
-          if (totalRoleHours > 10) {
-            const factor = 10 / totalRoleHours
+          if (totalRoleHours > reportPersonWorkdayHours) {
+            const factor = reportPersonWorkdayHours / totalRoleHours
             canHours *= factor
             pisHours *= factor
             nocCanHours *= factor
@@ -7737,11 +7818,11 @@ export default function DailyReportPage() {
         // solo en el frente NOC asignado al reporte.
         if (isNocReport) {
           if (reportFront === "canaletas") {
-            out.nocCanaletas[role] += 10
+            out.nocCanaletas[role] += reportPersonWorkdayHours
             roleFrontHits[role].add("noc_canaletas")
           }
           if (reportFront === "piscinas") {
-            out.nocPiscinas[role] += 10
+            out.nocPiscinas[role] += reportPersonWorkdayHours
             roleFrontHits[role].add("noc_piscinas")
           }
           return
@@ -7884,6 +7965,7 @@ export default function DailyReportPage() {
 
     const operatorHoursByPerson = new Map<string, OperatorFrontHours>()
     ;(fieldReportsForDate || []).forEach((report: any) => {
+      const reportPersonWorkdayHours = resolvePersonWorkdayHours(getFieldReportWorkdaySource(report))
       const reportId = String(report?.id || "").trim()
       const rawReportFront = String(report?.work_front || report?.front || report?.frente || "").trim()
       const normalizedReportFront = normalize(rawReportFront)
@@ -8002,8 +8084,8 @@ export default function DailyReportPage() {
           operatorDebugRows.push({ ...debugBase, added: [], skipped: "noc-report-without-person-hours" })
           return
         }
-        addHours(operatorHoursByPerson, pid, position, reportFront, 10)
-        operatorDebugRows.push({ ...debugBase, added: [{ hh: 10, front: reportFront, fallback: "report-front-no-hours" }] })
+        addHours(operatorHoursByPerson, pid, position, reportFront, reportPersonWorkdayHours)
+        operatorDebugRows.push({ ...debugBase, added: [{ hh: reportPersonWorkdayHours, front: reportFront, fallback: "report-front-no-hours" }] })
       })
     })
     const out: Record<string, { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number; ifa: number }> = {}
@@ -8652,9 +8734,8 @@ export default function DailyReportPage() {
       if (!(can > 0) && !(pis > 0) && !(ifa > 0) && !(nocCanaletas > 0) && !(nocPiscinas > 0)) return
       // Regla negocio: en el frente del reporte diario, se suman todas las horas
       // declaradas en sus actividades para ese frente (aunque sean varias actividades).
-      // Solo se limita aporte por persona a 10 HH máximas en ese frente.
-      const canaletasHours = Math.min(10, can)
-      const piscinasHours = Math.min(10, pis)
+      const canaletasHours = Math.min(activePersonWorkdayHours, can)
+      const piscinasHours = Math.min(activePersonWorkdayHours, pis)
 
       const specialtyCandidate = normalizeSpecialtyLabel(
         merged.specialty,
@@ -8668,14 +8749,14 @@ export default function DailyReportPage() {
         position: positionCandidate
       })
       const key = buildDirectFrontKey(disciplineCandidate, specialtyCandidate || disciplineCandidate, positionCandidate)
-      const dotationForCanaletas = canaletasHours / 10
-      const dotationForPiscinas = piscinasHours / 10
-      const dotationForNocCanaletas = Math.min(10, nocCanaletas) / 10
-      const dotationForNocPiscinas = Math.min(10, nocPiscinas) / 10
+      const dotationForCanaletas = resolvePersonDotationFromHours(canaletasHours, form)
+      const dotationForPiscinas = resolvePersonDotationFromHours(piscinasHours, form)
+      const dotationForNocCanaletas = resolvePersonDotationFromHours(Math.min(activePersonWorkdayHours, nocCanaletas), form)
+      const dotationForNocPiscinas = resolvePersonDotationFromHours(Math.min(activePersonWorkdayHours, nocPiscinas), form)
       const dotationForNoc = selectedFront === "PISCINAS" ? dotationForNocPiscinas : dotationForNocCanaletas
       // Regla negocio: IFA se declara en columna "INSTALACIÓN FAENA"
       // y se reparte mitad/mitad entre reportes CANALETAS y PISCINAS.
-      const dotationForIfa = Math.min(10, ifa) / 10 / 2
+      const dotationForIfa = resolvePersonDotationFromHours(Math.min(activePersonWorkdayHours, ifa), form) / 2
       if (dotationForCanaletas > 0) outByFront.CANALETAS[key] = Number(outByFront.CANALETAS[key] || 0) + dotationForCanaletas
       if (dotationForPiscinas > 0) outByFront.PISCINAS[key] = Number(outByFront.PISCINAS[key] || 0) + dotationForPiscinas
       if (dotationForNocCanaletas > 0) outNocByFront.CANALETAS[key] = Number(outNocByFront.CANALETAS[key] || 0) + dotationForNocCanaletas
@@ -8854,6 +8935,19 @@ export default function DailyReportPage() {
     if (persistedLabel && !hasMultipleNocLabels(persistedLabel)) return persistedLabel
 
     const activeFront: "CANALETAS" | "PISCINAS" = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const cleanLongNocLabel = (text: string) => {
+      const cleaned = String(text || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/^REPORTE\s+/i, "")
+        .trim()
+      const nocMatch = cleaned.match(/NOC\s+N[º°]?\s*0*\d+/i)
+      if (!nocMatch || nocMatch.index == null) return ""
+      const prefix = cleaned.slice(0, nocMatch.index).trim()
+      const isShortOnly = /^UDR\s+NOC\s+N[º°]?\s*\d+$/i.test(cleaned) || /^NOC\s+N[º°]?\s*\d+$/i.test(cleaned)
+      if (isShortOnly || !/[A-ZÁÉÍÓÚÑ]/i.test(prefix)) return ""
+      return cleaned
+    }
     const extractNocLabelFromText = (value: any) => {
       const raw = String(value || "").trim()
       if (!raw) return ""
@@ -8867,6 +8961,8 @@ export default function DailyReportPage() {
           .trim()
           .replace(/^USO\s+DE\s+RECURSOS/i, "UDR")
       }
+      const longLabel = cleanLongNocLabel(raw)
+      if (longLabel) return longLabel
       const codeMatch = normalized.match(/NOC\s+N[º°]?\s*0*(\d+)/i)
       if (!codeMatch) return ""
       const num = String(codeMatch[1] || "").trim()
@@ -8887,6 +8983,8 @@ export default function DailyReportPage() {
         const normalized = String(raw || "")
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
+        const longLabel = cleanLongNocLabel(raw.match(/(?:REPORTE\s+)?[A-ZÁÉÍÓÚÑ0-9][^"]*NOC\s+N[º°]?\s*\d+[^"]*/i)?.[0] || "")
+        if (longLabel) return longLabel
         const fullLabelMatch = normalized.match(/USO\s+DE\s+RECURSOS\s+NOC\s+N[º°]?\s*\d+[^\"]*/i)
         if (fullLabelMatch) {
           return String(fullLabelMatch[0] || "")
@@ -9009,7 +9107,7 @@ export default function DailyReportPage() {
       const fallbackDot = Number(persistedDotTotal || 0) > 0
         ? Number(persistedDotTotal || 0)
         : Number(persistedHhTotal || 0) > 0
-          ? Number(persistedHhTotal || 0) / 10
+          ? resolvePersonDotationFromHours(persistedHhTotal, form)
           : 0
       const safeInstalacion = Number(persistedInstalacion || 0)
       const safeFrente = Number(persistedFrente || 0)
@@ -9137,14 +9235,18 @@ export default function DailyReportPage() {
                 Number(row?.descansoCambioTurno || 0) -
                 Number(row?.permisoCovid || 0)
             )
-        if (excludedHours > 0) return debugReturn("C", [0, 0, excludedHours / 10])
+        if (excludedHours > 0) return debugReturn("C", [0, 0, resolvePersonDotationFromHours(excludedHours, form)])
         // Si hay horas declaradas en reportes de terreno, solo mostrar en los frentes
         // donde realmente estuvo presente (incluye NOC por frente).
         if (totalDeclaredHours > 0 && selectedFrontHours <= 0 && selectedNocHours <= 0 && ifaHours <= 0) {
           return debugReturn("C", [0, 0, 0])
         }
         if (selectedFrontHours > 0 || ifaHours > 0 || selectedNocHours > 0) {
-          return debugReturn("C", [ifaHours / 10 / 2, selectedFrontHours / 10 + manualSpecialFront, selectedNocHours / 10])
+          return debugReturn("C", [
+            resolvePersonDotationFromHours(ifaHours, form) / 2,
+            resolvePersonDotationFromHours(selectedFrontHours, form) + manualSpecialFront,
+            resolvePersonDotationFromHours(selectedNocHours, form)
+          ])
         }
         // Solo si no aparece en ningun reporte de terreno: dividir 50/50
         // entre frentes principales del reporte diario.
@@ -9277,7 +9379,7 @@ export default function DailyReportPage() {
     const sum = v2IndirectAttendanceRows.reduce((acc, row: any) => {
       const frontValues = getV2DotacionFrenteValues(row)
       const visibleDot = Number(frontValues?.[0] || 0) + Number(frontValues?.[1] || 0)
-      return acc + visibleDot * 10
+      return acc + visibleDot * activePersonWorkdayHours
     }, 0)
     return normalizeV2SummaryNumber(sum)
   }, [detailVisibleTotals, v2IndirectAttendanceRows, form.work_front, frontRoleDotation, indirectOverrideFrontDotByPosition, operatorFrontDotationByPosition])
@@ -9338,7 +9440,7 @@ export default function DailyReportPage() {
       : normalizeV2SummaryNumber(v2DirectAttendanceRows.reduce((acc, row: any) => {
         const frontValues = getV2DotacionFrenteValues(row)
         const visibleDot = Number(frontValues?.[0] || 0) + Number(frontValues?.[1] || 0)
-        return acc + visibleDot * 10
+        return acc + visibleDot * activePersonWorkdayHours
       }, 0)),
     [detailVisibleTotals, v2DirectAttendanceRows, directFrontDotationByPosition]
   )
@@ -9433,9 +9535,9 @@ export default function DailyReportPage() {
       indirectHh: currentIndirectHh,
       directHh: currentDirectHh,
       totalHh: currentTotalHh,
-      indirectDot: normalizeV2SummaryNumber(currentIndirectHh / 10),
-      directDot: normalizeV2SummaryNumber(currentDirectHh / 10),
-      totalDot: normalizeV2SummaryNumber(currentTotalHh / 10)
+      indirectDot: normalizeV2SummaryNumber(resolvePersonDotationFromHours(currentIndirectHh, form)),
+      directDot: normalizeV2SummaryNumber(resolvePersonDotationFromHours(currentDirectHh, form)),
+      totalDot: normalizeV2SummaryNumber(resolvePersonDotationFromHours(currentTotalHh, form))
     }
     return { ...v2SummaryMetrics, daily, current }
   }, [
@@ -9455,7 +9557,7 @@ export default function DailyReportPage() {
       const dot = n(dotValue)
       if (dot > 0) return dot
       const hh = n(hhValue)
-      return hh > 0 ? Number((hh / 10).toFixed(2)) : 0
+      return hh > 0 ? Number(resolvePersonDotationFromHours(hh, form).toFixed(2)) : 0
     }
     const previous = {
       indirectDot: dotFromHh((form as any).s4_prev_indirect_dot, (form as any).s4_prev_indirect_hh),
@@ -10012,8 +10114,9 @@ export default function DailyReportPage() {
     }
     const indirectDotFromRows = persistedIndirectRows.reduce((acc, row) => acc + visibleDotFromPersistedRow(row), 0)
     const directDotFromRows = persistedDirectRows.reduce((acc, row) => acc + visibleDotFromPersistedRow(row), 0)
-    const indirectHhFromRows = indirectDotFromRows * 10
-    const directHhFromRows = directDotFromRows * 10
+    const recordPersonWorkdayHours = resolvePersonWorkdayHours(record)
+    const indirectHhFromRows = indirectDotFromRows * recordPersonWorkdayHours
+    const directHhFromRows = directDotFromRows * recordPersonWorkdayHours
     const equipmentQtyFromRow = (row: any) => {
       const directTotal = toNum((row as any)?.totalEqMaq ?? (row as any)?.totalEqObra)
       if (directTotal > 0) return directTotal
@@ -10140,8 +10243,9 @@ export default function DailyReportPage() {
     }
     const indirectDotFromRows = persistedIndirectRows.reduce((acc, row) => acc + visibleDotFromPersistedRow(row), 0)
     const directDotFromRows = persistedDirectRows.reduce((acc, row) => acc + visibleDotFromPersistedRow(row), 0)
-    const indirectHhFromRows = indirectDotFromRows * 10
-    const directHhFromRows = directDotFromRows * 10
+    const recordPersonWorkdayHours = resolvePersonWorkdayHours(record)
+    const indirectHhFromRows = indirectDotFromRows * recordPersonWorkdayHours
+    const directHhFromRows = directDotFromRows * recordPersonWorkdayHours
     const majorQtyFromRows = persistedMajorRows.reduce((acc, row) => acc + toNum((row as any)?.totalEqMaq), 0)
     const minorQtyFromRows = persistedMinorRows.reduce((acc, row) => acc + toNum((row as any)?.totalEqMaq), 0)
     const majorHmFromRows = persistedMajorRows.reduce((acc, row) => acc + toNum((row as any)?.hmTotal), 0)
@@ -10527,6 +10631,12 @@ export default function DailyReportPage() {
       if (!Number.isFinite(parsedReportNo) || parsedReportNo <= 0) {
         throw new Error("El número de reporte diario no es válido.")
       }
+      const shouldPersistWorkdayMetadata = !editingId || hasExplicitWorkdayMetadata(form)
+      const workdayMetadataForSave = shouldPersistWorkdayMetadata
+        ? buildWorkdayMetadataForSource(hasExplicitWorkdayMetadata(form) ? form : getCurrentWorkdayMetadata())
+        : null
+      const personWorkdayHoursForSave = resolvePersonWorkdayHours(workdayMetadataForSave || form)
+      const machineWorkdayHoursForSave = resolveMachineWorkdayHours(workdayMetadataForSave || form)
       const baseVisibleSummarySnapshot = {
         summary_indirect_dotation: String(Number(effectiveV2SummaryMetrics.daily.indirectDot || 0)),
         summary_indirect_hh: String(Number(effectiveV2SummaryMetrics.daily.indirectHh || 0)),
@@ -10548,11 +10658,11 @@ export default function DailyReportPage() {
         s4_prev_direct_hh: Number(v2SummaryMetrics.previous.directHh || 0),
         s4_prev_total_dot: Number(v2SummaryMetrics.previous.totalDot || 0),
         s4_prev_total_hh: Number(v2SummaryMetrics.previous.totalHh || 0),
-        s4_prev_major_equip: Number(((Number(v2SummaryMetrics.previous.majorHm || 0)) / 10).toFixed(2)),
+        s4_prev_major_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.majorHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_prev_major_hm: Number(v2SummaryMetrics.previous.majorHm || 0),
-        s4_prev_minor_equip: Number(((Number(v2SummaryMetrics.previous.minorHm || 0)) / 10).toFixed(2)),
+        s4_prev_minor_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.minorHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_prev_minor_hm: Number(v2SummaryMetrics.previous.minorHm || 0),
-        s4_prev_total_equip: Number(((Number(v2SummaryMetrics.previous.equipmentHm || 0)) / 10).toFixed(2)),
+        s4_prev_total_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.equipmentHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_prev_total_hm: Number(v2SummaryMetrics.previous.equipmentHm || 0),
         s4_curr_indirect_dot: Number(effectiveV2SummaryMetrics.current.indirectDot || 0),
         s4_curr_indirect_hh: Number(effectiveV2SummaryMetrics.current.indirectHh || 0),
@@ -10560,11 +10670,11 @@ export default function DailyReportPage() {
         s4_curr_direct_hh: Number(effectiveV2SummaryMetrics.current.directHh || 0),
         s4_curr_total_dot: Number(effectiveV2SummaryMetrics.current.totalDot || 0),
         s4_curr_total_hh: Number(effectiveV2SummaryMetrics.current.totalHh || 0),
-        s4_curr_major_equip: Number(((Number(effectiveV2SummaryMetrics.current.majorHm || 0)) / 10).toFixed(2)),
+        s4_curr_major_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.majorHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_curr_major_hm: Number(effectiveV2SummaryMetrics.current.majorHm || 0),
-        s4_curr_minor_equip: Number(((Number(effectiveV2SummaryMetrics.current.minorHm || 0)) / 10).toFixed(2)),
+        s4_curr_minor_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.minorHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_curr_minor_hm: Number(effectiveV2SummaryMetrics.current.minorHm || 0),
-        s4_curr_total_equip: Number(((Number(effectiveV2SummaryMetrics.current.equipmentHm || 0)) / 10).toFixed(2)),
+        s4_curr_total_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.equipmentHm || 0, workdayMetadataForSave || form).toFixed(2)),
         s4_curr_total_hm: Number(effectiveV2SummaryMetrics.current.equipmentHm || 0)
       }
       const toSnapshotNumber = (value: unknown) => {
@@ -10599,7 +10709,7 @@ export default function DailyReportPage() {
         discipline: String(row?.discipline || "").trim(),
         specialty: String(row?.specialty || "").trim(),
         position: String(row?.position || "SIN CARGO").trim() || "SIN CARGO",
-        hhTurnoDia: toSnapshotNumber(row?.hhTurnoDia) === 11 ? 10 : toSnapshotNumber(row?.hhTurnoDia),
+        hhTurnoDia: toSnapshotNumber(row?.hhTurnoDia) || personWorkdayHoursForSave,
         contratados: toSnapshotNumber(row?.contratados),
         contratacionProceso: toSnapshotNumber(row?.contratacionProceso),
         apoyoOficina: toSnapshotNumber(row?.apoyoOficina),
@@ -10623,7 +10733,7 @@ export default function DailyReportPage() {
       const mainFront = toSnapshotNumber(row?.mainFront ?? row?.front2)
       const nocFront = toSnapshotNumber(row?.nocFront)
       const totalEqMaq = toSnapshotNumber(row?.totalEqMaq ?? row?.totalEqObra ?? (instalacionFaena + mainFront + nocFront))
-        const hmTurnoDia = toSnapshotNumber(row?.hmTurnoDia)
+        const hmTurnoDia = toSnapshotNumber(row?.hmTurnoDia) || machineWorkdayHoursForSave
         return {
           name: String(row?.name || "").trim(),
           hmTurnoDia,
@@ -10685,7 +10795,7 @@ export default function DailyReportPage() {
             const visibleFrente = Number(frontValues?.[1] || 0)
             const visibleNocFront = Number(frontValues?.[2] || 0)
             const visibleDotTotal = visibleInstalacionFaena + visibleFrente
-            const visibleHhTotal = visibleDotTotal * 10
+            const visibleHhTotal = visibleDotTotal * personWorkdayHoursForSave
             return buildV2DetailRowSnapshot(row, {
               instalacionFaena: visibleInstalacionFaena,
               frente: visibleFrente,
@@ -10709,7 +10819,7 @@ export default function DailyReportPage() {
             const visibleFrente = Number(frontValues?.[1] || 0)
             const visibleNocFront = Number(frontValues?.[2] || 0)
             const visibleDotTotal = visibleInstalacionFaena + visibleFrente
-            const visibleHhTotal = visibleDotTotal * 10
+            const visibleHhTotal = visibleDotTotal * personWorkdayHoursForSave
             return buildV2DetailRowSnapshot(row, {
               instalacionFaena: visibleInstalacionFaena,
               frente: visibleFrente,
@@ -10726,8 +10836,8 @@ export default function DailyReportPage() {
       const buildSummaryFromDetailSnapshot = (snapshot: typeof v2DetailSnapshot) => {
         const indirectDot = Number(sumV2RowsDotation(snapshot.v2_detail_indirect_rows).toFixed(2))
         const directDot = Number(sumV2RowsDotation(snapshot.v2_detail_direct_rows).toFixed(2))
-        const indirectHh = Number((indirectDot * 10).toFixed(2))
-        const directHh = Number((directDot * 10).toFixed(2))
+        const indirectHh = Number((indirectDot * personWorkdayHoursForSave).toFixed(2))
+        const directHh = Number((directDot * personWorkdayHoursForSave).toFixed(2))
         const totalDot = Number((indirectDot + directDot).toFixed(2))
         const totalHh = Number((indirectHh + directHh).toFixed(2))
         const equipmentQtyFromRow = (row: any) => {
@@ -10793,6 +10903,7 @@ export default function DailyReportPage() {
 
       const baseFormSnapshotCurrent = {
         ...form,
+        ...(workdayMetadataForSave ? workdayMetadataForSave : {}),
         approved_by_name: approvedByNameForSave,
         ...visibleSummarySnapshot,
         ...v2DetailSnapshot,
@@ -10936,6 +11047,7 @@ export default function DailyReportPage() {
         ...sector4Snapshot,
         source_field_report_ids: persistedSourceFieldReportIds,
         v2_form_snapshot: {
+          ...(workdayMetadataForSave ? workdayMetadataForSave : {}),
           ...baseFormSnapshotCurrent,
           work_front: currentFront,
           report_format_code: currentFormat,
@@ -10947,6 +11059,7 @@ export default function DailyReportPage() {
           indirect_hours_front_overrides: indirectHoursFrontOverrides
         },
         v2_runtime_snapshot: {
+          ...(workdayMetadataForSave ? workdayMetadataForSave : {}),
           report_template: reportTemplate,
           report_format_code: currentFormat,
           work_front: currentFront,
@@ -10958,6 +11071,7 @@ export default function DailyReportPage() {
           indirect_hours_front_overrides: indirectHoursFrontOverrides
         },
         notes: {
+          ...(workdayMetadataForSave ? workdayMetadataForSave : {}),
           ...buildCommonHeader(currentFront, currentFormat).notes,
           obs_contractor: form.obs_contractor || "",
           obs_client: form.obs_client || "",
@@ -11295,7 +11409,7 @@ export default function DailyReportPage() {
         discipline: String(row?.discipline || "").trim(),
         specialty: String(row?.specialty || "").trim(),
         position: String(row?.position || "SIN CARGO").trim() || "SIN CARGO",
-        hhTurnoDia: toSnapshotNumber(row?.hhTurnoDia) === 11 ? 10 : toSnapshotNumber(row?.hhTurnoDia),
+        hhTurnoDia: toSnapshotNumber(row?.hhTurnoDia) || resolvePersonWorkdayHours(form),
         contratados: toSnapshotNumber(row?.contratados),
         contratacionProceso: toSnapshotNumber(row?.contratacionProceso),
         apoyoOficina: toSnapshotNumber(row?.apoyoOficina),
@@ -11342,11 +11456,11 @@ export default function DailyReportPage() {
           s4_prev_direct_hh: pickS4("s4_prev_direct_hh", Number(v2SummaryMetrics.previous.directHh || 0)),
           s4_prev_total_dot: pickS4("s4_prev_total_dot", Number(v2SummaryMetrics.previous.totalDot || 0)),
           s4_prev_total_hh: pickS4("s4_prev_total_hh", Number(v2SummaryMetrics.previous.totalHh || 0)),
-          s4_prev_major_equip: Number((s4PrevMajorHm / 10).toFixed(2)),
+          s4_prev_major_equip: Number(resolveMachineDotationFromHours(s4PrevMajorHm, form).toFixed(2)),
           s4_prev_major_hm: s4PrevMajorHm,
-          s4_prev_minor_equip: Number((s4PrevMinorHm / 10).toFixed(2)),
+          s4_prev_minor_equip: Number(resolveMachineDotationFromHours(s4PrevMinorHm, form).toFixed(2)),
           s4_prev_minor_hm: s4PrevMinorHm,
-          s4_prev_total_equip: Number((s4PrevTotalHm / 10).toFixed(2)),
+          s4_prev_total_equip: Number(resolveMachineDotationFromHours(s4PrevTotalHm, form).toFixed(2)),
           s4_prev_total_hm: s4PrevTotalHm,
           s4_curr_indirect_dot: pickS4("s4_curr_indirect_dot", Number(effectiveV2SummaryMetrics.current.indirectDot || 0)),
           s4_curr_indirect_hh: pickS4("s4_curr_indirect_hh", Number(effectiveV2SummaryMetrics.current.indirectHh || 0)),
@@ -11354,11 +11468,11 @@ export default function DailyReportPage() {
           s4_curr_direct_hh: pickS4("s4_curr_direct_hh", Number(effectiveV2SummaryMetrics.current.directHh || 0)),
           s4_curr_total_dot: pickS4("s4_curr_total_dot", Number(effectiveV2SummaryMetrics.current.totalDot || 0)),
           s4_curr_total_hh: pickS4("s4_curr_total_hh", Number(effectiveV2SummaryMetrics.current.totalHh || 0)),
-          s4_curr_major_equip: Number((s4CurrMajorHm / 10).toFixed(2)),
+          s4_curr_major_equip: Number(resolveMachineDotationFromHours(s4CurrMajorHm, form).toFixed(2)),
           s4_curr_major_hm: s4CurrMajorHm,
-          s4_curr_minor_equip: Number((s4CurrMinorHm / 10).toFixed(2)),
+          s4_curr_minor_equip: Number(resolveMachineDotationFromHours(s4CurrMinorHm, form).toFixed(2)),
           s4_curr_minor_hm: s4CurrMinorHm,
-          s4_curr_total_equip: Number((s4CurrTotalHm / 10).toFixed(2)),
+          s4_curr_total_equip: Number(resolveMachineDotationFromHours(s4CurrTotalHm, form).toFixed(2)),
           s4_curr_total_hm: s4CurrTotalHm
         }
         const buildV2EquipmentRowSnapshot = (row: any) => {
@@ -11389,29 +11503,29 @@ export default function DailyReportPage() {
           throw new Error("Este reporte no tiene snapshot guardado de maquinaria/equipos. Abre Editar y guarda una vez para congelarlo.")
         }
         const fallbackMajorEquipmentRowsSnapshot = [
-          { name: "Retroexcavadora PDGV-54", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Grua Horquilla RKRL-48", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
-          { name: "Camion Pluma RGJD-42", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
-          { name: "Camion Aljibe HSDC-63", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camion Tolva TSJH-64", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Cargador Frontal VTCZ-83", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Excavadora TRSV-73", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camion 3/4 VFHR-70", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Tracto Pluma TVFX-62", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
+          { name: "Retroexcavadora PDGV-54", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Grua Horquilla RKRL-48", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
+          { name: "Camion Pluma RGJD-42", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: form.work_front === "CANALETAS" ? 1 : 0 },
+          { name: "Camion Aljibe HSDC-63", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camion Tolva TSJH-64", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Cargador Frontal VTCZ-83", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Excavadora TRSV-73", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camion 3/4 VFHR-70", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Tracto Pluma TVFX-62", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
         ].map((row) => buildV2EquipmentRowSnapshot(row))
         const fallbackMinorEquipmentRowsSnapshot = [
-          { name: "Camioneta RSXY31", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camioneta TGJK47", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camioneta RRZT32", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camioneta TGJK56", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Camioneta TYTL46", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "BUS PFXD84", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Rodillo RC", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Placa Comp 3500kg N°100341920599", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Placa Comp 5500kg N°11487266", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Placa Comp 5500kg N°11815737", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-          { name: "Container", hmTurnoDia: 10, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 6, mainFront: 4 },
-          { name: "BUS SHYW97", hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
+          { name: "Camioneta RSXY31", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camioneta TGJK47", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camioneta RRZT32", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camioneta TGJK56", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Camioneta TYTL46", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "BUS PFXD84", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Rodillo RC", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Placa Comp 3500kg N°100341920599", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Placa Comp 5500kg N°11487266", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Placa Comp 5500kg N°11815737", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+          { name: "Container", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 6, mainFront: 4 },
+          { name: "BUS SHYW97", hmTurnoDia: activeMachineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
         ].map((row) => buildV2EquipmentRowSnapshot(row))
         const v2MajorEquipmentRowsSnapshot =
           viewOpen && persistedMajorEquipmentRowsForExport.length > 0
@@ -11438,7 +11552,7 @@ export default function DailyReportPage() {
           const visibleFrente = Number(frontValues?.[1] || 0)
           const visibleNocFront = Number(frontValues?.[2] || 0)
           const visibleDotTotal = visibleInstalacionFaena + visibleFrente
-          const visibleHhTotal = visibleDotTotal * 10
+          const visibleHhTotal = visibleDotTotal * activePersonWorkdayHours
           return buildDetailRowSnapshot(row, {
             instalacionFaena: visibleInstalacionFaena,
             frente: visibleFrente,
@@ -11454,7 +11568,7 @@ export default function DailyReportPage() {
           const visibleFrente = Number(frontValues?.[1] || 0)
           const visibleNocFront = Number(frontValues?.[2] || 0)
           const visibleDotTotal = visibleInstalacionFaena + visibleFrente
-          const visibleHhTotal = visibleDotTotal * 10
+          const visibleHhTotal = visibleDotTotal * activePersonWorkdayHours
           return buildDetailRowSnapshot(row, {
             instalacionFaena: visibleInstalacionFaena,
             frente: visibleFrente,
@@ -11469,7 +11583,7 @@ export default function DailyReportPage() {
           Number((rows || []).reduce((acc, row) => {
             const hh = Number(row?.hhTotalObra || 0)
             if (Number.isFinite(hh) && hh > 0) return acc + hh
-            return acc + (Number(row?.dotacionTotalObra || 0) * 10)
+            return acc + (Number(row?.dotacionTotalObra || 0) * activePersonWorkdayHours)
           }, 0).toFixed(2))
         const indirectDot = sumDot(v2DetailIndirectRows)
         const directDot = sumDot(v2DetailDirectRows)

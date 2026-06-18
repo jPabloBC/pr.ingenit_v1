@@ -4,6 +4,14 @@ import { authOptions } from '../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import ExcelJS from 'exceljs'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
+import {
+  resolveCalculationVersion,
+  resolvePersonWorkdayHours,
+  resolveMachineWorkdayHours,
+  resolveHalfDayHours,
+  resolvePersonDotationFromHours,
+  resolveMachineDotationFromHours
+} from '@/lib/workdayConfig'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 
@@ -687,6 +695,16 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
     const notes = asObject(report?.notes)
     const runtimeSnap = asObject(report?.v2_runtime_snapshot)
     const formSnap = asObject(report?.v2_form_snapshot)
+    const workdaySource = {
+      ...report,
+      notes,
+      v2_runtime_snapshot: runtimeSnap,
+      v2_form_snapshot: formSnap
+    }
+    const personWorkdayHours = resolvePersonWorkdayHours(workdaySource)
+    const machineWorkdayHours = resolveMachineWorkdayHours(workdaySource)
+    const halfDayHours = resolveHalfDayHours(workdaySource)
+    const calculationVersion = resolveCalculationVersion(workdaySource)
 
     if (exportTemplate === 'daily_v2') {
       const toNum = (v: any) => {
@@ -710,7 +728,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       }
       const displayHhTurnoDia = (value: any) => {
         const n = toNum(value)
-        return n === 11 ? 10 : n
+        return n > 0 ? n : personWorkdayHours
       }
       const snap = formSnap
       const runtime = runtimeSnap
@@ -1026,12 +1044,12 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           const pis = Number(frontHours.piscinas || 0)
           const ifa = Number(frontHours.ifa || 0)
           const totalFieldHoursForPerson = can + pis + ifa
-          const dailyCapFactor = totalFieldHoursForPerson > 10 ? 10 / totalFieldHoursForPerson : 1
+          const dailyCapFactor = totalFieldHoursForPerson > personWorkdayHours ? personWorkdayHours / totalFieldHoursForPerson : 1
           const cappedCan = can * dailyCapFactor
           const cappedPis = pis * dailyCapFactor
           const cappedIfa = ifa * dailyCapFactor
           const selectedRawHours = selectedFront === 'CANALETAS' ? cappedCan : cappedPis
-          const selectedHours = Math.min(10, selectedRawHours)
+          const selectedHours = Math.min(personWorkdayHours, selectedRawHours)
           if (!(selectedHours > 0) && !(cappedIfa > 0)) return
           const specialtyCandidate = normalizeSpecialtyLabel(
             collab?.specialty,
@@ -1044,10 +1062,10 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
             position: positionCandidate
           })
           const key = buildDirectFrontKey(disciplineCandidate, specialtyCandidate || disciplineCandidate, positionCandidate)
-          const dotationForFront = selectedHours / 10
+          const dotationForFront = resolvePersonDotationFromHours(selectedHours, workdaySource)
           // Regla negocio: IFA se declara en columna "INSTALACIÓN FAENA"
           // y se reparte mitad/mitad entre reportes CANALETAS y PISCINAS.
-          const dotationForIfa = Math.min(10, cappedIfa) / 10 / 2
+          const dotationForIfa = resolvePersonDotationFromHours(Math.min(personWorkdayHours, cappedIfa), workdaySource) / 2
           if (dotationForFront > 0) out[key] = Number(out[key] || 0) + dotationForFront
           if (dotationForIfa > 0) {
             outIfa[key] = Number(outIfa[key] || 0) + dotationForIfa
@@ -1092,7 +1110,11 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         reportId: String(report?.id || ''),
         reportNo: String(report?.report_no || ''),
         reportDate: String(report?.report_date || ''),
-        template: exportTemplate
+        template: exportTemplate,
+        calculationVersion,
+        personWorkdayHours,
+        machineWorkdayHours,
+        halfDayHours
       })
       const normalizeDetailRowSnapshot = (item: any, fallbackSpecialty = '') => {
         const rawFrente = toNum(item?.frente)
@@ -1132,7 +1154,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           : (persistedTotal > 0 ? persistedTotal : baseDotacion)
         const persistedPrevencionistaTotal =
           isPrevencionistaRole && rawInstalacionFaena <= 0 && rawFrente <= 0
-            ? (rawDotacionTotalObra > 0 ? rawDotacionTotalObra : rawHhTotalObra / 10)
+            ? (rawDotacionTotalObra > 0 ? rawDotacionTotalObra : resolvePersonDotationFromHours(rawHhTotalObra, workdaySource))
             : 0
         const shouldForceFrontColumn = isDirectDetail || isSpecialIndirectRole || isPrevencionistaRole
         // En V2, si la fila ya viene persistida con distribución visible, no recalcular
@@ -1161,12 +1183,12 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
             ? (rawDotacionTotalObra > 0 ? rawDotacionTotalObra : instalacionFaena + frente)
             : instalacionFaena + frente
         const hhTotalObra = hasFieldReportSpecialValue
-          ? specialRoleExcelFrontValue * 10
+          ? specialRoleExcelFrontValue * personWorkdayHours
           : isPrevencionistaRole && persistedPrevencionistaTotal > 0
-            ? persistedPrevencionistaTotal * 10
+            ? persistedPrevencionistaTotal * personWorkdayHours
           : hasPersistedFrontValues
-            ? (rawHhTotalObra > 0 ? rawHhTotalObra : dotacionTotalObra * 10)
-            : dotacionTotalObra * 10
+            ? (rawHhTotalObra > 0 ? rawHhTotalObra : dotacionTotalObra * personWorkdayHours)
+            : dotacionTotalObra * personWorkdayHours
         return {
         discipline: String(item?.discipline || item?.specialty || fallbackSpecialty || '').trim(),
         specialty: String(item?.specialty || item?.discipline || fallbackSpecialty || '').trim() || fallbackSpecialty,
@@ -1196,7 +1218,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         const frente = toNum(item?.frente ?? item?.front2)
         const nocFront = toNum(item?.nocFront)
         const dotacionTotalObra = toNum(item?.dotacionTotalObra ?? (instalacionFaena + frente))
-        const hhTotalObra = toNum(item?.hhTotalObra ?? (dotacionTotalObra * 10))
+        const hhTotalObra = toNum(item?.hhTotalObra ?? (dotacionTotalObra * personWorkdayHours))
         return {
           discipline: String(item?.discipline || item?.specialty || fallbackSpecialty || '').trim(),
           specialty: String(item?.specialty || item?.discipline || fallbackSpecialty || '').trim() || fallbackSpecialty,
@@ -1222,7 +1244,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         }
       }
       const normalizeEquipmentRowSnapshot = (item: any) => {
-        const hmTurnoDia = toNum(item?.hmTurnoDia)
+        const hmTurnoDia = toNum(item?.hmTurnoDia) || machineWorkdayHours
         const instalacionFaena = toNum(item?.instalacionFaena ?? item?.front1)
         const mainFront = toNum(item?.mainFront ?? item?.front2)
         const nocFront = toNum(item?.nocFront)
@@ -1513,7 +1535,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       }
       const visibleHhFromRow = (item: any) => {
         const splitDot = visibleDotacionFromRow(item)
-        if (splitDot > 0) return splitDot * 10
+        if (splitDot > 0) return splitDot * personWorkdayHours
         return parseNum(item?.hhTotalObra)
       }
       const sumDotacionTotalObra = (rows: any[]) =>
@@ -1693,15 +1715,15 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       ws.getRow(hBot).height = 22
 
       const majorEquipmentRows = [
-        { name: 'Retroexcavadora PDGV-54', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Grua Horquilla RKRL-48', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: 0 },
-        { name: 'Camion Pluma RGJD-42', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: 0 },
-        { name: 'Camion Aljibe HSDC-63', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camion Tolva TSJH-64', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Cargador Frontal VTCZ-83', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Excavadora TRSV-73', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camion 3/4 VFHR-70', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Tracto Pluma TVFX-62', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
+        { name: 'Retroexcavadora PDGV-54', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Grua Horquilla RKRL-48', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: 0 },
+        { name: 'Camion Pluma RGJD-42', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0, mainFront: 0 },
+        { name: 'Camion Aljibe HSDC-63', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camion Tolva TSJH-64', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Cargador Frontal VTCZ-83', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Excavadora TRSV-73', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camion 3/4 VFHR-70', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Tracto Pluma TVFX-62', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
       ].map((item) => {
         const nocFront = Number((item as any).nocFront || 0)
         const totalEqMaq = Number(item.instalacionFaena || 0) + Number(item.mainFront || 0) + nocFront
@@ -1984,7 +2006,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
               instalacionFaena,
               frente,
               dotacionTotalObra,
-              hhTotalObra: dotacionTotalObra * 10
+              hhTotalObra: dotacionTotalObra * personWorkdayHours
             }
           })
         : directDetailRowsBase
@@ -2002,18 +2024,18 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       }
 
       const minorEquipmentRows = [
-        { name: 'Camioneta RSXY31', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camioneta TGJK47', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camioneta RRZT32', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camioneta TGJK56', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Camioneta TYTL46', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'BUS PFXD84', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Rodillo RC', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Placa Comp 3500kg N°100341920599', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Placa Comp 5500kg N°11487266', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Placa Comp 5500kg N°11815737', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
-        { name: 'Container', hmTurnoDia: 10, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 6, mainFront: 4 },
-        { name: 'BUS SHYW97', hmTurnoDia: 10, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
+        { name: 'Camioneta RSXY31', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camioneta TGJK47', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camioneta RRZT32', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camioneta TGJK56', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Camioneta TYTL46', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'BUS PFXD84', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Rodillo RC', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Placa Comp 3500kg N°100341920599', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Placa Comp 5500kg N°11487266', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Placa Comp 5500kg N°11815737', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 2, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 },
+        { name: 'Container', hmTurnoDia: machineWorkdayHours, totalEquipos: 25, operacion: 0, disponibles: 25, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 6, mainFront: 4 },
+        { name: 'BUS SHYW97', hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
       ].map((item) => {
         const nocFront = Number((item as any).nocFront || 0)
         const totalEqMaq = Number(item.instalacionFaena || 0) + Number(item.mainFront || 0) + nocFront
@@ -2396,23 +2418,23 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const dayDirectHh = pick('summary_direct_hh')
       const dayTotalDot = pick('summary_total_dotation', dayIndirectDot + dayDirectDot)
       const dayTotalHh = pick('summary_total_hh', dayIndirectHh + dayDirectHh)
-      const dayMajorQty = pick('equip_major_qty')
       const dayMajorHm = pick('equip_major_hm')
-      const dayMinorQty = pick('equip_minor_qty')
+      const dayMajorQty = pick('equip_major_qty', dayMajorHm > 0 ? resolveMachineDotationFromHours(dayMajorHm, workdaySource) : 0)
       const dayMinorHm = pick('equip_minor_hm')
+      const dayMinorQty = pick('equip_minor_qty', dayMinorHm > 0 ? resolveMachineDotationFromHours(dayMinorHm, workdaySource) : 0)
       const dayTotalEquip = pick('equip_total_qty', dayMajorQty + dayMinorQty)
       const dayTotalHm = pick('equip_total_hm', dayMajorHm + dayMinorHm)
 
       const prevIndirectHh = pick('s4_prev_indirect_hh')
       const prevDirectHh = pick('s4_prev_direct_hh')
       const prevTotalHh = pick('s4_prev_total_hh', prevIndirectHh + prevDirectHh)
-      const prevIndirectDot = pick('s4_prev_indirect_dot', prevIndirectHh > 0 ? prevIndirectHh / 10 : 0)
-      const prevDirectDot = pick('s4_prev_direct_dot', prevDirectHh > 0 ? prevDirectHh / 10 : 0)
-      const prevTotalDot = pick('s4_prev_total_dot', prevTotalHh > 0 ? prevTotalHh / 10 : prevIndirectDot + prevDirectDot)
-      const prevMajorQty = pick('s4_prev_major_equip')
+      const prevIndirectDot = pick('s4_prev_indirect_dot', prevIndirectHh > 0 ? resolvePersonDotationFromHours(prevIndirectHh, workdaySource) : 0)
+      const prevDirectDot = pick('s4_prev_direct_dot', prevDirectHh > 0 ? resolvePersonDotationFromHours(prevDirectHh, workdaySource) : 0)
+      const prevTotalDot = pick('s4_prev_total_dot', prevTotalHh > 0 ? resolvePersonDotationFromHours(prevTotalHh, workdaySource) : prevIndirectDot + prevDirectDot)
       const prevMajorHm = pick('s4_prev_major_hm')
-      const prevMinorQty = pick('s4_prev_minor_equip')
+      const prevMajorQty = pick('s4_prev_major_equip', prevMajorHm > 0 ? resolveMachineDotationFromHours(prevMajorHm, workdaySource) : 0)
       const prevMinorHm = pick('s4_prev_minor_hm')
+      const prevMinorQty = pick('s4_prev_minor_equip', prevMinorHm > 0 ? resolveMachineDotationFromHours(prevMinorHm, workdaySource) : 0)
       const prevTotalEquip = pick('s4_prev_total_equip', prevMajorQty + prevMinorQty)
       const prevTotalHm = pick('s4_prev_total_hm', prevMajorHm + prevMinorHm)
 
@@ -2422,10 +2444,10 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const currentIndirectDot = pick('s4_curr_indirect_dot', prevIndirectDot + dayIndirectDot)
       const currentDirectDot = pick('s4_curr_direct_dot', prevDirectDot + dayDirectDot)
       const currentTotalDot = pick('s4_curr_total_dot', prevTotalDot + dayTotalDot)
-      const currentMajorQty = pick('s4_curr_major_equip', prevMajorQty + dayMajorQty)
       const currentMajorHm = pick('s4_curr_major_hm', prevMajorHm + dayMajorHm)
-      const currentMinorQty = pick('s4_curr_minor_equip', prevMinorQty + dayMinorQty)
+      const currentMajorQty = pick('s4_curr_major_equip', currentMajorHm > 0 ? resolveMachineDotationFromHours(currentMajorHm, workdaySource) : prevMajorQty + dayMajorQty)
       const currentMinorHm = pick('s4_curr_minor_hm', prevMinorHm + dayMinorHm)
+      const currentMinorQty = pick('s4_curr_minor_equip', currentMinorHm > 0 ? resolveMachineDotationFromHours(currentMinorHm, workdaySource) : prevMinorQty + dayMinorQty)
       const currentTotalEquip = pick('s4_curr_total_equip', prevTotalEquip + dayTotalEquip)
       const currentTotalHm = pick('s4_curr_total_hm', prevTotalHm + dayTotalHm)
 

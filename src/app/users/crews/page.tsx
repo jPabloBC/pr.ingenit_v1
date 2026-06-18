@@ -473,6 +473,14 @@ export default function CrewsPage() {
     return Array.from(new Set(ids))
   }
 
+  function crewHasAssignedActivities(crew: any): boolean {
+    const activitiesCount = Number(crew?.activities_count ?? 0)
+    return crew?.has_activities === true ||
+      activitiesCount > 0 ||
+      (Array.isArray(crew?.activities) && crew.activities.length > 0) ||
+      Boolean(crew?.activity_id || crew?.activityId || crew?.activity_name || crew?.activity)
+  }
+
   function normalizeIdentityText(value: any): string {
     return String(value || '')
       .normalize('NFD')
@@ -3749,7 +3757,7 @@ export default function CrewsPage() {
                                           <Tooltip title="Actividades" arrow>
                                             <span>
                                               <IconButton type="button" size="small" disabled={showCreateForm || programLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openProgramDialogForCrew(c) }} sx={() => {
-                                                const hasActivities = (Array.isArray(c.activities) && c.activities.length > 0) || c.activity_id || c.activityId || c.activity_name || c.activity
+                                                const hasActivities = crewHasAssignedActivities(c)
                                                 return {
                                                   border: '1px solid',
                                                   borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
@@ -3798,7 +3806,7 @@ export default function CrewsPage() {
                                           <Tooltip title="Actividades" arrow>
                                             <span>
                                               <IconButton type="button" size="small" disabled={showCreateForm || programLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openProgramDialogForCrew(c) }} sx={() => {
-                                                const hasActivities = (Array.isArray(c.activities) && c.activities.length > 0) || c.activity_id || c.activityId || c.activity_name || c.activity
+                                                const hasActivities = crewHasAssignedActivities(c)
                                                 return {
                                                   border: '1px solid',
                                                   borderColor: hasActivities ? '#2563eb' : '#d7e2f0',

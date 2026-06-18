@@ -5,6 +5,10 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
 import { GET as exportDailyReportGet, POST as exportDailyReportPost } from '../export/route'
+import {
+  resolvePersonWorkdayHours,
+  resolveMachineWorkdayHours
+} from '@/lib/workdayConfig'
 
 export const dynamic = 'force-dynamic'
 
@@ -146,6 +150,18 @@ const parseJsonMaybe = (value: any) => {
     return JSON.parse(value)
   } catch {
     return null
+  }
+}
+
+const buildWorkdaySource = (record: any) => {
+  const notes = parseJsonMaybe(record?.notes) || {}
+  const formSnapshot = parseJsonMaybe(record?.v2_form_snapshot) || {}
+  const runtimeSnapshot = parseJsonMaybe(record?.v2_runtime_snapshot) || {}
+  return {
+    ...record,
+    notes,
+    v2_form_snapshot: formSnapshot,
+    v2_runtime_snapshot: runtimeSnapshot
   }
 }
 
@@ -663,7 +679,7 @@ async function buildHistoricalHhRows(companyId: string, maxReportNo: number) {
       .eq('company_id', companyId),
     supabaseAdmin
       .from('pr_daily_reports')
-      .select('id, report_no, report_date, work_front, s4_curr_indirect_hh, s4_curr_direct_hh, s4_curr_total_hh, s4_curr_total_hm, notes, created_at, updated_at')
+      .select('id, report_no, report_date, work_front, s4_curr_indirect_hh, s4_curr_direct_hh, s4_curr_total_hh, s4_curr_total_hm, notes, v2_form_snapshot, v2_runtime_snapshot, created_at, updated_at')
       .eq('company_id', companyId)
       .gte('report_no', 29)
       .order('work_front', { ascending: true })
@@ -746,11 +762,19 @@ async function buildHistoricalHhRows(companyId: string, maxReportNo: number) {
     const front = normalizeFront(row.work_front)
     const key = `${front}__${reportNo}`
     if (combined.has(key)) return
-    const notes = parseJsonMaybe(row.notes) || {}
-    const dailyIndirectHh = toNumber(notes?.summary_indirect_hh)
-    const dailyDirectHh = toNumber(notes?.summary_direct_hh)
-    const totalHm = toNumber(row.s4_curr_total_hm ?? notes?.s4_curr_total_hm)
-    const majorAccum = toNumber(notes?.s4_curr_major_hm)
+    const workdaySource = buildWorkdaySource(row)
+    const notes = workdaySource.notes || {}
+    const dailyIndirectDot = toNumber(notes?.summary_indirect_dotation)
+    const dailyDirectDot = toNumber(notes?.summary_direct_dotation)
+    const dailyTotalDot = toNumber(notes?.summary_total_dotation)
+    const dailyIndirectHh = toNumber(notes?.summary_indirect_hh) || (dailyIndirectDot > 0 ? dailyIndirectDot * resolvePersonWorkdayHours(workdaySource) : 0)
+    const dailyDirectHh = toNumber(notes?.summary_direct_hh) || (dailyDirectDot > 0 ? dailyDirectDot * resolvePersonWorkdayHours(workdaySource) : 0)
+    const dailyTotalHh = toNumber(notes?.summary_total_hh) || (dailyTotalDot > 0 ? dailyTotalDot * resolvePersonWorkdayHours(workdaySource) : dailyIndirectHh + dailyDirectHh)
+    const majorEquip = toNumber(notes?.s4_curr_major_equip || notes?.equip_major_qty)
+    const minorEquip = toNumber(notes?.s4_curr_minor_equip || notes?.equip_minor_qty)
+    const majorAccum = toNumber(notes?.s4_curr_major_hm) || (majorEquip > 0 ? majorEquip * resolveMachineWorkdayHours(workdaySource) : 0)
+    const minorAccum = toNumber(notes?.s4_curr_minor_hm) || (minorEquip > 0 ? minorEquip * resolveMachineWorkdayHours(workdaySource) : 0)
+    const totalHm = toNumber(row.s4_curr_total_hm ?? notes?.s4_curr_total_hm) || (majorAccum + minorAccum)
     putRow({
       id: String(row.id),
       work_front: front,
@@ -759,14 +783,14 @@ async function buildHistoricalHhRows(companyId: string, maxReportNo: number) {
       week_no: weekFromReportNo(reportNo),
       indirect_hh: dailyIndirectHh,
       direct_hh: dailyDirectHh,
-      daily_hh: toNumber(notes?.summary_total_hh) || (dailyIndirectHh + dailyDirectHh),
+      daily_hh: dailyTotalHh,
       indirect_hh_accum: toNumber(row.s4_curr_indirect_hh ?? notes?.s4_curr_indirect_hh),
       direct_hh_accum: toNumber(row.s4_curr_direct_hh ?? notes?.s4_curr_direct_hh),
       total_hh_accum: toNumber(row.s4_curr_total_hh ?? notes?.s4_curr_total_hh),
       major_hm_daily: 0,
       major_hm_accum: majorAccum,
       minor_hm_daily: 0,
-      minor_hm_accum: toNumber(notes?.s4_curr_minor_hm) || Math.max(0, totalHm - majorAccum),
+      minor_hm_accum: minorAccum || Math.max(0, totalHm - majorAccum),
       source: 'daily-report'
     })
   })

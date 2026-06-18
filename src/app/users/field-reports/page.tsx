@@ -47,6 +47,15 @@ import UserHeader from '../../../components/layout/UserHeader'
 import { supabase } from '../../../lib/supabaseClient'
 import { colors } from '../../../theme/theme'
 import { normalizeText } from '@/lib/normalize'
+import {
+  MAX_MACHINE_HOURS_WITH_OVERTIME,
+  MAX_PERSON_HOURS_WITH_OVERTIME,
+  getCurrentWorkdayMetadata,
+  resolveCalculationVersion,
+  resolveHalfDayHours,
+  resolveMachineWorkdayHours,
+  resolvePersonWorkdayHours,
+} from '@/lib/workdayConfig'
 
 interface FieldReport {
   id: string
@@ -105,32 +114,112 @@ let crewsSummaryCache: any[] | null = null
 let crewsSummaryInFlight: Promise<any[] | null> | null = null
 const dailyStatusByDateGlobalCache = new Map<string, any[]>()
 const dailyStatusByDateGlobalInFlight = new Map<string, Promise<any[]>>()
-const STANDARD_PERSON_HOURS = 10
-const MAX_PERSON_HOURS_WITH_OVERTIME = 15
-const STANDARD_MACHINE_HOURS = 10
-const MAX_MACHINE_HOURS_WITH_OVERTIME = 15
+const CURRENT_FIELD_REPORT_WORKDAY_METADATA = getCurrentWorkdayMetadata()
+const WORKDAY_METADATA_KEYS = [
+  'calculationVersion',
+  'personWorkdayHours',
+  'machineWorkdayHours',
+  'halfDayHours',
+  'maxPersonHoursWithOvertime',
+  'maxMachineHoursWithOvertime',
+]
 
-const getEffectivePersonHourTotals = (baseHoursValue: any, manualExtraValue: any) => {
+const parseMaybeJsonObject = (value: any): Record<string, any> | null => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null
+  } catch {
+    return null
+  }
+}
+
+const parseMaybeJsonArray = (value: any): any[] => {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const hasExplicitWorkdayMetadata = (source: any) => {
+  const obj = parseMaybeJsonObject(source)
+  return Boolean(obj && WORKDAY_METADATA_KEYS.some((key) => obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== ''))
+}
+
+const getFieldReportWorkdaySource = (report: any) => {
+  if (hasExplicitWorkdayMetadata(report)) return report
+
+  const personnel = parseMaybeJsonArray(report?.personnel)
+  const personWithMetadata = personnel.find((row) => hasExplicitWorkdayMetadata(row))
+  if (personWithMetadata) return personWithMetadata
+
+  const equipmentEntries = parseMaybeJsonArray(report?.equipment_entries)
+  const equipmentWithMetadata = equipmentEntries.find((row) => hasExplicitWorkdayMetadata(row))
+  if (equipmentWithMetadata) return equipmentWithMetadata
+
+  return report
+}
+
+const buildWorkdayMetadataForSource = (source: any) => ({
+  calculationVersion: resolveCalculationVersion(source),
+  personWorkdayHours: resolvePersonWorkdayHours(source),
+  machineWorkdayHours: resolveMachineWorkdayHours(source),
+  halfDayHours: resolveHalfDayHours(source),
+  maxPersonHoursWithOvertime: MAX_PERSON_HOURS_WITH_OVERTIME,
+  maxMachineHoursWithOvertime: MAX_MACHINE_HOURS_WITH_OVERTIME,
+})
+
+const addWorkdayMetadataForSave = (row: any, shouldUseCurrentMetadata: boolean) => {
+  const source = hasExplicitWorkdayMetadata(row)
+    ? row
+    : (shouldUseCurrentMetadata ? CURRENT_FIELD_REPORT_WORKDAY_METADATA : null)
+  if (!source) return row
+  return {
+    ...(row && typeof row === 'object' ? row : {}),
+    ...buildWorkdayMetadataForSource(source),
+  }
+}
+
+const getEffectivePersonHourTotals = (baseHoursValue: any, manualExtraValue: any, source: any = CURRENT_FIELD_REPORT_WORKDAY_METADATA) => {
+  const personWorkdayHours = resolvePersonWorkdayHours(source)
   const baseHours = Math.max(0, Number(baseHoursValue || 0) || 0)
   const manualExtraHours = Math.max(0, Number(manualExtraValue || 0) || 0)
-  const autoExtraHours = Math.max(0, baseHours - STANDARD_PERSON_HOURS)
+  const autoExtraHours = Math.max(0, baseHours - personWorkdayHours)
   const extraHours = Math.max(manualExtraHours, autoExtraHours)
-  const standardHours = Math.min(baseHours, STANDARD_PERSON_HOURS)
+  const standardHours = Math.min(baseHours, personWorkdayHours)
   const totalHours = standardHours + extraHours
   return { standardHours, autoExtraHours, manualExtraHours, extraHours, totalHours }
 }
 
-const getMaxBaseHoursForManualExtra = (manualExtraValue: any) => {
+const getMaxBaseHoursForManualExtra = (manualExtraValue: any, source: any = CURRENT_FIELD_REPORT_WORKDAY_METADATA) => {
+  const personWorkdayHours = resolvePersonWorkdayHours(source)
   const manualExtraHours = Math.max(0, Number(manualExtraValue || 0) || 0)
-  return manualExtraHours > MAX_PERSON_HOURS_WITH_OVERTIME - STANDARD_PERSON_HOURS
+  return manualExtraHours > MAX_PERSON_HOURS_WITH_OVERTIME - personWorkdayHours
     ? Math.max(0, MAX_PERSON_HOURS_WITH_OVERTIME - manualExtraHours)
     : MAX_PERSON_HOURS_WITH_OVERTIME
 }
 
-const getMaxManualExtraForBaseHours = (baseHoursValue: any) => {
+const getMaxManualExtraForBaseHours = (baseHoursValue: any, source: any = CURRENT_FIELD_REPORT_WORKDAY_METADATA) => {
+  const personWorkdayHours = resolvePersonWorkdayHours(source)
   const baseHours = Math.max(0, Number(baseHoursValue || 0) || 0)
-  if (baseHours >= STANDARD_PERSON_HOURS) return MAX_PERSON_HOURS_WITH_OVERTIME - STANDARD_PERSON_HOURS
+  if (baseHours >= personWorkdayHours) return MAX_PERSON_HOURS_WITH_OVERTIME - personWorkdayHours
   return Math.max(0, MAX_PERSON_HOURS_WITH_OVERTIME - baseHours)
+}
+
+const getEffectiveMachineHourTotals = (baseHoursValue: any, manualExtraValue: any, source: any = CURRENT_FIELD_REPORT_WORKDAY_METADATA) => {
+  const machineWorkdayHours = resolveMachineWorkdayHours(source)
+  const baseHours = Math.max(0, Number(baseHoursValue || 0) || 0)
+  const manualExtraHours = Math.max(0, Number(manualExtraValue || 0) || 0)
+  const autoExtraHours = Math.max(0, baseHours - machineWorkdayHours)
+  const extraHours = Math.max(manualExtraHours, autoExtraHours)
+  const standardHours = Math.min(baseHours, machineWorkdayHours)
+  const totalHours = standardHours + extraHours
+  return { standardHours, autoExtraHours, manualExtraHours, extraHours, totalHours }
 }
 
 const fetchCollaboratorsSummaryOnce = async (asOfDate?: string) => {
@@ -484,6 +573,12 @@ export default function FieldReportsPage() {
   const [saving, setSaving] = useState(false)
   const [editMode, setEditMode] = useState(false)
   const [selectedReport, setSelectedReport] = useState<any>(null)
+  const fieldReportWorkdaySource = useMemo(
+    () => selectedReport?.id ? getFieldReportWorkdaySource(selectedReport) : CURRENT_FIELD_REPORT_WORKDAY_METADATA,
+    [selectedReport]
+  )
+  const activePersonWorkdayHours = resolvePersonWorkdayHours(fieldReportWorkdaySource)
+  const activeMachineWorkdayHours = resolveMachineWorkdayHours(fieldReportWorkdaySource)
   const [reportHydrating, setReportHydrating] = useState(false)
   const [hydratedReportId, setHydratedReportId] = useState<string | null>(null)
   const [selectedReportHydrationStatus, setSelectedReportHydrationStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -1460,13 +1555,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
       const hours = Array.isArray(personHours?.[personId]) ? personHours[personId] : []
       const extra = Number(personExtraHours?.[personId] || 0) || 0
       const baseTotal = hours.reduce((acc: number, v: any) => acc + (Number(v) || 0), 0)
-      const total = getEffectivePersonHourTotals(baseTotal, extra).totalHours
+      const total = getEffectivePersonHourTotals(baseTotal, extra, fieldReportWorkdaySource).totalHours
       const key = normalizeWorkerKey(row, personId)
       if (!key) return
       map.set(key, (map.get(key) || 0) + total)
     })
     return map
-  }, [personnelRows, personHours, personExtraHours, normalizeWorkerKey])
+  }, [personnelRows, personHours, personExtraHours, normalizeWorkerKey, fieldReportWorkdaySource])
 
   const normalizeMachineKey = useCallback((entry: any) => {
     const patentRaw = String(entry?.code || entry?.patent || '').trim().toUpperCase()
@@ -1517,10 +1612,11 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
       const hours = Array.isArray(equipmentHours?.[entryId]) ? equipmentHours[entryId] : []
       const hm = hours.reduce((acc: number, v: any) => acc + (Number(v) || 0), 0)
       const extra = Math.max(0, Number((entry as any)?.extra_hours ?? 0) || 0)
-      map.set(key, (map.get(key) || 0) + hm + extra)
+      const total = getEffectiveMachineHourTotals(hm, extra, fieldReportWorkdaySource).totalHours
+      map.set(key, (map.get(key) || 0) + total)
     })
     return map
-  }, [equipmentEntries, equipmentHours, normalizeMachineKey])
+  }, [equipmentEntries, equipmentHours, normalizeMachineKey, fieldReportWorkdaySource])
 
   const machineHoursFromReport = useCallback((reportLike: any) => {
     const map = new Map<string, number>()
@@ -1538,7 +1634,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
       const hours = Array.isArray(hoursObj?.[entryId]) ? hoursObj[entryId] : []
       const hm = hours.reduce((acc: number, v: any) => acc + (Number(v) || 0), 0)
       const extra = Math.max(0, Number((entry as any)?.extra_hours ?? 0) || 0)
-      map.set(key, (map.get(key) || 0) + hm + extra)
+      const total = getEffectiveMachineHourTotals(hm, extra, getFieldReportWorkdaySource(source)).totalHours
+      map.set(key, (map.get(key) || 0) + total)
     })
     return map
   }, [parseJsonMaybe, normalizeMachineKey])
@@ -1648,7 +1745,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
         const hours = Array.isArray(personHoursObj?.[rowKey]) ? personHoursObj[rowKey] : []
         const extra = Number(extrasRaw?.[rowKey] || 0) || 0
         const baseTotal = hours.reduce((acc: number, v: any) => acc + (Number(v) || 0), 0)
-        const total = getEffectivePersonHourTotals(baseTotal, extra).totalHours
+        const total = getEffectivePersonHourTotals(baseTotal, extra, getFieldReportWorkdaySource(sourceReport)).totalHours
         const key = normalizeWorkerKey(row, rowKey)
         if (!key) return
         map.set(key, (map.get(key) || 0) + total)
@@ -3451,8 +3548,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
   useEffect(() => {
     if (!open || !isAdminRole || !selectedReport) return
     let cancelled = false
-    if (!editMode && Array.isArray(personnel) && personnel.length > 0) {
-      // Si el reporte ya trae personal persistido, evitamos recargar crew full al abrir.
+    if (selectedReport?.id && selectedReport?.__fullLoaded && Array.isArray(personnel) && personnel.length > 0) {
+      // Si el reporte ya trae personal persistido, evitamos recargar crew full al abrir/editar.
       setPersonalReady(true)
       return
     }
@@ -3505,7 +3602,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
     if (!open || !selectedReport) return
     // Existing reports must keep persisted personnel/hours snapshot.
     // Syncing from current crew members here can overwrite hydrated hours.
-	    if (!editMode && selectedReport?.id && selectedReport?.__fullLoaded && selectedReportHydrationStatus === 'ready') return
+	    if (selectedReport?.id && selectedReport?.__fullLoaded && selectedReportHydrationStatus === 'ready' && Array.isArray(personnel) && personnel.length > 0) return
     if (!editMode && selectedReport?.id && selectedReport?.__fullLoaded && Array.isArray(personnel) && personnel.length > 0) {
       return
     }
@@ -4437,7 +4534,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][evidence] dialog open 
         idx === actIndex ? sum : sum + (Number(current) || 0)
       ), 0)
       const extraHours = Number(personExtraHours?.[personId] || 0) || 0
-      const maxAllowedForBase = getMaxBaseHoursForManualExtra(extraHours)
+      const maxAllowedForBase = getMaxBaseHoursForManualExtra(extraHours, fieldReportWorkdaySource)
       const maxAllowedForCell = Math.max(0, maxAllowedForBase - otherHoursTotal)
       const nextValue = requested > maxAllowedForCell ? maxAllowedForCell : requested
       if (requested > maxAllowedForCell) exceededLimit = true
@@ -4515,7 +4612,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][evidence] dialog open 
         targetIds.forEach((pid) => {
           const currentHours = Array.isArray(personHours?.[pid]) ? personHours[pid] : []
           const baseTotal = currentHours.reduce((sum: number, current: any) => sum + (Number(current) || 0), 0)
-          const maxAllowedForExtra = getMaxManualExtraForBaseHours(baseTotal)
+          const maxAllowedForExtra = getMaxManualExtraForBaseHours(baseTotal, fieldReportWorkdaySource)
           const nextValue = clampedByCell > maxAllowedForExtra ? maxAllowedForExtra : clampedByCell
           if (nextValue !== clampedByCell) anyAdjusted = true
           copy[String(pid)] = nextValue
@@ -4537,7 +4634,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][evidence] dialog open 
           idx === hourCellActivityIndex ? sum : sum + (Number(current) || 0)
         ), 0)
         const extraHours = Number(personExtraHours?.[pid] || 0) || 0
-        const maxAllowedForBase = getMaxBaseHoursForManualExtra(extraHours)
+        const maxAllowedForBase = getMaxBaseHoursForManualExtra(extraHours, fieldReportWorkdaySource)
         const maxAllowedForCell = Math.max(0, maxAllowedForBase - otherHoursTotal)
         const nextValue = clampedByCell > maxAllowedForCell ? maxAllowedForCell : clampedByCell
         if (nextValue !== clampedByCell) anyAdjusted = true
@@ -5763,9 +5860,11 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
         }
       }
 
+      const shouldWriteCurrentWorkdayMetadata = !(editMode && selectedReport?.id)
       const personnelRowsForSave = (personnelRows || []).map((row: any, rowIdx: number) => {
         const personId = String(row?.personId || row?.id || row?.collaborator_id || row?.user_id || `person-${rowIdx}`)
-        return {
+        return addWorkdayMetadataForSave({
+          ...(row && typeof row === 'object' ? row : {}),
           id: personId,
           collaborator_id: personId,
           role: row?.position || '',
@@ -5773,23 +5872,23 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
           document: String(row?.document || '').trim(),
           crewName: row?.crewName || '',
           area: resolveAreaByMode(personAreaById[personId] || row?.area || area) || null
-        }
+        }, shouldWriteCurrentWorkdayMetadata)
       })
       const fallbackPersonnelForSave = Array.isArray(personnel)
         ? personnel.map((p: any, idx: number) => {
             const personId = String(p?.id || p?.collaborator_id || p?.user_id || p?.name || `person-${idx}`)
-            return {
+            return addWorkdayMetadataForSave({
               ...p,
               area: resolveAreaByMode(personAreaById[personId] || p?.area || area) || null
-            }
+            }, shouldWriteCurrentWorkdayMetadata)
           })
         : []
       const personnelForSave = personnelRowsForSave.length > 0 ? personnelRowsForSave : fallbackPersonnelForSave
-      const equipmentEntriesForSave = (equipmentEntries || []).map((entry: any) => ({
+      const equipmentEntriesForSave = (equipmentEntries || []).map((entry: any) => addWorkdayMetadataForSave({
         ...entry,
         extra_hours: Math.max(0, Number(entry?.extra_hours ?? 0) || 0),
         area: resolveAreaByMode(entry?.area || '') || null
-      }))
+      }, shouldWriteCurrentWorkdayMetadata))
       const materialEntriesForSave = (materialEntries || []).map((entry: any) => ({
         ...entry,
         area: resolveAreaByMode(entry?.area || '') || null
@@ -6228,7 +6327,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
         while (arr.length < v2ActivityCols) arr.push(0)
         const activityHours = arr.slice(0, v2ActivityCols).map((v: any) => Number(v) || 0)
         const totalBase = activityHours.reduce((a, b) => a + b, 0)
-        const { extraHours: extra, totalHours: total } = getEffectivePersonHourTotals(totalBase, personExtras[personId])
+        const { extraHours: extra, totalHours: total } = getEffectivePersonHourTotals(totalBase, personExtras[personId], getFieldReportWorkdaySource(data))
         activityHours.forEach((v, i) => { activityTotals[i] += v })
         extrasTotal += extra
         grandTotal += total
@@ -6265,7 +6364,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
         const h = [...(equipmentHoursData[entryId] || [])]
         while (h.length < v2ActivityCols) h.push(0)
         const hmTotal = h.slice(0, v2ActivityCols).reduce((a: number, b: any) => a + (Number(b) || 0), 0)
-        const extraHours = Math.max(0, Number((entry as any)?.extra_hours ?? 0) || 0)
+        const machineTotals = getEffectiveMachineHourTotals(hmTotal, (entry as any)?.extra_hours, getFieldReportWorkdaySource(data))
+        const standardHours = machineTotals.standardHours
+        const extraHours = machineTotals.extraHours
         const hasEquipmentData = Boolean(
           String(entry?.code || '').trim() ||
           String(entry?.description || '').trim() ||
@@ -6278,7 +6379,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
           String(entry?.description || '').toUpperCase(),
           '',
           ...h.slice(0, v2ActivityCols).map((v: any) => (Number(v) ? fmt(Number(v)) : '')),
-          fmt(hmTotal),
+          fmt(standardHours),
           extraHours > 0 ? fmt(extraHours) : '',
           hasEquipmentData ? String((entry as any)?.area || baseArea || '-').toUpperCase() : ''
         ])
@@ -9436,15 +9537,15 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
       const hours = personHours[personId] || []
       const manualExtraHours = Number(personExtraHours[String(personId)] || 0) || 0
       const totalBase = v2ActivityIndexes.reduce((acc: number, i: number) => acc + (Number(hours[i] || 0) || 0), 0)
-      const effectiveTotals = getEffectivePersonHourTotals(totalBase, manualExtraHours)
+      const effectiveTotals = getEffectivePersonHourTotals(totalBase, manualExtraHours, fieldReportWorkdaySource)
       const extraHours = effectiveTotals.extraHours
       const autoExtraHours = effectiveTotals.autoExtraHours
       const total = effectiveTotals.totalHours
       const workerKey = normalizeWorkerKey(row, personId)
       const totalAcrossDay = workerKey ? Number(crossReportDayHoursByWorkerKey.get(workerKey) || 0) : total
-      const exceededDayLimit = totalAcrossDay > STANDARD_PERSON_HOURS + 0.000001
-      const completedDayLimit = Math.abs(totalAcrossDay - STANDARD_PERSON_HOURS) < 0.000001
-      const belowDayLimit = totalAcrossDay < STANDARD_PERSON_HOURS - 0.000001
+      const exceededDayLimit = totalAcrossDay > activePersonWorkdayHours + 0.000001
+      const completedDayLimit = Math.abs(totalAcrossDay - activePersonWorkdayHours) < 0.000001
+      const belowDayLimit = totalAcrossDay < activePersonWorkdayHours - 0.000001
       const belongsToMultipleCrews = workerKey ? Number(workerCrewCountByKey.get(workerKey) || 0) > 1 : false
       const rowNameNorm = normalizeText(String(row?.name || ''))
       const docRaw = String(
@@ -9479,6 +9580,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     normalizeWorkerKey,
     crossReportDayHoursByWorkerKey,
     workerCrewCountByKey,
+    fieldReportWorkdaySource,
+    activePersonWorkdayHours,
     collaboratorDocumentById,
     collaboratorDocumentByNameNorm,
     collaboratorMap
@@ -11221,9 +11324,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           const totalAcrossDay = item.totalAcrossDay
                           const belongsToMultipleCrews = item.belongsToMultipleCrews
                           const totalForStatus = Number(totalAcrossDay || 0)
-                          const collaboratorTextColor = totalForStatus > STANDARD_PERSON_HOURS + 0.000001
+                          const collaboratorTextColor = totalForStatus > activePersonWorkdayHours + 0.000001
                             ? '#b91c1c'
-                            : Math.abs(totalForStatus - STANDARD_PERSON_HOURS) < 0.000001
+                            : Math.abs(totalForStatus - activePersonWorkdayHours) < 0.000001
                               ? '#15803d'
                               : '#f97316'
                           const collaboratorCellBg = belongsToMultipleCrews ? '#dbeafe' : undefined
@@ -11309,7 +11412,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                   minWidth: 108,
                                   width: 108,
                                   color: collaboratorTextColor,
-                                  background: totalForStatus > STANDARD_PERSON_HOURS + 0.000001 ? '#fee2e2' : undefined
+                                  background: totalForStatus > activePersonWorkdayHours + 0.000001 ? '#fee2e2' : undefined
                                 }}
                                 title={collaboratorTextTitle}
                               >
@@ -11422,9 +11525,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           const machineKey = normalizeMachineKey(entry || {})
                           const machineTotalAcrossDay = machineKey ? Number(crossReportMachineDayHoursByKey.get(machineKey) || 0) : 0
                           const machineInMultipleReports = machineKey ? Number(machineReportCountByKey.get(machineKey) || 0) > 1 : false
-                          const machineTextColor = machineTotalAcrossDay > STANDARD_MACHINE_HOURS + 0.000001
+                          const machineTextColor = machineTotalAcrossDay > activeMachineWorkdayHours + 0.000001
                             ? '#b91c1c'
-                            : Math.abs(machineTotalAcrossDay - STANDARD_MACHINE_HOURS) < 0.000001
+                            : Math.abs(machineTotalAcrossDay - activeMachineWorkdayHours) < 0.000001
                               ? '#15803d'
                               : '#0f172a'
                           const machineCellBg = machineInMultipleReports ? '#dbeafe' : undefined
@@ -11432,10 +11535,17 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             ? `Maquinaria usada en más de un reporte. Total diario declarado el ${reportDate}: ${machineTotalAcrossDay.toFixed(1)} h`
                             : `Total diario declarado el ${reportDate}: ${machineTotalAcrossDay.toFixed(1)} h`
                           const hm = v2ActivityIndexes.reduce((acc: number, i: number) => acc + (Number(hours[i] || 0) || 0), 0)
+                          const machineTotals = getEffectiveMachineHourTotals(hm, (entry as any)?.extra_hours, fieldReportWorkdaySource)
+                          const machineStandardHours = machineTotals.standardHours
+                          const machineExtraHours = machineTotals.extraHours
+                          const rawMachineExtraHours = (entry as any)?.extra_hours
+                          const machineExtraInputValue = rawMachineExtraHours === undefined || rawMachineExtraHours === null || rawMachineExtraHours === ''
+                            ? (machineExtraHours > 0 ? String(machineExtraHours) : '')
+                            : String(rawMachineExtraHours)
                           const hasMachineData = Boolean(
                             String(entry?.code || '').trim() ||
                             String(entry?.description || '').trim() ||
-                            Number((entry as any)?.extra_hours || 0) > 0 ||
+                            machineExtraHours > 0 ||
                             hm > 0
                           )
                           return (
@@ -11522,15 +11632,15 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                   }}
                                 />
                               ))}
-                              <td style={{ border: '1px solid #111827', textAlign: 'center', fontWeight: 700, minWidth: 200, width: 200, color: machineTextColor, background: machineTotalAcrossDay > STANDARD_MACHINE_HOURS + 0.000001 ? '#fee2e2' : undefined }} title={machineTitle}>{hm.toFixed(1).replace('.', ',')}</td>
+                              <td style={{ border: '1px solid #111827', textAlign: 'center', fontWeight: 700, minWidth: 200, width: 200, color: machineTextColor, background: machineTotalAcrossDay > activeMachineWorkdayHours + 0.000001 ? '#fee2e2' : undefined }} title={machineTitle}>{machineStandardHours.toFixed(1).replace('.', ',')}</td>
                               <td style={{ border: '1px solid #111827', textAlign: 'center', padding: '2px 4px', minWidth: 240, width: 240 }}>
                                 {isView ? (
-                                  <span>{(Number((entry as any)?.extra_hours || 0) || 0).toFixed(1).replace('.', ',')}</span>
+                                  <span>{machineExtraHours.toFixed(1).replace('.', ',')}</span>
                                 ) : (
                                   <TextField
                                     size="small"
                                     type="number"
-                                    value={String((entry as any)?.extra_hours ?? '')}
+                                    value={machineExtraInputValue}
                                     onChange={(e) => {
                                       const raw = String(e.target.value || '').replace(',', '.')
                                       if (raw === '') {
@@ -12341,8 +12451,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             const workerKey = normalizeWorkerKey(row, personId)
                             const totalAcrossDay = workerKey ? Number(crossReportDayHoursByWorkerKey.get(workerKey) || 0) : total
                             const totalForStatus = Number(totalAcrossDay || 0)
-                            const exceededDayLimit = totalForStatus > STANDARD_PERSON_HOURS + 0.000001
-                            const completedDayLimit = Math.abs(totalForStatus - STANDARD_PERSON_HOURS) < 0.000001
+                            const exceededDayLimit = totalForStatus > activePersonWorkdayHours + 0.000001
+                            const completedDayLimit = Math.abs(totalForStatus - activePersonWorkdayHours) < 0.000001
                             const belongsToMultipleCrews = workerKey ? Number(workerCrewCountByKey.get(workerKey) || 0) > 1 : false
                             const workerTextColor = exceededDayLimit
                               ? '#b91c1c'
@@ -12453,9 +12563,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           const machineKey = normalizeMachineKey(entry || {})
                           const machineTotalAcrossDay = machineKey ? Number(crossReportMachineDayHoursByKey.get(machineKey) || 0) : 0
                           const machineInMultipleReports = machineKey ? Number(machineReportCountByKey.get(machineKey) || 0) > 1 : false
-                          const machineTextColor = machineTotalAcrossDay > STANDARD_MACHINE_HOURS + 0.000001
+                          const machineTextColor = machineTotalAcrossDay > activeMachineWorkdayHours + 0.000001
                             ? '#b91c1c'
-                            : Math.abs(machineTotalAcrossDay - STANDARD_MACHINE_HOURS) < 0.000001
+                            : Math.abs(machineTotalAcrossDay - activeMachineWorkdayHours) < 0.000001
                               ? '#15803d'
                               : '#0f172a'
                           const machineCellBg = machineInMultipleReports ? '#dbeafe' : undefined
@@ -12520,7 +12630,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                   <TextField size="small" value={hours[actIdx] ?? ''} onChange={(e) => updateEquipmentHour(entryId, actIdx, e.target.value)} sx={{ width: 70, '& .MuiInputBase-input': { fontSize: 13, padding: '6px 8px', textAlign: 'center' } }} disabled={isView} />
                                   </td>
                                 ))}
-                              <td style={{ border: '1px solid #eee', padding: '6px 8px', textAlign: 'center', fontWeight: 600, color: machineTextColor, background: machineTotalAcrossDay > STANDARD_MACHINE_HOURS + 0.000001 ? '#fee2e2' : undefined }} title={machineTitle}>{total}</td>
+                              <td style={{ border: '1px solid #eee', padding: '6px 8px', textAlign: 'center', fontWeight: 600, color: machineTextColor, background: machineTotalAcrossDay > activeMachineWorkdayHours + 0.000001 ? '#fee2e2' : undefined }} title={machineTitle}>{total}</td>
                             </tr>
                           )
                         })}
@@ -12739,7 +12849,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                 />
                 </Box>
                 <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 1 }}>
-                  Jornada completa: 10 h. Máximo con horas extras: 15 h.
+                  Jornada completa: {activePersonWorkdayHours} h. Máximo con horas extras: {MAX_PERSON_HOURS_WITH_OVERTIME} h.
                 </Typography>
                 <Box sx={{ mt: 1.75, p: 1.25, border: '1px solid #e2e8f0', borderRadius: 2, bgcolor: '#ffffff' }}>
                   <Typography variant="caption" sx={{ color: '#334155', fontWeight: 700, display: 'block', mb: 0.5 }}>Aplicar a</Typography>
@@ -12861,7 +12971,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	                  />
 	                </Box>
 	                <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mt: 1 }}>
-	                  Jornada maquinaria: 10 h. Máximo con horas extra: 15 h.
+	                  Jornada maquinaria: {activeMachineWorkdayHours} h. Máximo con horas extra: {MAX_MACHINE_HOURS_WITH_OVERTIME} h.
 	                </Typography>
 	              </Box>
 	            </DialogContent>

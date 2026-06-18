@@ -244,7 +244,51 @@ export async function GET(req: NextRequest) {
             r.supervisors = Array.from(new Set(slot?.supervisors || []))
             r.foremen = Array.from(new Set(slot?.foremen || []))
             r.members = Array.from(new Set(slot?.members || []))
+            r.activities_count = 0
+            r.has_activities = false
           })
+
+          try {
+            const uniqueWorkDates = Array.from(new Set(
+              rows
+                .map((r: any) => String(r?.work_date || '').trim().slice(0, 10))
+                .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+            ))
+            let activityQuery = supabaseAdminClient
+              .from('pr_crew_activities')
+              .select('crew_id, work_date')
+              .eq('company_id', session.user.companyId)
+              .in('crew_id', crewIds)
+
+            if (uniqueWorkDates.length > 0) {
+              activityQuery = activityQuery.in('work_date', uniqueWorkDates)
+            }
+
+            const { data: activityRows, error: activityErr } = await activityQuery
+
+            if (!activityErr) {
+              const byActivityCrew = new Map<string, any[]>()
+              ;(activityRows || []).forEach((activity: any) => {
+                const crewId = String(activity?.crew_id || '')
+                if (!crewId) return
+                const list = byActivityCrew.get(crewId) || []
+                list.push(activity)
+                byActivityCrew.set(crewId, list)
+              })
+
+              rows.forEach((r: any) => {
+                const crewId = String(r?.id || '')
+                const crewWorkDate = String(r?.work_date || '').trim()
+                const allRows = byActivityCrew.get(crewId) || []
+                const sameDateRows = crewWorkDate
+                  ? allRows.filter((activity: any) => String(activity?.work_date || '').slice(0, 10) === crewWorkDate)
+                  : allRows
+                const count = crewWorkDate ? sameDateRows.length : allRows.length
+                r.activities_count = count
+                r.has_activities = count > 0
+              })
+            }
+          } catch {}
 
           return NextResponse.json(rows)
         }

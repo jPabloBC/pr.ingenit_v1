@@ -4,6 +4,15 @@ import { authOptions } from '../../../lib/auth'
 import { writeAuditLog } from '../../../lib/audit/writeAuditLog'
 import { assertCanMutateResource } from '../../../lib/authz/assertCanMutateResource'
 import { createClient } from '@supabase/supabase-js'
+import {
+  getCurrentWorkdayMetadata,
+  resolveCalculationVersion,
+  resolvePersonWorkdayHours,
+  resolveMachineWorkdayHours,
+  resolveHalfDayHours,
+  resolvePersonDotationFromHours,
+  resolveMachineDotationFromHours
+} from '../../../lib/workdayConfig'
 
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-09'
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_NO = 32
@@ -36,8 +45,78 @@ function parseJsonArray(value: any): any[] {
 }
 
 function asObjectOrNull(value: any): Record<string, any> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, any>
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null
+  } catch {
+    return null
+  }
+}
+
+const WORKDAY_METADATA_KEYS = [
+  'calculationVersion',
+  'personWorkdayHours',
+  'machineWorkdayHours',
+  'halfDayHours',
+  'maxPersonHoursWithOvertime',
+  'maxMachineHoursWithOvertime'
+]
+
+function hasExplicitWorkdayMetadata(source: any): boolean {
+  const obj = asObjectOrNull(source)
+  if (!obj) return false
+  if (WORKDAY_METADATA_KEYS.some((key) => obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== '')) return true
+  return ['notes', 'v2_form_snapshot', 'v2_runtime_snapshot'].some((key) => hasExplicitWorkdayMetadata(obj[key]))
+}
+
+function getFieldReportWorkdaySource(report: any) {
+  if (hasExplicitWorkdayMetadata(report)) return report
+  const personnelWithMetadata = parseJsonArray(report?.personnel).find((row) => hasExplicitWorkdayMetadata(row))
+  if (personnelWithMetadata) return personnelWithMetadata
+  const equipmentWithMetadata = parseJsonArray(report?.equipment_entries).find((row) => hasExplicitWorkdayMetadata(row))
+  if (equipmentWithMetadata) return equipmentWithMetadata
+  return report
+}
+
+function buildWorkdayMetadataForSource(source: any) {
+  const current = getCurrentWorkdayMetadata()
+  return {
+    calculationVersion: resolveCalculationVersion(source),
+    personWorkdayHours: resolvePersonWorkdayHours(source),
+    machineWorkdayHours: resolveMachineWorkdayHours(source),
+    halfDayHours: resolveHalfDayHours(source),
+    maxPersonHoursWithOvertime: Number(asObjectOrNull(source)?.maxPersonHoursWithOvertime || current.maxPersonHoursWithOvertime),
+    maxMachineHoursWithOvertime: Number(asObjectOrNull(source)?.maxMachineHoursWithOvertime || current.maxMachineHoursWithOvertime)
+  }
+}
+
+function withWorkdayMetadata<T extends Record<string, any> | null>(value: T, metadata: Record<string, any> | null): T {
+  if (!metadata) return value
+  return { ...(value || {}), ...metadata } as T
+}
+
+function resolvePostWorkdayMetadata(body: any) {
+  return buildWorkdayMetadataForSource(hasExplicitWorkdayMetadata(body) ? body : getCurrentWorkdayMetadata())
+}
+
+function resolvePutWorkdayMetadata(body: any, previousReport: any) {
+  if (!hasExplicitWorkdayMetadata(previousReport)) return null
+  return buildWorkdayMetadataForSource(hasExplicitWorkdayMetadata(body) ? body : previousReport)
+}
+
+function applyWorkdayMetadata(
+  baseNotes: Record<string, any>,
+  v2FormSnapshot: Record<string, any> | null,
+  v2RuntimeSnapshot: Record<string, any> | null,
+  metadata: Record<string, any> | null
+) {
+  return {
+    notes: withWorkdayMetadata(baseNotes, metadata),
+    v2FormSnapshot: metadata ? withWorkdayMetadata(v2FormSnapshot || {}, metadata) : v2FormSnapshot,
+    v2RuntimeSnapshot: metadata ? withWorkdayMetadata(v2RuntimeSnapshot || {}, metadata) : v2RuntimeSnapshot
+  }
 }
 
 function normalizeWorkFront(value: any): 'CANALETAS' | 'PISCINAS' {
@@ -187,15 +266,16 @@ async function buildEvidenceManifestForReport(
   return collectEvidenceManifest(rows)
 }
 
-function sumPersonHours(value: any): number {
+function sumPersonHours(value: any, source: any): number {
   const parsed = parseJson(value)
   if (!parsed || typeof parsed !== 'object') return 0
   const extras = parsed && typeof parsed.__extras === 'object' && parsed.__extras ? parsed.__extras : {}
+  const personWorkdayHours = resolvePersonWorkdayHours(source)
   return Object.entries(parsed).reduce((acc: number, [key, row]: [string, any]) => {
     if (!key || key === '__extras' || !Array.isArray(row)) return acc
     const base = row.reduce((s: number, v: any) => s + (Number(v) || 0), 0)
     const extra = Number(extras?.[key] || 0) || 0
-    return acc + Math.min(10, Math.max(0, base + extra))
+    return acc + Math.min(personWorkdayHours, Math.max(0, base + extra))
   }, 0)
 }
 
@@ -338,8 +418,8 @@ async function upsertFrontHistoryFromSector4(params: {
   const minorHmAccum = toNum(notes?.s4_curr_minor_hm)
   const prevMajorHm = toNum(notes?.s4_prev_major_hm)
   const prevMinorHm = toNum(notes?.s4_prev_minor_hm)
-  const majorEquipAccum = toNum(notes?.s4_curr_major_equip)
-  const minorEquipAccum = toNum(notes?.s4_curr_minor_equip)
+  const majorEquipAccum = toNum(notes?.s4_curr_major_equip) || Number(resolveMachineDotationFromHours(majorHmAccum, notes).toFixed(2))
+  const minorEquipAccum = toNum(notes?.s4_curr_minor_equip) || Number(resolveMachineDotationFromHours(minorHmAccum, notes).toFixed(2))
   const totalEquipAccum = toNum(notes?.s4_curr_total_equip) || (majorEquipAccum + minorEquipAccum)
 
   const { data: existing, error: existingError } = await supabaseAdmin
@@ -853,7 +933,7 @@ export async function GET(req: NextRequest) {
           .maybeSingle(),
         supabaseAdmin
           .from('pr_field_reports')
-          .select('id, weather, person_hours')
+          .select('id, weather, person_hours, notes, personnel, equipment_entries')
           .eq('company_id', companyId)
           .eq('date', date)
       ])
@@ -863,7 +943,7 @@ export async function GET(req: NextRequest) {
       const project: any = projectRes.error ? {} : (projectRes.data || {})
       const fieldReports = fieldRes.error ? [] : (fieldRes.data || [])
 
-      const hhDay = fieldReports.reduce((acc: number, r: any) => acc + sumPersonHours(r?.person_hours), 0)
+      const hhDay = fieldReports.reduce((acc: number, r: any) => acc + sumPersonHours(r?.person_hours, getFieldReportWorkdaySource(r)), 0)
       const weatherFreq = new Map<string, number>()
       fieldReports.forEach((r: any) => {
         const label = weatherLabel(r?.weather)
@@ -954,9 +1034,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'report_date debe tener formato YYYY-MM-DD' }, { status: 400 })
     }
 
-    const baseNotes = body?.notes && typeof body.notes === 'object' ? body.notes : {}
-    const v2FormSnapshot = asObjectOrNull(body?.v2_form_snapshot)
-    const v2RuntimeSnapshot = asObjectOrNull(body?.v2_runtime_snapshot)
+    const workdayMetadata = resolvePostWorkdayMetadata(body)
+    const requestParts = applyWorkdayMetadata(
+      asObjectOrNull(body?.notes) || {},
+      asObjectOrNull(body?.v2_form_snapshot),
+      asObjectOrNull(body?.v2_runtime_snapshot),
+      workdayMetadata
+    )
+    const baseNotes = requestParts.notes
+    const v2FormSnapshot = requestParts.v2FormSnapshot
+    const v2RuntimeSnapshot = requestParts.v2RuntimeSnapshot
     const workFront = resolveWorkFront(body, baseNotes, v2FormSnapshot, v2RuntimeSnapshot)
 
     const { data: existingByDate, error: existingByDateError } = await supabaseAdmin
@@ -1038,7 +1125,7 @@ export async function POST(req: NextRequest) {
       supabaseAdmin,
       companyId,
       payload,
-      notes: (payload.notes && typeof payload.notes === 'object') ? payload.notes : {}
+      notes: asObjectOrNull(payload.notes) || {}
     })
     await writeDailyReportAudit({
       supabaseAdmin,
@@ -1087,9 +1174,16 @@ export async function PUT(req: NextRequest) {
       ? body.source_field_report_ids.map((x: any) => String(x)).filter(Boolean)
       : []
     const evidenceManifest = await buildEvidenceManifestForReport(supabaseAdmin, companyId, reportDate, sourceIds)
-    const baseNotes = body?.notes && typeof body.notes === 'object' ? body.notes : {}
-    const v2FormSnapshot = asObjectOrNull(body?.v2_form_snapshot)
-    const v2RuntimeSnapshot = asObjectOrNull(body?.v2_runtime_snapshot)
+    const workdayMetadata = resolvePutWorkdayMetadata(body, previousReport)
+    const requestParts = applyWorkdayMetadata(
+      asObjectOrNull(body?.notes) || {},
+      asObjectOrNull(body?.v2_form_snapshot),
+      asObjectOrNull(body?.v2_runtime_snapshot),
+      workdayMetadata
+    )
+    const baseNotes = requestParts.notes
+    const v2FormSnapshot = requestParts.v2FormSnapshot
+    const v2RuntimeSnapshot = requestParts.v2RuntimeSnapshot
     const workFront = resolveWorkFront(body, baseNotes, v2FormSnapshot, v2RuntimeSnapshot)
 
     const payload: Record<string, any> = {
@@ -1150,7 +1244,7 @@ export async function PUT(req: NextRequest) {
       supabaseAdmin,
       companyId,
       payload: { ...payload, report_no: data?.report_no, report_date: data?.report_date, work_front: data?.work_front },
-      notes: (payload.notes && typeof payload.notes === 'object') ? payload.notes : {}
+      notes: asObjectOrNull(payload.notes) || {}
     })
     const versionResult = await saveDailyReportVersion({
       supabaseAdmin,
