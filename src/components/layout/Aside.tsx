@@ -35,7 +35,7 @@ const menuItemGroupsUsers = [
     { text: 'Dashboard', path: '/users/dashboard', icon: <Dashboard />, resourceKey: 'dashboard' },
     { text: 'Asistencia', path: '/users/attendance', icon: <AccessTime />, resourceKey: 'attendance' },
     { text: 'Colaboradores', path: '/users/collaborators', icon: <People />, resourceKey: 'collaborators' },
-    { text: 'Dotación y actividades', path: '/users/staffing-activities', icon: <Engineering />, resourceKey: 'crews' },
+    { text: 'Dotación y actividades', path: '/users/staffing-activities', icon: <Engineering />, resourceKey: 'staffing-activities' },
     { text: 'Cuadrillas', path: '/users/crews', icon: <Construction />, resourceKey: 'crews' },
     { text: 'Gestión y Datos', path: '/users/management', icon: <Work />, resourceKey: 'management' },
     { text: 'Programa', path: '/users/program', icon: <EventNote />, resourceKey: 'program' },

@@ -43,6 +43,7 @@ const RESOURCES = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'attendance', label: 'Asistencia' },
   { key: 'collaborators', label: 'Colaboradores' },
+  { key: 'staffing-activities', label: 'Dotación y actividades' },
   { key: 'crews', label: 'Cuadrillas' },
   { key: 'field-reports', label: 'Reportabilidad' },
   { key: 'daily-report', label: 'Reporte diario' },

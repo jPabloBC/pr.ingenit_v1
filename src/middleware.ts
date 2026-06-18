@@ -5,7 +5,7 @@ import { getToken } from 'next-auth/jwt'
 const RESOURCE_MAP: Record<string, string> = {
   '/users/dashboard': 'dashboard',
   '/users/collaborators': 'collaborators',
-  '/users/staffing-activities': 'crews',
+  '/users/staffing-activities': 'staffing-activities',
   '/users/crews': 'crews',
   '/users/field-reports': 'field-reports',
   '/users/daily-report': 'daily-report',
