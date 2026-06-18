@@ -96,6 +96,28 @@ const validateProgramActivitiesInCompany = async (programActivityIds: string[], 
   return null
 }
 
+const withRoleWorker = (collaboratorId: string | null, role: string) => {
+  const id = clean(collaboratorId)
+  if (!id) return null
+  return {
+    collaborator_id: id,
+    role,
+    is_override: false,
+    override_reason: null,
+    metadata: {},
+  }
+}
+
+const mergeWorkers = (workers: ValidatedStaffingPayload['workers'], extras: Array<ReturnType<typeof withRoleWorker>>) => {
+  const byId = new Map<string, ValidatedStaffingPayload['workers'][number]>()
+  ;[...extras.filter(Boolean), ...workers].forEach((worker: any) => {
+    const id = clean(worker?.collaborator_id)
+    if (!id || byId.has(id)) return
+    byId.set(id, { ...worker, collaborator_id: id })
+  })
+  return Array.from(byId.values())
+}
+
 async function requireStaffingSession(req: NextRequest) {
   const session = (await getServerSession(authOptions as any)) as any
   if (!session?.user) return { session: null, actor: null, companyId: '', error: jsonError('Unauthorized', 401) }
@@ -229,10 +251,16 @@ export async function POST(req: NextRequest) {
     if (programCompanyError) return programCompanyError
 
     const actorUserId = clean(actor?.userId || session?.user?.id) || null
+    const normalizedWorkers = mergeWorkers(payload.workers, [
+      withRoleWorker(payload.supervisor_id, 'supervisor'),
+      withRoleWorker(payload.foreman_id, 'foreman'),
+    ])
 
     const collaboratorIdsToValidate = uniqueIds([
-      ...payload.workers.map((worker) => worker.collaborator_id),
+      ...normalizedWorkers.map((worker) => worker.collaborator_id),
       payload.field_boss_id,
+      payload.supervisor_id,
+      payload.foreman_id,
     ])
 
     const validation = await validateCollaboratorsInTurno({
@@ -263,6 +291,8 @@ export async function POST(req: NextRequest) {
         crew_name: payload.crew_name,
         specialty: payload.specialty,
         field_boss_id: payload.field_boss_id,
+        supervisor_id: payload.supervisor_id,
+        foreman_id: payload.foreman_id,
         status: 'draft',
         created_by: actorUserId,
         updated_by: actorUserId,
@@ -273,7 +303,7 @@ export async function POST(req: NextRequest) {
 
     if (insertSessionError) return jsonError(insertSessionError.message, 500)
 
-    const workerRows = payload.workers.map((worker) => ({
+    const workerRows = normalizedWorkers.map((worker) => ({
       session_id: staffingSession.id,
       company_id: companyId,
       project_id: projectId,
@@ -294,6 +324,10 @@ export async function POST(req: NextRequest) {
       work_date: payload.work_date,
       program_activity_id: activity.program_activity_id,
       activity: activity.activity,
+      activity_start_time: activity.activity_start_time,
+      activity_end_time: activity.activity_end_time,
+      activity_observations: activity.activity_observations,
+      restrictions: activity.restrictions,
       area: activity.area,
       unit: activity.unit,
       quantity: activity.quantity,

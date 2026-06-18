@@ -9,6 +9,10 @@ export type StaffingWorkerInput = {
 export type StaffingActivityInput = {
   program_activity_id: string | null
   activity: string
+  activity_start_time: string | null
+  activity_end_time: string | null
+  activity_observations: string | null
+  restrictions: string | null
   area: string | null
   unit: string | null
   quantity: number | null
@@ -25,6 +29,8 @@ export type ValidatedStaffingPayload = {
   crew_name: string | null
   specialty: string | null
   field_boss_id: string | null
+  supervisor_id: string | null
+  foreman_id: string | null
   workers: StaffingWorkerInput[]
   activities: StaffingActivityInput[]
   metadata: Record<string, any>
@@ -42,6 +48,19 @@ const nullableText = (value: unknown) => {
 const asObject = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return value as Record<string, any>
+}
+
+const normalizeTime = (value: unknown) => {
+  const text = clean(value)
+  if (!text) return null
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(text)) {
+    throw new Error(`Hora inválida: ${text}`)
+  }
+  const [hour, minute, second = 0] = text.split(':').map(Number)
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    throw new Error(`Hora inválida: ${text}`)
+  }
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`
 }
 
 const collaboratorIdFromValue = (value: any) =>
@@ -121,6 +140,10 @@ const normalizeActivity = (value: any, index: number): StaffingActivityInput | n
   return {
     program_activity_id: nullableText(value?.program_activity_id ?? value?.programActivityId ?? value?.activity_id),
     activity,
+    activity_start_time: normalizeTime(value?.activity_start_time ?? value?.activityStartTime),
+    activity_end_time: normalizeTime(value?.activity_end_time ?? value?.activityEndTime),
+    activity_observations: nullableText(value?.activity_observations ?? value?.activityObservations ?? value?.observations),
+    restrictions: nullableText(value?.restrictions),
     area: nullableText(value?.area),
     unit: nullableText(value?.unit),
     quantity,
@@ -165,6 +188,8 @@ export function validateStaffingPayload(body: any): ValidatedStaffingPayload {
     crew_name: nullableText(body?.crew_name ?? body?.crewName ?? body?.name),
     specialty: nullableText(body?.specialty),
     field_boss_id: nullableText(body?.field_boss_id ?? body?.fieldBossId ?? collaboratorIdFromValue(body?.field_boss ?? body?.fieldBoss)),
+    supervisor_id: nullableText(body?.supervisor_id ?? body?.supervisorId ?? collaboratorIdFromValue(body?.supervisor)),
+    foreman_id: nullableText(body?.foreman_id ?? body?.foremanId ?? body?.capataz_id ?? body?.capatazId ?? collaboratorIdFromValue(body?.foreman ?? body?.capataz)),
     workers,
     activities,
     metadata: asObject(body?.metadata),
