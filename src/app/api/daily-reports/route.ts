@@ -706,6 +706,47 @@ function resolveAuditProjectId(session: any, ...rows: any[]) {
   return optionalText(session?.user?.projectId)
 }
 
+const DAILY_REPORT_SCREEN_RESOURCE_TYPE = 'daily_report_screen'
+const DAILY_REPORT_SCREEN_RESOURCE_ID = 'users_daily_report'
+const DAILY_REPORT_AUDIT_TIME_ZONE = 'America/Santiago'
+
+const getTimeZoneOffsetMinutes = (date: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+  }).formatToParts(date)
+  const value = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT'
+  const match = /^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(value)
+  if (!match) return 0
+  const sign = match[1] === '-' ? -1 : 1
+  const hours = Number(match[2] || 0)
+  const minutes = Number(match[3] || 0)
+  return sign * (hours * 60 + minutes)
+}
+
+const getChileDayRange = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: DAILY_REPORT_AUDIT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = new Map(parts.map((part) => [part.type, part.value]))
+  const year = Number(values.get('year'))
+  const month = Number(values.get('month'))
+  const day = Number(values.get('day'))
+  const startGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0))
+  const endGuess = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0))
+  const startOffset = getTimeZoneOffsetMinutes(startGuess, DAILY_REPORT_AUDIT_TIME_ZONE)
+  const endOffset = getTimeZoneOffsetMinutes(endGuess, DAILY_REPORT_AUDIT_TIME_ZONE)
+
+  return {
+    day: `${values.get('year')}-${values.get('month')}-${values.get('day')}`,
+    startIso: new Date(startGuess.getTime() - startOffset * 60 * 1000).toISOString(),
+    endIso: new Date(endGuess.getTime() - endOffset * 60 * 1000).toISOString(),
+  }
+}
+
 async function writeDailyReportAudit(params: {
   supabaseAdmin: any
   session: any
@@ -730,6 +771,48 @@ async function writeDailyReportAudit(params: {
     beforeData: params.beforeData,
     afterData: params.afterData,
     metadata: params.metadata
+  })
+}
+
+async function writeDailyReportScreenViewOnce(params: {
+  supabaseAdmin: any
+  session: any
+  companyId: string
+}) {
+  const actorUserId = optionalText(params.session?.user?.id)
+  if (!actorUserId) return
+
+  const { day, startIso, endIso } = getChileDayRange()
+  const { data, error } = await params.supabaseAdmin
+    .from('pr_platform_audit_logs')
+    .select('id')
+    .eq('company_id', params.companyId)
+    .eq('actor_user_id', actorUserId)
+    .eq('action', 'view')
+    .eq('resource_type', DAILY_REPORT_SCREEN_RESOURCE_TYPE)
+    .eq('resource_id', DAILY_REPORT_SCREEN_RESOURCE_ID)
+    .gte('created_at', startIso)
+    .lt('created_at', endIso)
+    .limit(1)
+
+  if (error) {
+    console.warn('Could not check daily report screen view audit log:', error)
+    return
+  }
+  if (Array.isArray(data) && data.length > 0) return
+
+  await writeDailyReportAudit({
+    supabaseAdmin: params.supabaseAdmin,
+    session: params.session,
+    companyId: params.companyId,
+    action: 'view',
+    resourceType: DAILY_REPORT_SCREEN_RESOURCE_TYPE,
+    resourceId: DAILY_REPORT_SCREEN_RESOURCE_ID,
+    metadata: {
+      view: 'screen_daily_once_per_day',
+      audit_day: day,
+      time_zone: DAILY_REPORT_AUDIT_TIME_ZONE,
+    },
   })
 }
 
@@ -801,6 +884,10 @@ export async function GET(req: NextRequest) {
     const frontHistory = req.nextUrl.searchParams.get('front_history') === '1'
     const validation = req.nextUrl.searchParams.get('validation') === '1'
     const date = req.nextUrl.searchParams.get('date') || new Date().toISOString().slice(0, 10)
+
+    if (!historyReportId && !historyReportDate) {
+      await writeDailyReportScreenViewOnce({ supabaseAdmin, session, companyId })
+    }
 
     if (historyReportId) {
       if (role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -985,19 +1072,6 @@ export async function GET(req: NextRequest) {
         .eq('id', id)
         .single()
       if (error) return NextResponse.json({ error: formatError(error) }, { status: 500 })
-      await writeDailyReportAudit({
-        supabaseAdmin,
-        session,
-        companyId,
-        action: 'view',
-        resourceId: id,
-        metadata: {
-          view: 'detail',
-          report_date: data?.report_date || null,
-          report_no: data?.report_no || null,
-          work_front: data?.work_front || null
-        }
-      })
       return NextResponse.json(data)
     }
 

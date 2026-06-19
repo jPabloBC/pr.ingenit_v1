@@ -23,6 +23,13 @@ export type AvailableCollaboratorsParams = {
   workDate: string
 }
 
+export type AvailableDatesParams = {
+  supabaseAdmin: any
+  companyId: string
+  startDate: string
+  endDate: string
+}
+
 export type StaffingCollaboratorValidation = {
   validIds: string[]
   missingIds: string[]
@@ -44,6 +51,39 @@ export async function fetchTurnoCollaboratorIds(params: AvailableCollaboratorsPa
       .filter((row: any) => isTurnoDailyStatus(row))
       .map((row: any) => String(row?.collaborator_id || ''))
   )
+}
+
+export async function fetchTurnoAvailableDates(params: AvailableDatesParams) {
+  const buildQuery = () =>
+    params.supabaseAdmin
+      .from('pr_collaborator_daily_status')
+      .select('work_date')
+      .eq('company_id', params.companyId)
+      .gte('work_date', params.startDate)
+      .lte('work_date', params.endDate)
+      .or('status.ilike.turno,reason.eq.11')
+      .not('work_date', 'is', null)
+      .order('work_date', { ascending: true })
+
+  const data: any[] = []
+  const pageSize = 1000
+  let offset = 0
+
+  while (true) {
+    const { data: chunkData, error } = await buildQuery().range(offset, offset + pageSize - 1)
+    if (error) throw error
+
+    const rows = Array.isArray(chunkData) ? chunkData : []
+    data.push(...rows)
+    if (rows.length < pageSize) break
+    offset += pageSize
+  }
+
+  return Array.from(new Set<string>(
+    data
+      .map((row: any) => String(row?.work_date || '').trim().slice(0, 10))
+      .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+  )).sort((a: string, b: string) => a.localeCompare(b))
 }
 
 export async function fetchAvailableCollaborators(params: AvailableCollaboratorsParams) {

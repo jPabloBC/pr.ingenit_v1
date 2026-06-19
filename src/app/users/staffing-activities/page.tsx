@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import {
   Alert,
   Box,
@@ -30,6 +31,9 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
+import { DatePicker } from '@mui/x-date-pickers/DatePicker'
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
@@ -37,6 +41,8 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import SaveIcon from '@mui/icons-material/Save'
 import UserHeader from '@/components/layout/UserHeader'
 import { colors } from '@/theme/theme'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
 
 type Collaborator = {
   id: string
@@ -70,11 +76,28 @@ type StaffingSession = Record<string, any> & {
   supervisor_id?: string | null
   foreman_id?: string | null
   generated_crew_id?: string | null
+  created_by?: string | null
+  work_date?: string | null
   workers?: any[]
   activities?: any[]
 }
 
-const todayYmd = () => new Date().toISOString().slice(0, 10)
+const todayYmd = () => format(new Date(), 'yyyy-MM-dd')
+
+const monthStart = (value: Date) => new Date(value.getFullYear(), value.getMonth(), 1)
+
+const sameMonth = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()
+
+const parseYmdToDate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || '').trim())
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(year, month - 1, day)
+  return Number.isNaN(date.getTime()) ? null : date
+}
 
 const emptyActivity = (): ActivityForm => ({
   activity: '',
@@ -156,7 +179,9 @@ const shortId = (value: unknown) => {
 }
 
 export default function StaffingActivitiesPage() {
-  const [date, setDate] = useState(todayYmd())
+  const { data: session } = useSession()
+  const [date, setDate] = useState('')
+  const [visibleMonth, setVisibleMonth] = useState(() => monthStart(new Date()))
   const [fronts, setFronts] = useState<ReportFront[]>([])
   const [frontValue, setFrontValue] = useState('')
   const [collaborators, setCollaborators] = useState<Collaborator[]>([])
@@ -165,6 +190,8 @@ export default function StaffingActivitiesPage() {
   const [memberIds, setMemberIds] = useState<string[]>([])
   const [activities, setActivities] = useState<ActivityForm[]>([emptyActivity()])
   const [sessions, setSessions] = useState<StaffingSession[]>([])
+  const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [loadingAvailableDates, setLoadingAvailableDates] = useState(false)
   const [loadingFronts, setLoadingFronts] = useState(false)
   const [loadingCollaborators, setLoadingCollaborators] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(false)
@@ -172,11 +199,20 @@ export default function StaffingActivitiesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [closingId, setClosingId] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ severity: 'success' | 'error' | 'info'; message: string } | null>(null)
+  const currentUserId = String((session?.user as any)?.id || '').trim()
 
   const selectedFront = useMemo(
     () => fronts.find((front, index) => frontKey(front, index) === frontValue) || null,
     [frontValue, fronts]
   )
+
+  const availableDateSet = useMemo(() => new Set(availableDates), [availableDates])
+
+  const selectedDateValue = useMemo(() => parseYmdToDate(date), [date])
+
+  const hasAvailableDates = availableDates.length > 0
+
+  const canCreateForDate = Boolean(date && availableDateSet.has(date))
 
   const collaboratorsById = useMemo(() => {
     const map = new Map<string, Collaborator>()
@@ -199,6 +235,79 @@ export default function StaffingActivitiesPage() {
     [collaborators, supervisorId, foremanId]
   )
 
+  const loadAvailableDates = async (targetMonth = visibleMonth, options: { selectInitial?: boolean } = {}) => {
+    const monthDate = monthStart(targetMonth)
+    try {
+      setLoadingAvailableDates(true)
+      setVisibleMonth(monthDate)
+      const year = monthDate.getFullYear()
+      const month = monthDate.getMonth() + 1
+      const res = await fetch(`/api/staffing-activities/available-dates?year=${year}&month=${month}`, { cache: 'no-store' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || 'No se pudieron cargar fechas disponibles')
+      const rows: string[] = Array.isArray(json?.dates)
+        ? Array.from(new Set<string>(
+          json.dates
+            .map((item: unknown) => String(item || '').slice(0, 10))
+            .filter((item: string) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+        )).sort((a: string, b: string) => a.localeCompare(b))
+        : []
+      setAvailableDates(rows)
+      if (options.selectInitial) {
+        setDate((prev) => {
+          if (prev && rows.includes(prev)) return prev
+          const today = todayYmd()
+          if (rows.includes(today)) return today
+          return rows[rows.length - 1] || ''
+        })
+      }
+      if (rows.length === 0 && options.selectInitial) resetForm()
+    } catch (err) {
+      setAvailableDates([])
+      if (options.selectInitial) {
+        setDate('')
+        resetForm()
+      }
+      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error cargando fechas disponibles' })
+    } finally {
+      setLoadingAvailableDates(false)
+    }
+  }
+
+  const refreshAvailableDates = async () => {
+    try {
+      setLoadingAvailableDates(true)
+      const monthDate = monthStart(visibleMonth)
+      const year = monthDate.getFullYear()
+      const month = monthDate.getMonth() + 1
+      const res = await fetch(`/api/staffing-activities/available-dates?year=${year}&month=${month}`, { cache: 'no-store' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || 'No se pudieron cargar fechas disponibles')
+      const rows: string[] = Array.isArray(json?.dates)
+        ? Array.from(new Set<string>(
+          json.dates
+            .map((item: unknown) => String(item || '').slice(0, 10))
+            .filter((item: string) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+        )).sort((a: string, b: string) => a.localeCompare(b))
+        : []
+      setAvailableDates(rows)
+      setDate((prev) => {
+        if (prev && rows.includes(prev)) return prev
+        const today = todayYmd()
+        if (sameMonth(monthDate, new Date()) && rows.includes(today)) return today
+        return rows[rows.length - 1] || ''
+      })
+      if (rows.length === 0) resetForm()
+    } catch (err) {
+      setAvailableDates([])
+      setDate('')
+      resetForm()
+      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error cargando fechas disponibles' })
+    } finally {
+      setLoadingAvailableDates(false)
+    }
+  }
+
   const loadFronts = async () => {
     try {
       setLoadingFronts(true)
@@ -216,7 +325,13 @@ export default function StaffingActivitiesPage() {
   }
 
   const loadCollaborators = async (targetDate = date) => {
-    if (!targetDate) return
+    if (!targetDate) {
+      setCollaborators([])
+      setSupervisorId('')
+      setForemanId('')
+      setMemberIds([])
+      return
+    }
     try {
       setLoadingCollaborators(true)
       const res = await fetch(`/api/staffing-activities/available-collaborators?date=${encodeURIComponent(targetDate)}`, {
@@ -238,7 +353,10 @@ export default function StaffingActivitiesPage() {
   }
 
   const loadSessions = async (targetDate = date) => {
-    if (!targetDate) return
+    if (!targetDate) {
+      setSessions([])
+      return
+    }
     try {
       setLoadingSessions(true)
       const res = await fetch(`/api/staffing-activities?date=${encodeURIComponent(targetDate)}`, {
@@ -255,6 +373,7 @@ export default function StaffingActivitiesPage() {
   }
 
   useEffect(() => {
+    void loadAvailableDates(monthStart(new Date()), { selectInitial: true })
     void loadFronts()
   }, [])
 
@@ -262,6 +381,12 @@ export default function StaffingActivitiesPage() {
     void loadCollaborators(date)
     void loadSessions(date)
   }, [date])
+
+  const shouldDisableDate = (value: Date | null) => {
+    if (!value || Number.isNaN(value.getTime())) return true
+    if (availableDateSet.size === 0) return true
+    return !availableDateSet.has(format(value, 'yyyy-MM-dd'))
+  }
 
   const updateSupervisor = (id: string) => {
     setSupervisorId(id)
@@ -306,7 +431,8 @@ export default function StaffingActivitiesPage() {
       }))
       .filter((activity) => activity.activity)
 
-    if (!date) return setNotice({ severity: 'error', message: 'Selecciona una fecha.' })
+    if (!date) return setNotice({ severity: 'error', message: 'No hay fechas con colaboradores en turno.' })
+    if (!canCreateForDate) return setNotice({ severity: 'error', message: 'Selecciona una fecha con colaboradores en turno.' })
     if (!selectedFront) return setNotice({ severity: 'error', message: 'Selecciona un frente o área de trabajo.' })
     if (!supervisorId) return setNotice({ severity: 'error', message: 'Selecciona un supervisor.' })
     if (!foremanId) return setNotice({ severity: 'error', message: 'Selecciona un capataz.' })
@@ -398,9 +524,45 @@ export default function StaffingActivitiesPage() {
         <Stack spacing={2.5}>
           <Paper sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a', mb: 1.5 }}>Cuadrilla del día</Typography>
+            {!loadingAvailableDates && !hasAvailableDates ? (
+              <Alert severity="info" sx={{ mb: 1.5 }}>
+                No hay fechas con colaboradores en turno para el mes visible. No es posible crear cuadrillas hasta seleccionar una fecha disponible.
+              </Alert>
+            ) : null}
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '180px 1fr 1fr 1fr auto' }, gap: 1.5, alignItems: 'center' }}>
-              <TextField label="Fecha" type="date" value={date} onChange={(event) => setDate(event.target.value)} InputLabelProps={{ shrink: true }} />
-              <FormControl fullWidth disabled={loadingFronts}>
+              <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={es}>
+                <DatePicker
+                  label="Fecha"
+                  value={selectedDateValue}
+                  onChange={(value) => {
+                    if (!value || Number.isNaN(value.getTime())) {
+                      setDate('')
+                      return
+                    }
+                    const nextDate = format(value, 'yyyy-MM-dd')
+                    if (!availableDateSet.has(nextDate)) return
+                    setDate(nextDate)
+                  }}
+                  format="dd-MM-yyyy"
+                  shouldDisableDate={shouldDisableDate}
+                  onMonthChange={(value) => {
+                    if (!value || Number.isNaN(value.getTime())) return
+                    void loadAvailableDates(value)
+                  }}
+                  onYearChange={(value) => {
+                    if (!value || Number.isNaN(value.getTime())) return
+                    void loadAvailableDates(new Date(value.getFullYear(), visibleMonth.getMonth(), 1))
+                  }}
+                  disabled={loadingAvailableDates}
+                  slotProps={{
+                    textField: {
+                      fullWidth: true,
+                      helperText: !loadingAvailableDates && !hasAvailableDates ? 'Sin fechas disponibles' : undefined,
+                    },
+                  }}
+                />
+              </LocalizationProvider>
+              <FormControl fullWidth disabled={loadingFronts || !canCreateForDate}>
                 <InputLabel id="front-select-label">Frente / Área de trabajo</InputLabel>
                 <Select labelId="front-select-label" label="Frente / Área de trabajo" value={frontValue} onChange={(event) => setFrontValue(String(event.target.value))}>
                   {fronts.map((front, index) => (
@@ -410,7 +572,7 @@ export default function StaffingActivitiesPage() {
                   ))}
                 </Select>
               </FormControl>
-              <FormControl fullWidth>
+              <FormControl fullWidth disabled={!canCreateForDate}>
                 <InputLabel id="supervisor-select-label">Supervisor</InputLabel>
                 <Select labelId="supervisor-select-label" label="Supervisor" value={supervisorId} onChange={(event) => updateSupervisor(String(event.target.value))}>
                   {supervisorOptions.map((collaborator) => (
@@ -427,7 +589,7 @@ export default function StaffingActivitiesPage() {
                   ))}
                 </Select>
               </FormControl>
-              <FormControl fullWidth>
+              <FormControl fullWidth disabled={!canCreateForDate}>
                 <InputLabel id="foreman-select-label">Capataz</InputLabel>
                 <Select labelId="foreman-select-label" label="Capataz" value={foremanId} onChange={(event) => updateForeman(String(event.target.value))}>
                   {foremanOptions.map((collaborator) => (
@@ -448,9 +610,11 @@ export default function StaffingActivitiesPage() {
                 variant="outlined"
                 startIcon={<RefreshIcon />}
                 onClick={() => {
+                  void refreshAvailableDates()
                   void loadCollaborators(date)
                   void loadSessions(date)
                 }}
+                disabled={loadingAvailableDates}
                 sx={{ textTransform: 'none', fontWeight: 800, minHeight: 56 }}
               >
                 Actualizar
@@ -468,7 +632,7 @@ export default function StaffingActivitiesPage() {
               {selectableMembers.map((collaborator) => {
                 const checked = memberIds.includes(collaborator.id)
                 return (
-                  <ListItemButton key={collaborator.id} onClick={() => toggleMember(collaborator.id)}>
+                  <ListItemButton key={collaborator.id} disabled={!canCreateForDate} onClick={() => toggleMember(collaborator.id)}>
                     <ListItemIcon sx={{ minWidth: 38 }}>
                       <Checkbox edge="start" checked={checked} tabIndex={-1} disableRipple />
                     </ListItemIcon>
@@ -490,15 +654,15 @@ export default function StaffingActivitiesPage() {
                 <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Actividades de la cuadrilla</Typography>
                 <Typography sx={{ color: '#64748b', fontSize: 13 }}>Se guardan en staging, sin crear cuadrillas reales.</Typography>
               </Box>
-              <Button startIcon={<AddIcon />} onClick={addActivity} sx={{ textTransform: 'none', fontWeight: 800 }}>Agregar</Button>
+              <Button startIcon={<AddIcon />} onClick={addActivity} disabled={!canCreateForDate} sx={{ textTransform: 'none', fontWeight: 800 }}>Agregar</Button>
             </Stack>
             <Stack spacing={1.25}>
               {activities.map((activity, index) => (
                 <Box key={index} sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.5fr 160px 160px auto' }, gap: 1 }}>
-                  <TextField label="Actividad" value={activity.activity} onChange={(event) => updateActivity(index, { activity: event.target.value })} size="small" />
-                  <TextField label="Hora inicio" type="time" value={activity.activity_start_time} onChange={(event) => updateActivity(index, { activity_start_time: event.target.value })} size="small" InputLabelProps={{ shrink: true }} />
-                  <TextField label="Hora fin" type="time" value={activity.activity_end_time} onChange={(event) => updateActivity(index, { activity_end_time: event.target.value })} size="small" InputLabelProps={{ shrink: true }} />
-                  <IconButton aria-label="Eliminar actividad" onClick={() => removeActivity(index)} sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
+                  <TextField label="Actividad" value={activity.activity} onChange={(event) => updateActivity(index, { activity: event.target.value })} size="small" disabled={!canCreateForDate} />
+                  <TextField label="Hora inicio" type="time" value={activity.activity_start_time} onChange={(event) => updateActivity(index, { activity_start_time: event.target.value })} size="small" InputLabelProps={{ shrink: true }} disabled={!canCreateForDate} />
+                  <TextField label="Hora fin" type="time" value={activity.activity_end_time} onChange={(event) => updateActivity(index, { activity_end_time: event.target.value })} size="small" InputLabelProps={{ shrink: true }} disabled={!canCreateForDate} />
+                  <IconButton aria-label="Eliminar actividad" disabled={!canCreateForDate} onClick={() => removeActivity(index)} sx={{ border: '1px solid #e2e8f0', borderRadius: 1 }}>
                     <DeleteOutlineIcon />
                   </IconButton>
                   <TextField
@@ -506,6 +670,7 @@ export default function StaffingActivitiesPage() {
                     value={activity.activity_observations}
                     onChange={(event) => updateActivity(index, { activity_observations: event.target.value })}
                     size="small"
+                    disabled={!canCreateForDate}
                     sx={{ gridColumn: { xs: '1', md: '1 / 3' } }}
                   />
                   <TextField
@@ -513,6 +678,7 @@ export default function StaffingActivitiesPage() {
                     value={activity.restrictions}
                     onChange={(event) => updateActivity(index, { restrictions: event.target.value })}
                     size="small"
+                    disabled={!canCreateForDate}
                     sx={{ gridColumn: { xs: '1', md: '3 / -1' } }}
                   />
                 </Box>
@@ -523,7 +689,7 @@ export default function StaffingActivitiesPage() {
                 variant="contained"
                 startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
                 onClick={() => void saveDraft()}
-                disabled={saving}
+                disabled={saving || !canCreateForDate}
                 sx={{ textTransform: 'none', fontWeight: 900, bgcolor: colors.blue3, '&:hover': { bgcolor: colors.blue2 } }}
               >
                 Guardar borrador
@@ -560,7 +726,12 @@ export default function StaffingActivitiesPage() {
                   ) : null}
                   {sessions.map((session) => {
                     const status = String(session.status || '').toLowerCase()
-                    const canChange = status === 'draft' && !session.generated_crew_id
+                    const isCreator = Boolean(currentUserId && String(session.created_by || '').trim() === currentUserId)
+                    const isDraft = status === 'draft'
+                    const hasGeneratedCrew = Boolean(session.generated_crew_id)
+                    const isToday = String(session.work_date || date || '').slice(0, 10) === todayYmd()
+                    const canClose = isCreator && isDraft && !hasGeneratedCrew
+                    const canDelete = canClose && isToday
                     return (
                       <TableRow key={session.id} hover>
                         <TableCell sx={{ fontWeight: 800 }}>{session.work_front_name || '-'}</TableCell>
@@ -570,10 +741,10 @@ export default function StaffingActivitiesPage() {
                         <TableCell align="right">{Array.isArray(session.activities) ? session.activities.length : 0}</TableCell>
                         <TableCell>{session.status || '-'}</TableCell>
                         <TableCell align="right">
-                          <IconButton aria-label="Cerrar jornada" disabled={!canChange || closingId === session.id} onClick={() => void closeDay(session.id)}>
+                          <IconButton aria-label="Cerrar jornada" disabled={!canClose || closingId === session.id} onClick={() => void closeDay(session.id)}>
                             {closingId === session.id ? <CircularProgress size={18} /> : <DoneAllIcon />}
                           </IconButton>
-                          <IconButton aria-label="Eliminar borrador" disabled={!canChange || deletingId === session.id} onClick={() => void deleteDraft(session.id)}>
+                          <IconButton aria-label="Eliminar borrador" disabled={!canDelete || deletingId === session.id} onClick={() => void deleteDraft(session.id)}>
                             {deletingId === session.id ? <CircularProgress size={18} /> : <DeleteOutlineIcon />}
                           </IconButton>
                         </TableCell>

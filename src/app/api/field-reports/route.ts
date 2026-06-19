@@ -63,10 +63,52 @@ function resolveFieldReportAuditProjectId(session: any, ...rows: any[]) {
   return optionalText(session?.user?.projectId)
 }
 
+const FIELD_REPORT_SCREEN_RESOURCE_TYPE = 'field_report_screen'
+const FIELD_REPORT_SCREEN_RESOURCE_ID = 'users_field_reports'
+const FIELD_REPORT_AUDIT_TIME_ZONE = 'America/Santiago'
+
+const getTimeZoneOffsetMinutes = (date: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+  }).formatToParts(date)
+  const value = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT'
+  const match = /^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(value)
+  if (!match) return 0
+  const sign = match[1] === '-' ? -1 : 1
+  const hours = Number(match[2] || 0)
+  const minutes = Number(match[3] || 0)
+  return sign * (hours * 60 + minutes)
+}
+
+const getChileDayRange = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: FIELD_REPORT_AUDIT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = new Map(parts.map((part) => [part.type, part.value]))
+  const year = Number(values.get('year'))
+  const month = Number(values.get('month'))
+  const day = Number(values.get('day'))
+  const startGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0))
+  const endGuess = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0))
+  const startOffset = getTimeZoneOffsetMinutes(startGuess, FIELD_REPORT_AUDIT_TIME_ZONE)
+  const endOffset = getTimeZoneOffsetMinutes(endGuess, FIELD_REPORT_AUDIT_TIME_ZONE)
+
+  return {
+    day: `${values.get('year')}-${values.get('month')}-${values.get('day')}`,
+    startIso: new Date(startGuess.getTime() - startOffset * 60 * 1000).toISOString(),
+    endIso: new Date(endGuess.getTime() - endOffset * 60 * 1000).toISOString(),
+  }
+}
+
 async function writeFieldReportAudit(params: {
   supabaseAdmin: any
   session: any
   action: 'create' | 'update' | 'delete' | 'view'
+  resourceType?: string
   resourceId?: string | null
   beforeData?: any
   afterData?: any
@@ -80,11 +122,52 @@ async function writeFieldReportAudit(params: {
     actorEmail: optionalText(params.session?.user?.email),
     actorRole: optionalText(params.session?.user?.role),
     action: params.action,
-    resourceType: 'field_report',
+    resourceType: params.resourceType || 'field_report',
     resourceId: params.resourceId,
     beforeData: params.beforeData,
     afterData: params.afterData,
     metadata: params.metadata
+  })
+}
+
+async function writeFieldReportScreenViewOnce(params: {
+  supabaseAdmin: any
+  session: any
+}) {
+  const companyId = optionalText(params.session?.user?.companyId)
+  const actorUserId = optionalText(params.session?.user?.id)
+  if (!companyId || !actorUserId) return
+
+  const { day, startIso, endIso } = getChileDayRange()
+  const { data, error } = await params.supabaseAdmin
+    .from('pr_platform_audit_logs')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('actor_user_id', actorUserId)
+    .eq('action', 'view')
+    .eq('resource_type', FIELD_REPORT_SCREEN_RESOURCE_TYPE)
+    .eq('resource_id', FIELD_REPORT_SCREEN_RESOURCE_ID)
+    .gte('created_at', startIso)
+    .lt('created_at', endIso)
+    .limit(1)
+
+  if (error) {
+    console.warn('Could not check field report screen view audit log:', error)
+    return
+  }
+  if (Array.isArray(data) && data.length > 0) return
+
+  await writeFieldReportAudit({
+    supabaseAdmin: params.supabaseAdmin,
+    session: params.session,
+    action: 'view',
+    resourceType: FIELD_REPORT_SCREEN_RESOURCE_TYPE,
+    resourceId: FIELD_REPORT_SCREEN_RESOURCE_ID,
+    metadata: {
+      view: 'screen_daily_once_per_day',
+      audit_day: day,
+      time_zone: FIELD_REPORT_AUDIT_TIME_ZONE,
+    },
   })
 }
 
@@ -1490,6 +1573,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(data || [])
     }
 
+    await writeFieldReportScreenViewOnce({ supabaseAdmin, session })
+
     const listSelect = summary
       ? (slim ? FIELD_REPORT_LIST_SLIM_SELECT : (includeCalc ? FIELD_REPORT_DAILY_SUMMARY_SELECT : FIELD_REPORT_LIST_SUMMARY_SELECT))
       : '*'
@@ -1527,14 +1612,6 @@ export async function GET(req: NextRequest) {
       const { data, error } = await q.eq('id', id).single()
       if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
       const enriched = await enrichReportPeople(supabaseAdmin, String(session.user.companyId), data)
-      await writeFieldReportAudit({
-        supabaseAdmin,
-        session,
-        action: 'view',
-        resourceId: id,
-        afterData: enriched || data || null,
-        metadata: buildFieldReportAuditMetadata(enriched || data, { view: 'detail' })
-      })
       return NextResponse.json(enriched)
     }
 
