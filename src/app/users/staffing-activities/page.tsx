@@ -386,7 +386,15 @@ export default function StaffingActivitiesPage() {
   return (
     <>
       <UserHeader title="Dotación y actividades" />
-      <Container maxWidth="xl" sx={{ py: 3 }}>
+      <Container
+        maxWidth={false}
+        sx={{
+          py: 3,
+          width: '100%',
+          maxWidth: '100%',
+          px: 0,
+        }}
+      >
         <Stack spacing={2.5}>
           <Paper sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a', mb: 1.5 }}>Cuadrilla del día</Typography>
