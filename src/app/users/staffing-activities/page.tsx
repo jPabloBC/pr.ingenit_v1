@@ -45,6 +45,7 @@ type Collaborator = {
   document?: string | null
   position?: string | null
   specialty?: string | null
+  worker_type?: string | null
 }
 
 type ReportFront = {
@@ -89,6 +90,63 @@ const fullName = (collaborator: Partial<Collaborator> | null | undefined) =>
     .filter(Boolean)
     .join(' ') || 'Sin nombre'
 
+const fullNameUpper = (collaborator: Partial<Collaborator> | null | undefined) =>
+  fullName(collaborator).toUpperCase()
+
+const formatChileRut = (value: unknown) => {
+  const raw = String(value || '')
+    .replace(/\./g, '')
+    .replace(/-/g, '')
+    .replace(/\s/g, '')
+    .toUpperCase()
+
+  if (!raw || raw.length < 2) return ''
+
+  const body = raw.slice(0, -1).replace(/\D/g, '')
+  const dv = raw.slice(-1)
+
+  if (!body || !/^[0-9K]$/.test(dv)) return String(value || '').trim()
+
+  const formattedBody = body.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+  return `${formattedBody}-${dv}`
+}
+
+const collaboratorPositionUpper = (collaborator: Partial<Collaborator> | null | undefined) => {
+  const position = String(collaborator?.position || '').trim()
+  return position ? position.toUpperCase() : 'SIN CARGO'
+}
+
+const collaboratorSubtitle = (collaborator: Partial<Collaborator> | null | undefined) => {
+  const position = collaboratorPositionUpper(collaborator)
+  const document = formatChileRut(collaborator?.document)
+  return [position, document].filter(Boolean).join(' · ')
+}   
+
+const normalizeRoleText = (value: unknown) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const collaboratorRoleText = (collaborator: Collaborator) =>
+  [
+    collaborator.position,
+    collaborator.specialty,
+    collaborator.worker_type,
+  ]
+    .map(normalizeRoleText)
+    .filter(Boolean)
+    .join(' ')
+
+const isSupervisorCollaborator = (collaborator: Collaborator) =>
+  collaboratorRoleText(collaborator).includes('supervisor')
+
+const isForemanCollaborator = (collaborator: Collaborator) => {
+  const roleText = collaboratorRoleText(collaborator)
+  return roleText.includes('capataz') || roleText.includes('foreman')
+}    
+
 const frontKey = (front: ReportFront, index: number) =>
   String(front.id || front.code || front.name || `front-${index}`)
 
@@ -125,6 +183,16 @@ export default function StaffingActivitiesPage() {
     collaborators.forEach((collaborator) => map.set(String(collaborator.id), collaborator))
     return map
   }, [collaborators])
+
+  const supervisorOptions = useMemo(
+    () => collaborators.filter(isSupervisorCollaborator),
+    [collaborators]
+  )
+
+  const foremanOptions = useMemo(
+    () => collaborators.filter(isForemanCollaborator),
+    [collaborators]
+  )
 
   const selectableMembers = useMemo(
     () => collaborators.filter((collaborator) => collaborator.id !== supervisorId && collaborator.id !== foremanId),
@@ -337,16 +405,34 @@ export default function StaffingActivitiesPage() {
               <FormControl fullWidth>
                 <InputLabel id="supervisor-select-label">Supervisor</InputLabel>
                 <Select labelId="supervisor-select-label" label="Supervisor" value={supervisorId} onChange={(event) => updateSupervisor(String(event.target.value))}>
-                  {collaborators.map((collaborator) => (
-                    <MenuItem key={collaborator.id} value={collaborator.id}>{fullName(collaborator)}</MenuItem>
+                  {supervisorOptions.map((collaborator) => (
+                    <MenuItem key={collaborator.id} value={collaborator.id}>
+                      <Box>
+                        <Typography sx={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>
+                          {fullNameUpper(collaborator)}
+                        </Typography>
+                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                          {collaboratorSubtitle(collaborator)}
+                        </Typography>
+                      </Box>
+                    </MenuItem>
                   ))}
                 </Select>
               </FormControl>
               <FormControl fullWidth>
                 <InputLabel id="foreman-select-label">Capataz</InputLabel>
                 <Select labelId="foreman-select-label" label="Capataz" value={foremanId} onChange={(event) => updateForeman(String(event.target.value))}>
-                  {collaborators.map((collaborator) => (
-                    <MenuItem key={collaborator.id} value={collaborator.id}>{fullName(collaborator)}</MenuItem>
+                  {foremanOptions.map((collaborator) => (
+                    <MenuItem key={collaborator.id} value={collaborator.id}>
+                      <Box>
+                        <Typography sx={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>
+                          {fullNameUpper(collaborator)}
+                        </Typography>
+                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                          {collaboratorSubtitle(collaborator)}
+                        </Typography>
+                      </Box>
+                    </MenuItem>
                   ))}
                 </Select>
               </FormControl>
@@ -379,8 +465,8 @@ export default function StaffingActivitiesPage() {
                       <Checkbox edge="start" checked={checked} tabIndex={-1} disableRipple />
                     </ListItemIcon>
                     <ListItemText
-                      primary={fullName(collaborator)}
-                      secondary={[collaborator.position, collaborator.document].filter(Boolean).join(' · ')}
+                      primary={fullNameUpper(collaborator)}
+                      secondary={collaboratorSubtitle(collaborator)}
                       primaryTypographyProps={{ fontWeight: 800, color: '#0f172a' }}
                       secondaryTypographyProps={{ color: '#64748b', fontSize: 12.5 }}
                     />
