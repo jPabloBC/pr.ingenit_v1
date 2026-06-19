@@ -327,6 +327,7 @@ export async function PUT(req: NextRequest, ctx: any) {
       const crewId = ctx.params.id
 
       let beforeRows: any[] = []
+      let beforeRowsLoaded = false
       try {
         const assignmentIds = orders.map((row) => row.assignmentId).filter(Boolean)
         const activityIds = orders.map((row) => row.activityId).filter(Boolean)
@@ -340,12 +341,29 @@ export async function PUT(req: NextRequest, ctx: any) {
         else if (activityIds.length > 0) beforeQuery = beforeQuery.in('activity_id', activityIds)
         const { data: rows } = await beforeQuery
         beforeRows = rows || []
+        beforeRowsLoaded = true
       } catch {
         beforeRows = []
       }
 
+      const changedOrders = beforeRowsLoaded
+        ? orders.filter((row) => {
+          const existing = beforeRows.find((item: any) => (
+            row.assignmentId
+              ? String(item?.id || '') === row.assignmentId
+              : String(item?.activity_id || '') === row.activityId
+          ))
+          if (!existing) return false
+          return Number(existing?.display_order) !== row.display_order
+        })
+        : orders
+
+      if (changedOrders.length === 0) {
+        return NextResponse.json({ ok: true, no_changes: true })
+      }
+
       let missingDisplayOrderColumn = false
-      for (const row of orders) {
+      for (const row of changedOrders) {
         let q = supabaseAdmin
           .from('pr_crew_activities')
           .update({ display_order: row.display_order })
@@ -373,8 +391,8 @@ export async function PUT(req: NextRequest, ctx: any) {
 
       let afterRows: any[] = []
       try {
-        const assignmentIds = orders.map((row) => row.assignmentId).filter(Boolean)
-        const activityIds = orders.map((row) => row.activityId).filter(Boolean)
+        const assignmentIds = changedOrders.map((row) => row.assignmentId).filter(Boolean)
+        const activityIds = changedOrders.map((row) => row.activityId).filter(Boolean)
         let afterQuery = supabaseAdmin
           .from('pr_crew_activities')
           .select('*')
@@ -398,7 +416,7 @@ export async function PUT(req: NextRequest, ctx: any) {
         metadata: {
           mode: 'reorder',
           work_date: workDate,
-          order_count: orders.length
+          order_count: changedOrders.length
         }
       })
 
@@ -422,6 +440,7 @@ export async function PUT(req: NextRequest, ctx: any) {
     const crewId = ctx.params.id
 
     let beforeRows: any[] = []
+    let beforeRowsLoaded = false
     try {
       let beforeQuery = supabaseAdmin
         .from('pr_crew_activities')
@@ -433,8 +452,21 @@ export async function PUT(req: NextRequest, ctx: any) {
       if (workDate) beforeQuery = beforeQuery.eq('work_date', workDate)
       const { data: rows } = await beforeQuery
       beforeRows = rows || []
+      beforeRowsLoaded = true
     } catch {
       beforeRows = []
+    }
+
+    if (beforeRowsLoaded && beforeRows.length > 0) {
+      const normalizeUserDetail = (value: any) => String(value ?? '').trim()
+      const nextUserDetail = normalizeUserDetail(userDetail)
+      const hasChanges = beforeRows.some((row: any) => {
+        const currentDetail = normalizeUserDetail(row?.user_detail)
+        return currentDetail !== nextUserDetail
+      })
+      if (!hasChanges) {
+        return NextResponse.json({ ok: true, no_changes: true })
+      }
     }
 
     let upd = supabaseAdmin
