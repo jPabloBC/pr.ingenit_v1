@@ -8,6 +8,15 @@ const normalize = (value: unknown) =>
 const uniqueCleanIds = (ids: string[]) =>
   Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)))
 
+const isMissingColumnError = (error: any) => {
+  const message = String(error?.message || '').toLowerCase()
+  return (
+    String(error?.code || '') === '42703' ||
+    (message.includes('column') && message.includes('does not exist')) ||
+    message.includes('posicion')
+  )
+}
+
 const chunk = <T,>(items: T[], size: number) => {
   const chunks: T[][] = []
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
@@ -92,13 +101,25 @@ export async function fetchAvailableCollaborators(params: AvailableCollaborators
 
   const rows: any[] = []
   for (const ids of chunk(turnoIds, 75)) {
-    const { data, error } = await params.supabaseAdmin
+    let data: any[] | null = null
+    let error: any = null
+    ;({ data, error } = await params.supabaseAdmin
       .from('pr_collaborators')
-      .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active, phone, email')
+      .select('id, company_id, first_name, last_name, document, position, posicion, specialty, worker_type, is_active, phone, email')
       .eq('company_id', params.companyId)
       .in('id', ids)
       .order('last_name', { ascending: true })
-      .order('first_name', { ascending: true })
+      .order('first_name', { ascending: true }))
+
+    if (error && isMissingColumnError(error)) {
+      ;({ data, error } = await params.supabaseAdmin
+        .from('pr_collaborators')
+        .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active, phone, email')
+        .eq('company_id', params.companyId)
+        .in('id', ids)
+        .order('last_name', { ascending: true })
+        .order('first_name', { ascending: true }))
+    }
 
     if (error) throw error
     rows.push(...(data || []))
@@ -117,11 +138,21 @@ export async function validateCollaboratorsInTurno(
 
   const collaborators: any[] = []
   for (const ids of chunk(requestedIds, 75)) {
-    const { data, error } = await params.supabaseAdmin
+    let data: any[] | null = null
+    let error: any = null
+    ;({ data, error } = await params.supabaseAdmin
       .from('pr_collaborators')
-      .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active')
+      .select('id, company_id, first_name, last_name, document, position, posicion, specialty, worker_type, is_active')
       .eq('company_id', params.companyId)
-      .in('id', ids)
+      .in('id', ids))
+
+    if (error && isMissingColumnError(error)) {
+      ;({ data, error } = await params.supabaseAdmin
+        .from('pr_collaborators')
+        .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active')
+        .eq('company_id', params.companyId)
+        .in('id', ids))
+    }
 
     if (error) throw error
     collaborators.push(...(data || []))
