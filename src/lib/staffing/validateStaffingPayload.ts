@@ -31,6 +31,8 @@ export type ValidatedStaffingPayload = {
   field_boss_id: string | null
   supervisor_id: string | null
   foreman_id: string | null
+  supervisor_ids: string[]
+  foreman_ids: string[]
   workers: StaffingWorkerInput[]
   activities: StaffingActivityInput[]
   metadata: Record<string, any>
@@ -43,6 +45,26 @@ const clean = (value: unknown) => String(value ?? '').trim()
 const nullableText = (value: unknown) => {
   const text = clean(value)
   return text || null
+}
+
+const normalizeRole = (value: unknown) => {
+  const role = clean(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+
+  if (!role) return null
+  if (role.includes('supervisor')) return 'supervisor'
+  if (role.includes('foreman') || role.includes('capataz')) return 'foreman'
+  if (role.includes('member') || role.includes('integrante') || role.includes('colaborador')) return 'member'
+  return role
+}
+
+const rolePriority = (role: string | null) => {
+  if (role === 'supervisor') return 3
+  if (role === 'foreman') return 2
+  if (role === 'member') return 1
+  return 0
 }
 
 const asObject = (value: unknown): Record<string, any> => {
@@ -83,15 +105,17 @@ export const isValidYmdDate = (value: unknown): value is string => {
 }
 
 const uniqueByCollaboratorId = (workers: StaffingWorkerInput[]) => {
-  const seen = new Set<string>()
-  const out: StaffingWorkerInput[] = []
+  const byId = new Map<string, StaffingWorkerInput>()
   workers.forEach((worker) => {
     const id = clean(worker.collaborator_id)
-    if (!id || seen.has(id)) return
-    seen.add(id)
-    out.push({ ...worker, collaborator_id: id })
+    if (!id) return
+    const normalizedWorker = { ...worker, collaborator_id: id, role: normalizeRole(worker.role) }
+    const current = byId.get(id)
+    if (!current || rolePriority(normalizedWorker.role) > rolePriority(current.role)) {
+      byId.set(id, normalizedWorker)
+    }
   })
-  return out
+  return Array.from(byId.values())
 }
 
 const normalizeWorker = (value: any, defaultRole: string | null = null): StaffingWorkerInput | null => {
@@ -99,7 +123,7 @@ const normalizeWorker = (value: any, defaultRole: string | null = null): Staffin
   if (!collaboratorId) return null
   return {
     collaborator_id: collaboratorId,
-    role: nullableText(typeof value === 'string' ? defaultRole : value?.role ?? defaultRole),
+    role: normalizeRole(typeof value === 'string' ? defaultRole : value?.role ?? defaultRole),
     is_override: Boolean(value?.is_override ?? value?.isOverride ?? false),
     override_reason: nullableText(value?.override_reason ?? value?.overrideReason),
     metadata: asObject(value?.metadata),
@@ -172,9 +196,20 @@ export function validateStaffingPayload(body: any): ValidatedStaffingPayload {
     ...normalizeWorkerList(body?.member_ids, 'member'),
     ...normalizeWorkerList(body?.foremen, 'foreman'),
     ...normalizeWorkerList(body?.foreman_ids, 'foreman'),
+    ...normalizeWorkerList(body?.capataz_ids, 'foreman'),
+    ...normalizeWorkerList(body?.capataz, 'foreman'),
     ...normalizeWorkerList(body?.supervisors, 'supervisor'),
     ...normalizeWorkerList(body?.supervisor_ids, 'supervisor'),
+    ...normalizeWorkerList([body?.foreman_id ?? body?.foremanId ?? body?.capataz_id ?? body?.capatazId ?? collaboratorIdFromValue(body?.foreman ?? body?.capataz)].filter(Boolean), 'foreman'),
+    ...normalizeWorkerList([body?.supervisor_id ?? body?.supervisorId ?? collaboratorIdFromValue(body?.supervisor)].filter(Boolean), 'supervisor'),
   ])
+
+  const supervisorIds = workers
+    .filter((worker) => worker.role === 'supervisor')
+    .map((worker) => worker.collaborator_id)
+  const foremanIds = workers
+    .filter((worker) => worker.role === 'foreman')
+    .map((worker) => worker.collaborator_id)
 
   const activities = activitiesSource
     .map((activity: any, index: number) => normalizeActivity(activity, index))
@@ -188,8 +223,10 @@ export function validateStaffingPayload(body: any): ValidatedStaffingPayload {
     crew_name: nullableText(body?.crew_name ?? body?.crewName ?? body?.name),
     specialty: nullableText(body?.specialty),
     field_boss_id: nullableText(body?.field_boss_id ?? body?.fieldBossId ?? collaboratorIdFromValue(body?.field_boss ?? body?.fieldBoss)),
-    supervisor_id: nullableText(body?.supervisor_id ?? body?.supervisorId ?? collaboratorIdFromValue(body?.supervisor)),
-    foreman_id: nullableText(body?.foreman_id ?? body?.foremanId ?? body?.capataz_id ?? body?.capatazId ?? collaboratorIdFromValue(body?.foreman ?? body?.capataz)),
+    supervisor_id: supervisorIds[0] || null,
+    foreman_id: foremanIds[0] || null,
+    supervisor_ids: supervisorIds,
+    foreman_ids: foremanIds,
     workers,
     activities,
     metadata: asObject(body?.metadata),

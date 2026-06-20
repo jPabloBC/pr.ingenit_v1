@@ -34,11 +34,53 @@ const normalizeCrewMemberRole = (role: any, position: any) => {
   return inferCrewRoleFromPosition(position)
 }
 
+const CREW_SCREEN_RESOURCE_TYPE = 'crew_screen'
+const CREW_SCREEN_RESOURCE_ID = 'users_crews'
+const CREW_AUDIT_TIME_ZONE = 'America/Santiago'
+
+const getTimeZoneOffsetMinutes = (date: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+  }).formatToParts(date)
+  const value = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT'
+  const match = /^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(value)
+  if (!match) return 0
+  const sign = match[1] === '-' ? -1 : 1
+  const hours = Number(match[2] || 0)
+  const minutes = Number(match[3] || 0)
+  return sign * (hours * 60 + minutes)
+}
+
+const getChileDayRange = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: CREW_AUDIT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = new Map(parts.map((part) => [part.type, part.value]))
+  const year = Number(values.get('year'))
+  const month = Number(values.get('month'))
+  const day = Number(values.get('day'))
+  const startGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0))
+  const endGuess = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0, 0))
+  const startOffset = getTimeZoneOffsetMinutes(startGuess, CREW_AUDIT_TIME_ZONE)
+  const endOffset = getTimeZoneOffsetMinutes(endGuess, CREW_AUDIT_TIME_ZONE)
+
+  return {
+    day: `${values.get('year')}-${values.get('month')}-${values.get('day')}`,
+    startIso: new Date(startGuess.getTime() - startOffset * 60 * 1000).toISOString(),
+    endIso: new Date(endGuess.getTime() - endOffset * 60 * 1000).toISOString(),
+  }
+}
+
 const writeCrewAudit = async (
   supabaseAdminClient: any,
   session: any,
   params: {
     action: string
+    resourceType?: string
     resourceId?: string | null
     beforeData?: any
     afterData?: any
@@ -53,11 +95,47 @@ const writeCrewAudit = async (
     actorEmail: session?.user?.email || null,
     actorRole: session?.user?.role || null,
     action: params.action as any,
-    resourceType: 'crew',
+    resourceType: params.resourceType || 'crew',
     resourceId: params.resourceId || null,
     beforeData: params.beforeData,
     afterData: params.afterData,
     metadata: params.metadata || null
+  })
+}
+
+const writeCrewScreenViewOnce = async (supabaseAdminClient: any, session: any) => {
+  const companyId = String(session?.user?.companyId || '').trim()
+  const actorUserId = String(session?.user?.id || '').trim()
+  if (!companyId || !actorUserId) return
+
+  const { day, startIso, endIso } = getChileDayRange()
+  const { data, error } = await supabaseAdminClient
+    .from('pr_platform_audit_logs')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('actor_user_id', actorUserId)
+    .eq('action', 'view')
+    .eq('resource_type', CREW_SCREEN_RESOURCE_TYPE)
+    .eq('resource_id', CREW_SCREEN_RESOURCE_ID)
+    .gte('created_at', startIso)
+    .lt('created_at', endIso)
+    .limit(1)
+
+  if (error) {
+    console.warn('Could not check crew screen view audit log:', error)
+    return
+  }
+  if (Array.isArray(data) && data.length > 0) return
+
+  await writeCrewAudit(supabaseAdminClient, session, {
+    action: 'view',
+    resourceType: CREW_SCREEN_RESOURCE_TYPE,
+    resourceId: CREW_SCREEN_RESOURCE_ID,
+    metadata: {
+      view: 'screen_daily_once_per_day',
+      audit_day: day,
+      time_zone: CREW_AUDIT_TIME_ZONE,
+    },
   })
 }
 
@@ -70,6 +148,7 @@ export async function GET(req: NextRequest, ctx: any) {
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
+    await writeCrewScreenViewOnce(supabaseAdmin, session)
 
     const id = ctx.params.id
     const { data, error } = await supabaseAdmin
@@ -111,11 +190,6 @@ export async function GET(req: NextRequest, ctx: any) {
       const supLegacy = Array.isArray(data.supervisors) ? data.supervisors.map(String) : (data.supervisor ? [String(data.supervisor)] : [])
       const frmLegacy = Array.isArray(data.foremen) ? data.foremen.map(String) : (data.foreman ? [String(data.foreman)] : [])
       const memLegacy = Array.isArray(data.members) ? data.members.map(String) : (data.member ? [String(data.member)] : [])
-      await writeCrewAudit(supabaseAdmin, session, {
-        action: 'view',
-        resourceId: String(id),
-        metadata: { member_count: supLegacy.length + frmLegacy.length + memLegacy.length }
-      })
       return NextResponse.json({ ...data, supervisors: supLegacy, foremen: frmLegacy, members: memLegacy })
     }
 
@@ -126,11 +200,6 @@ export async function GET(req: NextRequest, ctx: any) {
 
     if (collabErr) {
       // If we can't fetch positions, return all as members
-      await writeCrewAudit(supabaseAdmin, session, {
-        action: 'view',
-        resourceId: String(id),
-        metadata: { member_count: collabIds.length, members_fallback: true }
-      })
       return NextResponse.json({ ...data, supervisors: [], foremen: [], members: collabIds })
     }
 
@@ -153,14 +222,6 @@ export async function GET(req: NextRequest, ctx: any) {
       foremen: Array.from(new Set(foremen)),
       members: Array.from(new Set(members))
     }
-
-    await writeCrewAudit(supabaseAdmin, session, {
-      action: 'view',
-      resourceId: String(id),
-      metadata: {
-        member_count: responseData.supervisors.length + responseData.foremen.length + responseData.members.length
-      }
-    })
 
     return NextResponse.json(responseData)
   } catch (err) {

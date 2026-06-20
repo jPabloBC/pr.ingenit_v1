@@ -8,6 +8,15 @@ const normalize = (value: unknown) =>
 const uniqueCleanIds = (ids: string[]) =>
   Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)))
 
+const isMissingColumnError = (error: any) => {
+  const message = String(error?.message || '').toLowerCase()
+  return (
+    String(error?.code || '') === '42703' ||
+    (message.includes('column') && message.includes('does not exist')) ||
+    message.includes('posicion')
+  )
+}
+
 const chunk = <T,>(items: T[], size: number) => {
   const chunks: T[][] = []
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
@@ -21,6 +30,13 @@ export type AvailableCollaboratorsParams = {
   supabaseAdmin: any
   companyId: string
   workDate: string
+}
+
+export type AvailableDatesParams = {
+  supabaseAdmin: any
+  companyId: string
+  startDate: string
+  endDate: string
 }
 
 export type StaffingCollaboratorValidation = {
@@ -46,19 +62,64 @@ export async function fetchTurnoCollaboratorIds(params: AvailableCollaboratorsPa
   )
 }
 
+export async function fetchTurnoAvailableDates(params: AvailableDatesParams) {
+  const buildQuery = () =>
+    params.supabaseAdmin
+      .from('pr_collaborator_daily_status')
+      .select('work_date')
+      .eq('company_id', params.companyId)
+      .gte('work_date', params.startDate)
+      .lte('work_date', params.endDate)
+      .or('status.ilike.turno,reason.eq.11')
+      .not('work_date', 'is', null)
+      .order('work_date', { ascending: true })
+
+  const data: any[] = []
+  const pageSize = 1000
+  let offset = 0
+
+  while (true) {
+    const { data: chunkData, error } = await buildQuery().range(offset, offset + pageSize - 1)
+    if (error) throw error
+
+    const rows = Array.isArray(chunkData) ? chunkData : []
+    data.push(...rows)
+    if (rows.length < pageSize) break
+    offset += pageSize
+  }
+
+  return Array.from(new Set<string>(
+    data
+      .map((row: any) => String(row?.work_date || '').trim().slice(0, 10))
+      .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+  )).sort((a: string, b: string) => a.localeCompare(b))
+}
+
 export async function fetchAvailableCollaborators(params: AvailableCollaboratorsParams) {
   const turnoIds = await fetchTurnoCollaboratorIds(params)
   if (!turnoIds.length) return []
 
   const rows: any[] = []
   for (const ids of chunk(turnoIds, 75)) {
-    const { data, error } = await params.supabaseAdmin
+    let data: any[] | null = null
+    let error: any = null
+    ;({ data, error } = await params.supabaseAdmin
       .from('pr_collaborators')
-      .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active, phone, email')
+      .select('id, company_id, first_name, last_name, document, position, posicion, specialty, worker_type, is_active, phone, email')
       .eq('company_id', params.companyId)
       .in('id', ids)
       .order('last_name', { ascending: true })
-      .order('first_name', { ascending: true })
+      .order('first_name', { ascending: true }))
+
+    if (error && isMissingColumnError(error)) {
+      ;({ data, error } = await params.supabaseAdmin
+        .from('pr_collaborators')
+        .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active, phone, email')
+        .eq('company_id', params.companyId)
+        .in('id', ids)
+        .order('last_name', { ascending: true })
+        .order('first_name', { ascending: true }))
+    }
 
     if (error) throw error
     rows.push(...(data || []))
@@ -77,11 +138,21 @@ export async function validateCollaboratorsInTurno(
 
   const collaborators: any[] = []
   for (const ids of chunk(requestedIds, 75)) {
-    const { data, error } = await params.supabaseAdmin
+    let data: any[] | null = null
+    let error: any = null
+    ;({ data, error } = await params.supabaseAdmin
       .from('pr_collaborators')
-      .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active')
+      .select('id, company_id, first_name, last_name, document, position, posicion, specialty, worker_type, is_active')
       .eq('company_id', params.companyId)
-      .in('id', ids)
+      .in('id', ids))
+
+    if (error && isMissingColumnError(error)) {
+      ;({ data, error } = await params.supabaseAdmin
+        .from('pr_collaborators')
+        .select('id, company_id, first_name, last_name, document, position, specialty, worker_type, is_active')
+        .eq('company_id', params.companyId)
+        .in('id', ids))
+    }
 
     if (error) throw error
     collaborators.push(...(data || []))

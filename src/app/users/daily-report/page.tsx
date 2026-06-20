@@ -8563,14 +8563,14 @@ export default function DailyReportPage() {
       })
 
       const rowFronts = activityRows.map((a: any) => {
-        // Si el reporte de terreno ya viene con frente explícito válido (work_front),
-        // ese frente manda para todo el reporte y evita mezclar CANALETAS/PISCINAS.
-        if (reportFrontHasExplicitValue && reportFrontResolved) return reportFrontResolved
         // Si el reporte tiene frente explícito pero no es base (ej. NOC),
         // se distribuye dinámicamente y se declara en columna UDR/NOC.
         if (reportAssignedUdrFront) {
           return reportAssignedUdrFront === "PISCINAS" ? "NOC_PISCINAS" : "NOC_CANALETAS"
         }
+        // Si el reporte de terreno ya viene con frente explícito válido (work_front),
+        // ese frente manda para todo el reporte y evita mezclar CANALETAS/PISCINAS.
+        if (reportFrontHasExplicitValue && reportFrontResolved) return reportFrontResolved
         if (reportFrontHasExplicitValue && !reportFrontResolved) {
           return isIfaArea(reportFrontRaw) ? "IFA" : null
         }
@@ -8673,11 +8673,11 @@ export default function DailyReportPage() {
       const isCapataz = posText.includes("CAPATAZ")
       if (workerType !== "directo" && !isCapataz) return
       const reportHours = emptyDirectFrontHours()
-      reportHours.ifa = 10
+      reportHours.ifa = activePersonWorkdayHours
       addDirectReportContribution(personReportContributions, pid, {
         reportId: "__SIN_REPORTE_TERRENO__",
         sequence: directContributionSequence++,
-        totalHours: 10,
+        totalHours: activePersonWorkdayHours,
         hours: reportHours
       })
     })
@@ -8706,7 +8706,7 @@ export default function DailyReportPage() {
       if (workerType !== "directo" && !isCapataz) return
 
       const cappedFrontHours = emptyDirectFrontHours()
-      let remainingHours = 10
+      let remainingHours = activePersonWorkdayHours
       const contributions = [...rawContributions]
         .filter((entry) => entry.totalHours > 0)
         .sort((a, b) => {

@@ -12,6 +12,48 @@ const clean = (value: unknown) => String(value || '').trim()
 const jsonError = (message: string, status: number) =>
   NextResponse.json({ error: message }, { status })
 
+const sessionProjectId = (session: any) =>
+  clean(
+    session?.user?.projectId ||
+    session?.user?.project_id ||
+    session?.projectId ||
+    session?.project_id
+  )
+
+const auditCloseAttempt = async (params: {
+  companyId: string
+  projectId?: string | null
+  actorUserId?: string | null
+  actorEmail?: string | null
+  actorRole?: string | null
+  resourceId?: string | null
+  beforeData?: any
+  afterData?: any
+  allowed: boolean
+  reason?: string
+  metadata?: Record<string, any>
+}) => {
+  await writeAuditLog({
+    supabaseAdmin,
+    companyId: params.companyId,
+    projectId: params.projectId || null,
+    actorUserId: params.actorUserId || null,
+    actorEmail: params.actorEmail || null,
+    actorRole: params.actorRole || null,
+    action: 'update',
+    resourceType: 'staffing_activity',
+    resourceId: params.resourceId || null,
+    beforeData: params.beforeData,
+    afterData: params.afterData,
+    metadata: {
+      event: params.allowed ? 'staffing.submit' : 'staffing.submit.rejected',
+      allowed: params.allowed,
+      reason: params.reason || null,
+      ...(params.metadata || {}),
+    },
+  })
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -24,15 +66,13 @@ export async function PATCH(
     const companyId = clean(actor?.companyId || session?.user?.companyId)
     if (!companyId) return jsonError('Missing company_id', 400)
 
-    const role = clean(actor?.role || session?.user?.role).toLowerCase()
-    if (role === 'viewer') return jsonError('Forbidden', 403)
-
     const id = clean(params?.id)
     if (!id) return jsonError('ID requerido', 400)
 
     const body = await req.json().catch(() => ({}))
     const closureNotes = clean(body?.closure_notes ?? body?.closureNotes) || null
     const actorUserId = clean(actor?.userId || session?.user?.id) || null
+    const selectedProjectId = clean(actor?.projectId || sessionProjectId(session))
     const now = new Date().toISOString()
 
     const { data: beforeData, error: fetchError } = await supabaseAdmin
@@ -44,46 +84,73 @@ export async function PATCH(
 
     if (fetchError) return jsonError(fetchError.message, 500)
     if (!beforeData?.id) return jsonError('Sesión de dotación no encontrada', 404)
+
+    const auditBase = {
+      companyId,
+      projectId: beforeData.project_id || selectedProjectId || null,
+      actorUserId,
+      actorEmail: actor?.email || session?.user?.email || null,
+      actorRole: actor?.role || session?.user?.role || null,
+      resourceId: id,
+      beforeData,
+      metadata: {
+        company_id: companyId,
+        project_id: beforeData.project_id || null,
+        work_date: beforeData.work_date || null,
+      },
+    }
+
+    if (selectedProjectId && clean(beforeData.project_id) !== selectedProjectId) {
+      await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'project_scope_mismatch' })
+      return jsonError('Sesión de dotación no encontrada', 404)
+    }
+
+    if (!actorUserId || clean(beforeData.created_by) !== actorUserId) {
+      await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'not_creator' })
+      return jsonError('Forbidden', 403)
+    }
+
     if (clean(beforeData.status) !== 'draft') {
+      await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'not_draft' })
       return jsonError('Solo se pueden cerrar jornadas en estado draft', 409)
+    }
+
+    const metadata = {
+      ...(beforeData.metadata && typeof beforeData.metadata === 'object' && !Array.isArray(beforeData.metadata) ? beforeData.metadata : {}),
+      submitted_notes: closureNotes,
+      submitted_at: now,
+      submitted_by: actorUserId,
     }
 
     const { data: closedSession, error: updateError } = await supabaseAdmin
       .from('pr_field_staffing_sessions')
       .update({
-        status: 'closed',
-        closed_at: now,
-        closed_by: actorUserId,
-        closure_notes: closureNotes,
+        status: 'submitted',
+        submitted_at: now,
         updated_by: actorUserId,
         updated_at: now,
+        metadata,
       })
       .eq('id', id)
       .eq('company_id', companyId)
+      .eq('created_by', actorUserId)
       .eq('status', 'draft')
       .select('*')
       .maybeSingle()
 
     if (updateError) return jsonError(updateError.message, 500)
-    if (!closedSession?.id) return jsonError('La jornada ya no puede cerrarse', 409)
+    if (!closedSession?.id) {
+      await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'submit_conflict' })
+      return jsonError('La jornada ya no puede cerrarse', 409)
+    }
 
-    await writeAuditLog({
-      supabaseAdmin,
-      companyId,
-      projectId: closedSession.project_id || actor?.projectId || session?.user?.projectId || null,
-      actorUserId,
-      actorEmail: actor?.email || session?.user?.email || null,
-      actorRole: actor?.role || session?.user?.role || null,
-      action: 'update',
-      resourceType: 'staffing_activity',
-      resourceId: id,
-      beforeData,
+    await auditCloseAttempt({
+      ...auditBase,
+      allowed: true,
       afterData: closedSession,
       metadata: {
-        event: 'staffing.close',
-        company_id: companyId,
-        project_id: closedSession.project_id || null,
-        work_date: closedSession.work_date || null,
+        ...auditBase.metadata,
+        submitted_at: now,
       },
     })
 

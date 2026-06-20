@@ -22,6 +22,9 @@ const uniqueIds = (ids: Array<string | null | undefined>) =>
 const jsonError = (message: string, status: number) =>
   NextResponse.json({ error: message }, { status })
 
+const jsonErrorWithPayload = (message: string, status: number, payload: Record<string, any>) =>
+  NextResponse.json({ error: message, ...payload }, { status })
+
 const sessionProjectId = (session: any) =>
   clean(
     session?.user?.projectId ||
@@ -108,15 +111,48 @@ const withRoleWorker = (collaboratorId: string | null, role: string) => {
   }
 }
 
+const normalizeStaffingRole = (role: unknown) => {
+  const text = clean(role)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  if (!text) return null
+  if (text.includes('supervisor')) return 'supervisor'
+  if (text.includes('foreman') || text.includes('capataz')) return 'foreman'
+  if (text.includes('member') || text.includes('integrante') || text.includes('colaborador')) return 'member'
+  return text
+}
+
+const staffingRolePriority = (role: string | null) => {
+  if (role === 'supervisor') return 3
+  if (role === 'foreman') return 2
+  if (role === 'member') return 1
+  return 0
+}
+
 const mergeWorkers = (workers: ValidatedStaffingPayload['workers'], extras: Array<ReturnType<typeof withRoleWorker>>) => {
   const byId = new Map<string, ValidatedStaffingPayload['workers'][number]>()
   ;[...extras.filter(Boolean), ...workers].forEach((worker: any) => {
     const id = clean(worker?.collaborator_id)
-    if (!id || byId.has(id)) return
-    byId.set(id, { ...worker, collaborator_id: id })
+    if (!id) return
+    const normalizedWorker = {
+      ...worker,
+      collaborator_id: id,
+      role: normalizeStaffingRole(worker?.role),
+    }
+    const current = byId.get(id)
+    if (!current || staffingRolePriority(normalizedWorker.role) > staffingRolePriority(current.role)) {
+      byId.set(id, normalizedWorker)
+    }
   })
   return Array.from(byId.values())
 }
+
+const roleIdsFromWorkers = (workers: any[], role: 'supervisor' | 'foreman') =>
+  workers
+    .filter((worker) => normalizeStaffingRole(worker?.role) === role)
+    .map((worker) => clean(worker?.collaborator_id))
+    .filter(Boolean)
 
 async function requireStaffingSession(req: NextRequest) {
   const session = (await getServerSession(authOptions as any)) as any
@@ -199,11 +235,20 @@ export async function GET(req: NextRequest) {
     })
 
     return NextResponse.json({
-      sessions: (sessions || []).map((row: any) => ({
-        ...row,
-        workers: workersBySession.get(clean(row?.id)) || [],
-        activities: activitiesBySession.get(clean(row?.id)) || [],
-      })),
+      sessions: (sessions || []).map((row: any) => {
+        const sessionWorkers = workersBySession.get(clean(row?.id)) || []
+        const supervisorIds = roleIdsFromWorkers(sessionWorkers, 'supervisor')
+        const foremanIds = roleIdsFromWorkers(sessionWorkers, 'foreman')
+        return {
+          ...row,
+          supervisor_id: clean(row?.supervisor_id) || supervisorIds[0] || null,
+          foreman_id: clean(row?.foreman_id) || foremanIds[0] || null,
+          supervisor_ids: supervisorIds,
+          foreman_ids: foremanIds,
+          workers: sessionWorkers,
+          activities: activitiesBySession.get(clean(row?.id)) || [],
+        }
+      }),
       date: workDate,
       company_id: companyId,
       project_id: projectId || null,
@@ -244,23 +289,17 @@ export async function POST(req: NextRequest) {
     const workFrontCompanyError = await validateWorkFrontInCompany(payload.work_front_id, companyId)
     if (workFrontCompanyError) return workFrontCompanyError
 
-    const programCompanyError = await validateProgramActivitiesInCompany(
-      payload.activities.map((activity) => activity.program_activity_id).filter(Boolean) as string[],
-      companyId
-    )
-    if (programCompanyError) return programCompanyError
-
     const actorUserId = clean(actor?.userId || session?.user?.id) || null
     const normalizedWorkers = mergeWorkers(payload.workers, [
       withRoleWorker(payload.supervisor_id, 'supervisor'),
       withRoleWorker(payload.foreman_id, 'foreman'),
     ])
+    const supervisorIds = roleIdsFromWorkers(normalizedWorkers, 'supervisor')
+    const foremanIds = roleIdsFromWorkers(normalizedWorkers, 'foreman')
 
     const collaboratorIdsToValidate = uniqueIds([
       ...normalizedWorkers.map((worker) => worker.collaborator_id),
       payload.field_boss_id,
-      payload.supervisor_id,
-      payload.foreman_id,
     ])
 
     const validation = await validateCollaboratorsInTurno({
@@ -280,6 +319,54 @@ export async function POST(req: NextRequest) {
       return jsonError('No todos los colaboradores seleccionados son válidos para la dotación', 400)
     }
 
+    const selectedWorkerIds = uniqueIds(normalizedWorkers.map((worker) => worker.collaborator_id))
+    if (selectedWorkerIds.length) {
+      const { data: existingWorkers, error: existingWorkersError } = await supabaseAdmin
+        .from('pr_field_staffing_workers')
+        .select('session_id, collaborator_id, role')
+        .eq('company_id', companyId)
+        .eq('work_date', payload.work_date)
+        .in('collaborator_id', selectedWorkerIds)
+
+      if (existingWorkersError) return jsonError(existingWorkersError.message, 500)
+
+      const existingSessionIds = uniqueIds((existingWorkers || []).map((worker: any) => worker?.session_id))
+      if (existingSessionIds.length) {
+        const { data: existingSessions, error: existingSessionsError } = await supabaseAdmin
+          .from('pr_field_staffing_sessions')
+          .select('id, work_front_name, status')
+          .eq('company_id', companyId)
+          .eq('work_date', payload.work_date)
+          .in('id', existingSessionIds)
+          .neq('status', 'cancelled')
+
+        if (existingSessionsError) return jsonError(existingSessionsError.message, 500)
+
+        const activeSessionsById = new Map(
+          (existingSessions || []).map((existingSession: any) => [clean(existingSession?.id), existingSession])
+        )
+        const assignedCollaborators = (existingWorkers || [])
+          .map((worker: any) => {
+            const activeSession = activeSessionsById.get(clean(worker?.session_id))
+            if (!activeSession) return null
+            return {
+              collaborator_id: clean(worker?.collaborator_id),
+              session_id: clean(worker?.session_id),
+              work_front_name: clean(activeSession?.work_front_name) || null,
+              role: clean(worker?.role) || null,
+            }
+          })
+          .filter(Boolean)
+
+        if (assignedCollaborators.length) {
+          return jsonErrorWithPayload('Hay colaboradores ya asignados a otra cuadrilla del día', 409, {
+            code: 'STAFFING_COLLABORATORS_ALREADY_ASSIGNED',
+            assigned_collaborators: assignedCollaborators,
+          })
+        }
+      }
+    }
+
     const { data: staffingSession, error: insertSessionError } = await supabaseAdmin
       .from('pr_field_staffing_sessions')
       .insert({
@@ -291,8 +378,8 @@ export async function POST(req: NextRequest) {
         crew_name: payload.crew_name,
         specialty: payload.specialty,
         field_boss_id: payload.field_boss_id,
-        supervisor_id: payload.supervisor_id,
-        foreman_id: payload.foreman_id,
+        supervisor_id: supervisorIds[0] || null,
+        foreman_id: foremanIds[0] || null,
         status: 'draft',
         created_by: actorUserId,
         updated_by: actorUserId,
@@ -317,27 +404,6 @@ export async function POST(req: NextRequest) {
       metadata: worker.metadata,
     }))
 
-    const activityRows = payload.activities.map((activity) => ({
-      session_id: staffingSession.id,
-      company_id: companyId,
-      project_id: projectId,
-      work_date: payload.work_date,
-      program_activity_id: activity.program_activity_id,
-      activity: activity.activity,
-      activity_start_time: activity.activity_start_time,
-      activity_end_time: activity.activity_end_time,
-      activity_observations: activity.activity_observations,
-      restrictions: activity.restrictions,
-      area: activity.area,
-      unit: activity.unit,
-      quantity: activity.quantity,
-      user_detail: activity.user_detail,
-      display_order: activity.display_order,
-      created_by: actorUserId,
-      updated_by: actorUserId,
-      metadata: activity.metadata,
-    }))
-
     const cleanupSession = async () => {
       try {
         await supabaseAdmin
@@ -359,15 +425,6 @@ export async function POST(req: NextRequest) {
       return jsonError(workersResult.error.message, 500)
     }
 
-    const activitiesResult = activityRows.length
-      ? await supabaseAdmin.from('pr_field_activity_logs').insert(activityRows).select('*')
-      : { data: [], error: null }
-
-    if (activitiesResult.error) {
-      await cleanupSession()
-      return jsonError(activitiesResult.error.message, 500)
-    }
-
     await writeAuditLog({
       supabaseAdmin,
       companyId,
@@ -376,28 +433,29 @@ export async function POST(req: NextRequest) {
       actorEmail: actor?.email || session?.user?.email || null,
       actorRole: actor?.role || session?.user?.role || null,
       action: 'create',
-      resourceType: 'staffing_activity',
+      resourceType: 'staffing_session',
       resourceId: clean(staffingSession?.id) || null,
       afterData: {
         session: staffingSession,
         workers: workersResult.data || [],
-        activities: activitiesResult.data || [],
       },
       metadata: {
-        event: 'staffing.create',
+        event: 'staffing.session.create',
         company_id: companyId,
         project_id: projectId,
         work_date: payload.work_date,
         affected_collaborator_ids: collaboratorIdsToValidate,
-        activities_count: payload.activities.length,
+        activities_ignored: payload.activities.length,
       },
     })
 
     return NextResponse.json({
       session: {
         ...staffingSession,
+        supervisor_ids: supervisorIds,
+        foreman_ids: foremanIds,
         workers: workersResult.data || [],
-        activities: activitiesResult.data || [],
+        activities: [],
       },
     }, { status: 201 })
   } catch (err) {
