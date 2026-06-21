@@ -1926,6 +1926,7 @@ function DetailPersonnelEquipmentV2({
   hasNocFrontColumn = false,
   nocFrontColumnLabel,
   fieldReportsForDate = [],
+  reportFrontNames = [],
   nocFrontAssignment,
   prevencionistaFrontDistribution = {
     totalTurno: 0,
@@ -2032,6 +2033,7 @@ function DetailPersonnelEquipmentV2({
   hasNocFrontColumn?: boolean
   nocFrontColumnLabel?: string
   fieldReportsForDate?: any[]
+  reportFrontNames?: string[]
   nocFrontAssignment?: any
   prevencionistaFrontDistribution?: {
     totalTurno: number
@@ -2068,10 +2070,116 @@ function DetailPersonnelEquipmentV2({
     "OFERTA COMERCIAL"
   ]
   const mainFrontLabel = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+  const normalizeDynamicReportFrontLabel = (value: any) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/\s+/g, " ")
+      .trim()
+  const excludedDynamicReportFrontLabels = new Set([
+    "INSTALACION FAENA",
+    "PISCINAS",
+    "CANALETAS",
+    "CONTRATO BASE PISCINAS",
+    "CONTRATO BASE CANALETAS"
+  ])
+  const stripDynamicReportCrewPrefix = (value: any) =>
+    String(value || "")
+      .replace(/^\s*CUADRILLA\s+\d+\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  const reportFrontLabelByNormalized = useMemo(() => {
+    const out = new Map<string, string>()
+    ;(reportFrontNames || []).forEach((name: any) => {
+      const label = String(name || "").replace(/\s+/g, " ").trim()
+      const key = normalizeDynamicReportFrontLabel(label)
+      if (!label || !key || excludedDynamicReportFrontLabels.has(key)) return
+      if (!out.has(key)) out.set(key, label)
+    })
+    return out
+  }, [reportFrontNames])
+  const getDynamicReportNocKeys = (value: any) =>
+    Array.from(
+      normalizeDynamicReportFrontLabel(value).matchAll(/NOC\s+N?[º°]?\s*0*(\d+)/g)
+    )
+      .map((match) => match[1])
+      .filter(Boolean)
+      .map((num) => num.replace(/^0+/, "") || "0")
+  const resolveKnownDynamicReportFrontLabel = (value: any) => {
+    const label = String(value || "").replace(/\s+/g, " ").trim()
+    const key = normalizeDynamicReportFrontLabel(label)
+    if (!label || !key || excludedDynamicReportFrontLabels.has(key)) return ""
+    const exact = reportFrontLabelByNormalized.get(key)
+    if (exact) return exact
+    const nocs = getDynamicReportNocKeys(label)
+    if (!nocs.length) return ""
+    const matches = (reportFrontNames || [])
+      .map((name: any) => String(name || "").replace(/\s+/g, " ").trim())
+      .filter((name: string) => {
+        if (!name || excludedDynamicReportFrontLabels.has(normalizeDynamicReportFrontLabel(name))) return false
+        const nameNocs = getDynamicReportNocKeys(name)
+        return nocs.some((noc) => nameNocs.includes(noc))
+      })
+    return matches.length === 1 ? matches[0] : ""
+  }
+  const parseDynamicReportFrontArray = (value: any): any[] => {
+    if (Array.isArray(value)) return value
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value)
+        if (Array.isArray(parsed)) return parsed
+        if (parsed && typeof parsed === "object") return Object.values(parsed)
+      } catch {}
+    }
+    if (value && typeof value === "object") return Object.values(value)
+    return []
+  }
+  const sourceFieldReportIdsForDetail = useMemo(() => {
+    const ids = Array.isArray((form as any)?.source_field_report_ids)
+      ? (form as any).source_field_report_ids.map((id: any) => String(id || "").trim()).filter(Boolean)
+      : []
+    return new Set(ids)
+  }, [form.source_field_report_ids])
+  const fieldReportsForDetail = useMemo(() => {
+    if (!sourceFieldReportIdsForDetail.size) return []
+    return (fieldReportsForDate || []).filter((report: any) => sourceFieldReportIdsForDetail.has(String(report?.id || "").trim()))
+  }, [fieldReportsForDate, sourceFieldReportIdsForDetail])
+  const dynamicFrontColumnLabels = useMemo(() => {
+    const labels = new Map<string, string>()
+    const add = (value: any) => {
+      const label = resolveKnownDynamicReportFrontLabel(value)
+      const key = normalizeDynamicReportFrontLabel(label)
+      if (!label || !key || labels.has(key)) return
+      labels.set(key, label)
+    }
+    const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const activeBaseFront = activeFront === "PISCINAS" ? "CONTRATO BASE PISCINAS" : "CONTRATO BASE CANALETAS"
+    ;(fieldReportsForDetail || []).forEach((report: any) => {
+      const workFront = report?.work_front
+      const normalizedWorkFront = normalizeDynamicReportFrontLabel(workFront)
+      const isActiveBaseReport = normalizedWorkFront === activeFront || normalizedWorkFront === activeBaseFront
+      const dynamicWorkFront = resolveKnownDynamicReportFrontLabel(workFront)
+      const isDynamicReportForActiveFront = Boolean(dynamicWorkFront)
+
+      if (!isActiveBaseReport && !isDynamicReportForActiveFront) return
+
+      if (dynamicWorkFront) {
+        add(workFront)
+      } else if (isActiveBaseReport) {
+        add(stripDynamicReportCrewPrefix(report?.crew_name))
+      }
+    })
+    return Array.from(labels.values())
+  }, [fieldReportsForDate, form.work_front, nocFrontAssignment, reportFrontLabelByNormalized])
+  const dynamicDotacionFrontLabels = dynamicFrontColumnLabels.length > 0
+    ? dynamicFrontColumnLabels
+    : (hasNocFrontColumn ? [String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"] : [])
+  const resolvedNocFrontColumnLabel = dynamicDotacionFrontLabels[0] || String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"
   const dotacionFrenteColumns = [
     "INSTALACIÓN FAENA",
     mainFrontLabel,
-    ...(hasNocFrontColumn ? [nocFrontColumnLabel || "UDR NOC"] : [])
+    ...dynamicDotacionFrontLabels
   ]
   const equiposColumns = [
     "HM TURNO/DÍA",
@@ -2085,7 +2193,7 @@ function DetailPersonnelEquipmentV2({
   const maquinariaFrenteColumns = [
     "INSTALACIÓN FAENA",
     mainFrontLabel,
-    ...(hasNocFrontColumn ? [nocFrontColumnLabel || "UDR NOC"] : [])
+    ...(hasNocFrontColumn ? [resolvedNocFrontColumnLabel] : [])
   ]
   const isUdrDynamicColumn = (label: string) => {
     const normalized = String(label || "").toUpperCase()
@@ -3356,6 +3464,187 @@ function DetailPersonnelEquipmentV2({
     Object.prototype.hasOwnProperty.call(row as any, "discipline")
       ? "direct"
       : "indirect"
+  const directDynamicFrontDotationByRowKey = useMemo(() => {
+    const out: Record<string, Record<string, number>> = {}
+    const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const activeBaseFront = activeFront === "PISCINAS" ? "CONTRATO BASE PISCINAS" : "CONTRATO BASE CANALETAS"
+
+    const normalizeLabel = (value: any) =>
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/\s+/g, " ")
+        .trim()
+    const excludedLabels = new Set([
+      "INSTALACION FAENA",
+      "PISCINAS",
+      "CANALETAS",
+      "CONTRATO BASE PISCINAS",
+      "CONTRATO BASE CANALETAS"
+    ])
+    const reportFrontByKey = new Map<string, string>()
+    ;(reportFrontNames || []).forEach((name: any) => {
+      const label = String(name || "").replace(/\s+/g, " ").trim()
+      const key = normalizeLabel(label)
+      if (!label || !key || excludedLabels.has(key)) return
+      if (!reportFrontByKey.has(key)) reportFrontByKey.set(key, label)
+    })
+    const getNocKeys = (value: any) =>
+      Array.from(normalizeLabel(value).matchAll(/NOC\s+N?[º°]?\s*0*(\d+)/g))
+        .map((match) => match[1])
+        .filter(Boolean)
+        .map((num) => num.replace(/^0+/, "") || "0")
+    const resolveKnownFrontLabel = (value: any) => {
+      const label = String(value || "").replace(/\s+/g, " ").trim()
+      const key = normalizeLabel(label)
+      if (!label || !key || excludedLabels.has(key)) return ""
+      const exact = reportFrontByKey.get(key)
+      if (exact) return exact
+      const nocs = getNocKeys(label)
+      if (!nocs.length) return ""
+      const matches = (reportFrontNames || [])
+        .map((name: any) => String(name || "").replace(/\s+/g, " ").trim())
+        .filter((name: string) => {
+          if (!name || excludedLabels.has(normalizeLabel(name))) return false
+          const nameNocs = getNocKeys(name)
+          return nocs.some((noc) => nameNocs.includes(noc))
+        })
+      return matches.length === 1 ? matches[0] : ""
+    }
+    const stripCrewPrefix = (value: any) =>
+      String(value || "")
+        .replace(/^\s*CUADRILLA\s+\d+\s+/i, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    const parseArray = (value: any): any[] => {
+      if (Array.isArray(value)) return value
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value)
+          if (Array.isArray(parsed)) return parsed
+          if (parsed && typeof parsed === "object") return Object.values(parsed)
+        } catch {}
+      }
+      if (value && typeof value === "object") return Object.values(value)
+      return []
+    }
+    const parseObject = (value: any): Record<string, any> => {
+      if (!value) return {}
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value)
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+        } catch {
+          return {}
+        }
+      }
+      return typeof value === "object" && !Array.isArray(value) ? value : {}
+    }
+    const collaboratorById = new Map<string, any>()
+    ;(collaboratorsForTooltip || []).forEach((collaborator: any) => {
+      const id = String(collaborator?.id || "").trim()
+      if (id) collaboratorById.set(id, collaborator)
+    })
+    const collaboratorIdByName = new Map<string, string>()
+    ;(collaboratorsForTooltip || []).forEach((collaborator: any) => {
+      const id = String(collaborator?.id || "").trim()
+      if (!id) return
+      const fullName = normalizeLabel(`${String(collaborator?.first_name || "").trim()} ${String(collaborator?.last_name || "").trim()}`)
+      if (fullName) collaboratorIdByName.set(fullName, id)
+    })
+    const resolveParticipantId = (value: any) => {
+      const raw = String(value || "").trim()
+      if (!raw) return ""
+      if (collaboratorById.has(raw)) return raw
+      return collaboratorIdByName.get(normalizeLabel(raw)) || raw
+    }
+    const getPersonName = (person: any) =>
+      `${String(person?.first_name || person?.name || "").trim()} ${String(person?.last_name || "").trim()}`.trim()
+    const getDirectRowKey = (person: any, collaborator: any) => {
+      const position = String(person?.position || person?.role || collaborator?.position || "").trim()
+      if (!position) return ""
+      const roleText = normalizeLabel(`${position} ${person?.specialty || ""} ${collaborator?.specialty || ""}`)
+      const workerType = normalizeLabel(collaborator?.worker_type || person?.worker_type)
+      const isDirect = workerType.includes("DIRECTO") || roleText.includes("CAPATAZ") || Boolean(person?.discipline || person?.specialty || collaborator?.discipline || collaborator?.specialty)
+      if (!isDirect) return ""
+      const specialty = normalizeSpecialtyLabel(person?.specialty || collaborator?.specialty, person?.discipline || collaborator?.discipline, position) || "GENERAL"
+      const discipline = normalizeDirectKeyToken(person?.discipline || collaborator?.discipline || specialty || "GENERAL") || "GENERAL"
+      return getFrontOverrideRowKey({ discipline, specialty, position }, "direct")
+    }
+    const addHours = (rowKey: string, label: string, hours: number, source?: any) => {
+      const labelKey = normalizeLabel(label)
+      if (!rowKey || !labelKey || !(hours > 0)) return
+      out[rowKey] = out[rowKey] || {}
+      out[rowKey][labelKey] = Number(((out[rowKey][labelKey] || 0) + personDotationFromHours(hours, source)).toFixed(2))
+    }
+
+    ;(fieldReportsForDetail || []).forEach((report: any) => {
+      const reportCrewLabel = resolveKnownFrontLabel(stripCrewPrefix(report?.crew_name))
+      const reportWorkFrontLabel = resolveKnownFrontLabel(report?.work_front)
+      const reportDynamicLabel = reportWorkFrontLabel || reportCrewLabel
+      const normalizedWorkFront = normalizeLabel(report?.work_front)
+      const isActiveBaseReport = normalizedWorkFront === activeFront || normalizedWorkFront === activeBaseFront
+      const isDynamicReportForActiveFront = Boolean(reportDynamicLabel)
+      if (!isActiveBaseReport && !isDynamicReportForActiveFront) return
+      const personnel = parseArray(report?.personnel)
+      const personnelById = new Map<string, any>()
+      personnel.forEach((person: any, idx: number) => {
+        const id = String(person?.id || person?.collaborator_id || person?.user_id || person?.personId || idx).trim()
+        if (id) personnelById.set(resolveParticipantId(id), person)
+        const nameId = resolveParticipantId(getPersonName(person))
+        if (nameId) personnelById.set(nameId, person)
+      })
+      const personHours = parseObject(report?.person_hours)
+      const extraHours = parseObject((personHours as any).__extras)
+      const personHoursById: Record<string, any> = {}
+      Object.entries(personHours || {}).forEach(([rawId, hours]) => {
+        if (!rawId || rawId === "__extras") return
+        const id = resolveParticipantId(rawId)
+        if (id) personHoursById[id] = hours
+      })
+      const extraHoursById: Record<string, any> = {}
+      Object.entries(extraHours || {}).forEach(([rawId, hours]) => {
+        const id = resolveParticipantId(rawId)
+        if (id) extraHoursById[id] = hours
+      })
+      const activityRows = mergeFieldReportActivityRowsForFrontCalc(parseArray(report?.assignments), parseArray(report?.activities))
+      const ids = new Set<string>()
+      Object.keys(personHours || {}).forEach((rawId) => {
+        if (!rawId || rawId === "__extras") return
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      Object.keys(extraHours || {}).forEach((rawId) => {
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      parseArray(report?.personnel_ids).forEach((rawId: any) => {
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      personnelById.forEach((_person, id) => ids.add(id))
+
+      Array.from(ids).forEach((id) => {
+        const person = personnelById.get(id) || {}
+        const collaborator = collaboratorById.get(id) || {}
+        const rowKey = getDirectRowKey(person, collaborator)
+        if (!rowKey || !reportDynamicLabel) return
+        const hours = Array.isArray(personHoursById[id]) ? personHoursById[id] : []
+        hours.forEach((rawHours: any, idx: number) => {
+          const hh = Number(rawHours || 0)
+          if (!(hh > 0)) return
+          addHours(rowKey, reportDynamicLabel, hh, report)
+        })
+        const extra = Number((extraHoursById as any)?.[id] || 0)
+        if (extra > 0) {
+          addHours(rowKey, reportDynamicLabel, extra, report)
+        }
+      })
+    })
+
+    return out
+  }, [fieldReportsForDetail, reportFrontNames, collaboratorsForTooltip, form.work_front, nocFrontAssignment])
   const getRowTurnoLimit = (row: any, fallbackValues?: number[], section?: FrontDistributionSection) => {
     const explicitDot = Number(String(row?.dotacionTotalObra ?? "").replace(",", "."))
     const rowSection = section || inferFrontDistributionSection(row)
@@ -3433,8 +3722,27 @@ function DetailPersonnelEquipmentV2({
     return trimFrontValuesToLimit(out, safeLimit)
   }
   const frontDistributionOverrides = parseFrontDistributionOverrides((form as any).v2_front_distribution_overrides)
-  const getBaseFrontValues = (row: any) =>
-    dotacionFrenteColumns.map((_, idx) => Number(getDotacionFrenteValues(row as any)[idx] || 0))
+  const getBaseFrontValues = (row: any) => {
+    const values = getDotacionFrenteValues(row as any)
+    return dotacionFrenteColumns.map((_, idx) => {
+      if (idx >= 2 && inferFrontDistributionSection(row) === "direct") {
+        const rowKey = getFrontOverrideRowKey(row, "direct")
+        const columnLabel = String(dotacionFrenteColumns[idx] || "")
+        const labels = [columnLabel, ...columnLabel.split(/\s+\/\s+/)]
+          .map((label) => normalizeDynamicReportFrontLabel(label))
+          .filter(Boolean)
+        const directDynamicValue = labels.reduce(
+          (acc, labelKey) => acc + Number(directDynamicFrontDotationByRowKey[rowKey]?.[labelKey] || 0),
+          0
+        )
+        if (directDynamicValue > 0) return directDynamicValue
+      }
+      if (idx >= 2 && isUdrDynamicColumn(dotacionFrenteColumns[idx])) {
+        return Number(values[2] || 0)
+      }
+      return Number(values[idx] || 0)
+    })
+  }
   const getVisibleFrontValues = (row: any, section: FrontDistributionSection) => {
     const baseValues = getBaseFrontValues(row)
     const overrideValues = frontDistributionOverrides[getFrontOverrideRowKey(row, section)]
@@ -5283,6 +5591,7 @@ export default function DailyReportPage() {
   const [collaborators, setCollaborators] = useState<CollaboratorLite[]>([])
   const [dailyStatusRows, setDailyStatusRows] = useState<DailyStatusLite[]>([])
   const [fieldReportsForDate, setFieldReportsForDate] = useState<any[]>([])
+  const [reportFrontNames, setReportFrontNames] = useState<string[]>([])
   const collaboratorsLoadPromiseRef = useRef<Record<string, Promise<CollaboratorLite[]>>>({})
   const fieldReportsByDateCacheRef = useRef<Record<string, any[]>>({})
   const [evidenceViewUrls, setEvidenceViewUrls] = useState<Record<string, string>>({})
@@ -5462,6 +5771,17 @@ export default function DailyReportPage() {
     setFieldReportDates(dates)
   }
 
+  const loadReportFrontNames = async () => {
+    const res = await fetch("/api/report-fronts", { cache: "no-store" })
+    const json = await res.json().catch(() => null)
+    if (!res.ok) return
+    const fronts = Array.isArray((json as any)?.fronts) ? (json as any).fronts : []
+    const names = fronts
+      .map((front: any) => String(front?.name || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+    setReportFrontNames(Array.from(new Set(names)))
+  }
+
   const loadCollaborators = async (force = false, asOfDate?: string) => {
     const date = String(asOfDate || form.report_date || "").slice(0, 10)
     const cacheKey = date || "current"
@@ -5533,7 +5853,7 @@ export default function DailyReportPage() {
     ;(async () => {
       setLoading(true)
       try {
-        await Promise.all([loadRecords(), loadCollaborators(), loadFieldReportDates()])
+        await Promise.all([loadRecords(), loadCollaborators(), loadFieldReportDates(), loadReportFrontNames()])
       } catch (err: any) {
         if (!cancelled) showToast(err?.message || "Error cargando historial", "error")
       } finally {
@@ -7017,7 +7337,7 @@ export default function DailyReportPage() {
 
     const nocReports = (fieldReportsForDate || [])
       .filter((report: any) => {
-        const explicitFront = report?.work_front || report?.front || report?.frente || ""
+        const explicitFront = report?.work_front || ""
         const areaText = report?.area || report?.work_area || ""
         const titleText = report?.report_title || report?.title || ""
         const crewText = report?.crew_name || report?.crewName || ""
@@ -7026,10 +7346,10 @@ export default function DailyReportPage() {
       .map((report: any, idx: number) => ({
         idx,
         id: String(report?.id || "").trim(),
-        explicitFront: String(report?.work_front || report?.front || report?.frente || "").trim(),
+        explicitFront: String(report?.work_front || "").trim(),
         label:
           String(report?.report_title || "").trim() ||
-          String(report?.work_front || report?.front || report?.frente || "").trim() ||
+          String(report?.work_front || "").trim() ||
           String(report?.area || report?.work_area || "").trim() ||
           String(report?.crew_name || "").trim() ||
           `NOC ${idx + 1}`,
@@ -7047,17 +7367,18 @@ export default function DailyReportPage() {
 
     nocReports.forEach((report, idx) => {
       // Regla negocio: UDR impares (1, 3, 5...) => CANALETAS,
-      // UDR pares (2, 4, 6...) => PISCINAS.
-      const assignedFront: "CANALETAS" | "PISCINAS" = idx % 2 === 0 ? "CANALETAS" : "PISCINAS"
+      // UDR pares (2, 4, 6...) => PISCINAS. Usar el ordinal real del NOC
+      // cuando existe; el indice queda solo como fallback para reportes antiguos.
+      const explicitOrdinal =
+        extractNocOrdinal(report.explicitFront) ??
+        extractNocOrdinal(report.label)
+      const fallbackOrdinal = explicitOrdinal ?? (idx + 1)
+      const assignedFront: "CANALETAS" | "PISCINAS" = fallbackOrdinal % 2 === 0 ? "PISCINAS" : "CANALETAS"
       if (report.id) byReportId.set(report.id, assignedFront)
       namesByFront[assignedFront].push(report.label)
       const explicitCode =
         extractNocCodeLabel(report.explicitFront) ||
         extractNocCodeLabel(report.label)
-      const explicitOrdinal =
-        extractNocOrdinal(report.explicitFront) ??
-        extractNocOrdinal(report.label)
-      const fallbackOrdinal = explicitOrdinal ?? (idx + 1)
       codesByFront[assignedFront].push(explicitCode || fallbackUdrLabel(report.label, fallbackOrdinal))
     })
 
@@ -8502,12 +8823,42 @@ export default function DailyReportPage() {
     const directIdsReportedInFieldReports = new Set<string>()
     const debugReports: Array<any> = []
     let directContributionSequence = 0
+    const normalizeKnownDynamicFront = (value: any) =>
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/\s+/g, " ")
+        .trim()
+    const excludedKnownDynamicFronts = new Set([
+      "INSTALACION FAENA",
+      "PISCINAS",
+      "CANALETAS",
+      "CONTRATO BASE PISCINAS",
+      "CONTRATO BASE CANALETAS"
+    ])
+    const knownDynamicFrontNames = new Set(
+      (reportFrontNames || [])
+        .map((name: any) => normalizeKnownDynamicFront(name))
+        .filter((name: string) => name && !excludedKnownDynamicFronts.has(name))
+    )
+    const stripCrewFrontPrefix = (value: any) =>
+      String(value || "")
+        .replace(/^\s*CUADRILLA\s+\d+\s+/i, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    const isKnownDynamicFront = (value: any) => {
+      const normalized = normalizeKnownDynamicFront(value)
+      return Boolean(normalized && knownDynamicFrontNames.has(normalized))
+    }
+    const dynamicBucketForBaseFront = (front: "CANALETAS" | "PISCINAS" | null | undefined) =>
+      front === "PISCINAS" ? "NOC_PISCINAS" : "NOC_CANALETAS"
 
     ;(fieldReportsForDate || []).forEach((report: any) => {
       const reportId = String(report?.id || "")
       const assignments = normalizeJsonArray(report?.assignments)
       const activityRows = mergeFieldReportActivityRowsForFrontCalc(assignments, normalizeJsonArray(report?.activities))
-      const reportFrontRaw = String(report?.work_front || report?.front || report?.frente || "").trim()
+      const reportFrontRaw = String(report?.work_front || "").trim()
       const reportIdForFront = String(report?.id || "").trim()
       const reportAssignedUdrFront = nocFrontAssignment.byReportId.get(reportIdForFront)
       const reportFrontHasExplicitValue = reportFrontRaw.length > 0
@@ -8515,6 +8866,8 @@ export default function DailyReportPage() {
       const reportFrontFallback = reportAssignedUdrFront
         ? (reportAssignedUdrFront === "PISCINAS" ? "NOC_PISCINAS" : "NOC_CANALETAS")
         : (isIfaArea(reportFrontRaw) ? "IFA" : reportFrontResolved)
+      const reportCrewDynamicFront = isKnownDynamicFront(stripCrewFrontPrefix(report?.crew_name))
+      const reportDynamicBucket = dynamicBucketForBaseFront(reportAssignedUdrFront || reportFrontResolved || selectedFront)
       const personHoursObj = normalizeJsonObject(report?.person_hours || {})
       const personExtraHoursObj = normalizeJsonObject((personHoursObj as any).__extras || {})
       const personHoursByParticipantId: Record<string, any> = {}
@@ -8563,11 +8916,21 @@ export default function DailyReportPage() {
       })
 
       const rowFronts = activityRows.map((a: any) => {
+        const rawFront = String(a?.work_front || "").trim()
+        const hasExplicitFront = rawFront.length > 0
+        const activityFront = resolveBaseFront(rawFront)
+        if (hasExplicitFront) {
+          if (isKnownDynamicFront(rawFront)) return reportDynamicBucket
+          if (reportCrewDynamicFront) return reportDynamicBucket
+          if (activityFront) return activityFront
+          if (isIfaArea(rawFront)) return "IFA"
+        }
         // Si el reporte tiene frente explícito pero no es base (ej. NOC),
         // se distribuye dinámicamente y se declara en columna UDR/NOC.
         if (reportAssignedUdrFront) {
           return reportAssignedUdrFront === "PISCINAS" ? "NOC_PISCINAS" : "NOC_CANALETAS"
         }
+        if (reportCrewDynamicFront) return reportDynamicBucket
         // Si el reporte de terreno ya viene con frente explícito válido (work_front),
         // ese frente manda para todo el reporte y evita mezclar CANALETAS/PISCINAS.
         if (reportFrontHasExplicitValue && reportFrontResolved) return reportFrontResolved
@@ -8575,12 +8938,7 @@ export default function DailyReportPage() {
           return isIfaArea(reportFrontRaw) ? "IFA" : null
         }
 
-        const rawFront = String(a?.activity_front || a?.work_front || a?.front || a?.frente || a?.area || a?.work_area || a?.sector || "").trim()
-        const hasExplicitFront = rawFront.length > 0
-        const activityFront = resolveBaseFront(rawFront)
         if (hasExplicitFront) {
-          if (activityFront) return activityFront
-          if (isIfaArea(rawFront)) return "IFA"
           return null
         }
         return reportFrontFallback
@@ -8588,7 +8946,7 @@ export default function DailyReportPage() {
       if (DEBUG_DIRECT_FRONT) {
         if (false) console.log("[daily-report][direct-front][row-fronts]", {
           reportId,
-          reportWorkFront: String(report?.work_front || report?.front || report?.frente || ""),
+          reportWorkFront: String(report?.work_front || ""),
           reportFrontFallback,
           rows: activityRows.map((a: any, idx: number) => ({
             idx,
@@ -8627,11 +8985,12 @@ export default function DailyReportPage() {
           if (front === "NOC_PISCINAS") reportHours.nocPiscinas += hh
         })
         if (extraHours > 0) {
-          if (reportFrontFallback === "CANALETAS") reportHours.canaletas += extraHours
-          if (reportFrontFallback === "PISCINAS") reportHours.piscinas += extraHours
-          if (reportFrontFallback === "IFA") reportHours.ifa += extraHours
-          if (reportFrontFallback === "NOC_CANALETAS") reportHours.nocCanaletas += extraHours
-          if (reportFrontFallback === "NOC_PISCINAS") reportHours.nocPiscinas += extraHours
+          const extraHoursFront = reportCrewDynamicFront ? reportDynamicBucket : reportFrontFallback
+          if (extraHoursFront === "CANALETAS") reportHours.canaletas += extraHours
+          if (extraHoursFront === "PISCINAS") reportHours.piscinas += extraHours
+          if (extraHoursFront === "IFA") reportHours.ifa += extraHours
+          if (extraHoursFront === "NOC_CANALETAS") reportHours.nocCanaletas += extraHours
+          if (extraHoursFront === "NOC_PISCINAS") reportHours.nocPiscinas += extraHours
         }
         const totalReportHours =
           Number(reportHours.canaletas || 0) +
@@ -8833,7 +9192,7 @@ export default function DailyReportPage() {
     }
 
     return { front: outByFront[selectedFront], frontByFront: outByFront, ifa: outIfa, noc: outNoc, nocByFront: outNocByFront, ifaByPosition: outIfaByPosition }
-  }, [fieldReportsForDate, collaborators, dailyStatusRows, form.report_date, form.work_front, nocFrontAssignment])
+  }, [fieldReportsForDate, collaborators, dailyStatusRows, form.report_date, form.work_front, nocFrontAssignment, reportFrontNames])
 
   const directFrontDotationByPosition = useMemo(
     () => directDotationByPosition.front,
@@ -8972,7 +9331,7 @@ export default function DailyReportPage() {
     const extractNocLabelFromReport = (report: any) => {
       if (!report || typeof report !== "object") return ""
       const direct =
-        extractNocLabelFromText(report?.work_front || report?.front || report?.frente || "") ||
+        extractNocLabelFromText(report?.work_front || "") ||
         extractNocLabelFromText(report?.area || report?.work_area || "") ||
         extractNocLabelFromText(report?.report_title || "") ||
         extractNocLabelFromText(report?.crew_name || "")
@@ -9049,6 +9408,181 @@ export default function DailyReportPage() {
     if (!codes.length) return "UDR NOC"
     return codes.join(" / ")
   }, [form, form.work_front, nocFrontAssignment, fieldReportsForDate, viewOpen, isViewingHistoryVersion, viewRecord])
+
+  const normalizeDailyReportFrontHeader = (value: unknown) =>
+    String(value ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/\s+/g, " ")
+      .trim()
+
+  const isExcludedDailyReportFrontHeader = (value: unknown) => {
+    const normalized = normalizeDailyReportFrontHeader(value)
+    return [
+      "INSTALACION FAENA",
+      "PISCINAS",
+      "CANALETAS",
+      "CONTRATO BASE PISCINAS",
+      "CONTRATO BASE CANALETAS",
+    ].includes(normalized)
+  }
+
+  const stripDailyReportCrewPrefix = (value: unknown) =>
+    String(value ?? "")
+      .replace(/^\s*CUADRILLA\s+\d+\s+/i, "")
+      .replace(/\s+/g, " ")
+      .trim()
+
+  const getDailyReportNocKeys = (value: unknown) =>
+    Array.from(
+      normalizeDailyReportFrontHeader(value).matchAll(/NOC\s+N?[º°]?\s*0*(\d+)/g)
+    )
+      .map((match) => match[1])
+      .filter(Boolean)
+      .map((num) => num.replace(/^0+/, "") || "0")
+
+  const reportFrontNameByNormalized = useMemo(() => {
+    const grouped = new Map<string, string[]>()
+    ;(reportFrontNames || []).forEach((name: unknown) => {
+      const label = String(name ?? "").replace(/\s+/g, " ").trim()
+      const key = normalizeDailyReportFrontHeader(label)
+      if (!label || !key) return
+      grouped.set(key, [...(grouped.get(key) || []), label])
+    })
+    const unique = new Map<string, string>()
+    grouped.forEach((names, key) => {
+      const distinct = Array.from(new Set(names))
+      if (distinct.length === 1) unique.set(key, distinct[0])
+    })
+    return unique
+  }, [reportFrontNames])
+
+  const resolvedDailyReportDynamicFrontLabel = useMemo(() => {
+    const activeBaseCandidates = new Map<string, string>()
+    const canaletasBaseCandidates = new Map<string, string>()
+    const dynamicWorkFrontCandidates = new Map<string, string>()
+    const allRealCandidates = new Map<string, string>()
+    const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const activeBaseFront = activeFront === "PISCINAS" ? "CONTRATO BASE PISCINAS" : "CONTRATO BASE CANALETAS"
+    const hintNocs = getDailyReportNocKeys(nocFrontColumnLabel)
+
+    const addCandidate = (bucket: Map<string, string>, value: unknown) => {
+      const label = String(value ?? "").replace(/\s+/g, " ").trim()
+      if (!label || isExcludedDailyReportFrontHeader(label)) return
+
+      const key = normalizeDailyReportFrontHeader(label)
+      if (!key || bucket.has(key)) return
+
+      bucket.set(key, label)
+    }
+    const addRealCandidate = (value: unknown) => addCandidate(allRealCandidates, value)
+
+    const resolveCrewFrontName = (value: unknown) => {
+      const candidate = stripDailyReportCrewPrefix(value)
+      if (!candidate || isExcludedDailyReportFrontHeader(candidate)) return ""
+      const exact = reportFrontNameByNormalized.get(normalizeDailyReportFrontHeader(candidate))
+      if (exact) return exact
+      const candidateNocs = getDailyReportNocKeys(candidate)
+      if (!candidateNocs.length) return ""
+      const matches = (reportFrontNames || [])
+        .map((name: unknown) => String(name ?? "").replace(/\s+/g, " ").trim())
+        .filter((name) => {
+          if (!name || isExcludedDailyReportFrontHeader(name)) return false
+          const nameNocs = getDailyReportNocKeys(name)
+          return candidateNocs.some((noc) => nameNocs.includes(noc))
+        })
+      return matches.length === 1 ? matches[0] : ""
+    }
+    const resolveWorkFrontName = (value: unknown) => {
+      const label = String(value ?? "").replace(/\s+/g, " ").trim()
+      if (!label || isExcludedDailyReportFrontHeader(label)) return ""
+      const exact = reportFrontNameByNormalized.get(normalizeDailyReportFrontHeader(label))
+      if (exact) return exact
+      const labelNocs = getDailyReportNocKeys(label)
+      if (!labelNocs.length) return label
+      const matches = (reportFrontNames || [])
+        .map((name: unknown) => String(name ?? "").replace(/\s+/g, " ").trim())
+        .filter((name) => {
+          if (!name || isExcludedDailyReportFrontHeader(name)) return false
+          const nameNocs = getDailyReportNocKeys(name)
+          return labelNocs.some((noc) => nameNocs.includes(noc))
+        })
+      return matches.length === 1 ? matches[0] : label
+    }
+
+    const chooseByHint = (labels: string[]) => {
+      if (!hintNocs.length) return ""
+      const matches = labels.filter((label) => {
+        const labelNocs = getDailyReportNocKeys(label)
+        return hintNocs.some((noc) => labelNocs.includes(noc))
+      })
+      return matches.length === 1 ? matches[0] : ""
+    }
+    const joinLabels = (labels: string[]) => Array.from(new Set(
+      labels
+        .map((label) => String(label || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+    )).join(" / ")
+
+    const isSameFrontLabel = (left: unknown, right: unknown) =>
+      normalizeDailyReportFrontHeader(left) === normalizeDailyReportFrontHeader(right)
+
+    ;(fieldReportsForDate || []).forEach((report: any) => {
+      const workFront = String(report?.work_front ?? "").replace(/\s+/g, " ").trim()
+      const normalizedWorkFront = normalizeDailyReportFrontHeader(workFront)
+      const isActiveBaseReport = normalizedWorkFront === activeFront || normalizedWorkFront === activeBaseFront
+      const isCanaletasBaseReport = normalizedWorkFront === "CANALETAS" || normalizedWorkFront === "CONTRATO BASE CANALETAS"
+      const resolvedCrewFront = resolveCrewFrontName(report?.crew_name)
+
+      addRealCandidate(resolvedCrewFront)
+
+      if (isActiveBaseReport) {
+        addCandidate(activeBaseCandidates, resolvedCrewFront)
+      }
+
+      if (isCanaletasBaseReport) {
+        addCandidate(canaletasBaseCandidates, resolvedCrewFront)
+      }
+
+      const resolvedWorkFront = resolveWorkFrontName(workFront)
+      if (resolvedWorkFront) {
+        addRealCandidate(resolvedWorkFront)
+      }
+
+      if (!isActiveBaseReport && resolvedWorkFront) {
+        addCandidate(dynamicWorkFrontCandidates, resolvedWorkFront)
+      }
+    })
+
+    const activeBaseLabels = Array.from(activeBaseCandidates.values())
+    const dynamicWorkFrontLabels = Array.from(dynamicWorkFrontCandidates.values())
+    const canaletasBaseLabels = Array.from(canaletasBaseCandidates.values())
+    const canaletasResolvedLabel = chooseByHint(canaletasBaseLabels) || (canaletasBaseLabels.length === 1 ? canaletasBaseLabels[0] : "")
+
+    const activeBaseByHint = chooseByHint(activeBaseLabels)
+    let selected = activeBaseByHint || (activeBaseLabels.length >= 1 ? joinLabels(activeBaseLabels) : "")
+
+    if (activeFront === "PISCINAS" && selected && canaletasResolvedLabel && isSameFrontLabel(selected, canaletasResolvedLabel)) {
+      const alternateDynamicLabels = dynamicWorkFrontLabels.filter((label) => !isSameFrontLabel(label, canaletasResolvedLabel))
+      const alternateByHint = chooseByHint(alternateDynamicLabels)
+      if (alternateByHint) return alternateByHint
+      if (alternateDynamicLabels.length >= 1) return joinLabels(alternateDynamicLabels)
+      return ""
+    }
+
+    if (selected) return selected
+
+    const dynamicLabels = activeFront === "PISCINAS" && canaletasResolvedLabel
+      ? dynamicWorkFrontLabels.filter((label) => !isSameFrontLabel(label, canaletasResolvedLabel))
+      : dynamicWorkFrontLabels
+    const dynamicByHint = chooseByHint(dynamicLabels)
+    if (dynamicByHint) return dynamicByHint
+
+    if (dynamicLabels.length >= 1) return joinLabels(dynamicLabels)
+
+    return ""
+  }, [fieldReportsForDate, form.work_front, nocFrontColumnLabel, reportFrontNameByNormalized, reportFrontNames])
 
   const getV2DotacionFrenteValues = (row: {
     position?: string
@@ -10981,7 +11515,7 @@ export default function DailyReportPage() {
       const extractNocLabelFromReportForSave = (report: any) => {
         if (!report || typeof report !== "object") return ""
         const direct =
-          extractNocLabelFromTextForSave(report?.work_front || report?.front || report?.frente || "") ||
+          extractNocLabelFromTextForSave(report?.work_front || "") ||
           extractNocLabelFromTextForSave(report?.report_title || "") ||
           extractNocLabelFromTextForSave(report?.area || report?.work_area || "") ||
           extractNocLabelFromTextForSave(report?.crew_name || "")
@@ -12567,8 +13101,9 @@ export default function DailyReportPage() {
                       collaboratorsForTooltip={collaborators}
                       dailyStatusRowsForTooltip={dailyStatusRows}
                       hasNocFrontColumn={hasNocFrontColumn}
-                      nocFrontColumnLabel={nocFrontColumnLabel}
+                      nocFrontColumnLabel={resolvedDailyReportDynamicFrontLabel}
                       fieldReportsForDate={fieldReportsForDate}
+                      reportFrontNames={reportFrontNames}
                       nocFrontAssignment={nocFrontAssignment}
                       prevencionistaFrontDistribution={prevencionistaFrontDistribution}
                       usePersistedSnapshotValues={Boolean(isViewingHistoryVersion || viewOpen || (!editingId && indirectHoursSettingsMatchSaved))}
@@ -13242,8 +13777,9 @@ export default function DailyReportPage() {
                         collaboratorsForTooltip={collaborators}
                         dailyStatusRowsForTooltip={dailyStatusRows}
                         hasNocFrontColumn={hasNocFrontColumn}
-                        nocFrontColumnLabel={nocFrontColumnLabel}
+                        nocFrontColumnLabel={resolvedDailyReportDynamicFrontLabel}
                         fieldReportsForDate={fieldReportsForDate}
+                        reportFrontNames={reportFrontNames}
                         nocFrontAssignment={nocFrontAssignment}
                         prevencionistaFrontDistribution={prevencionistaFrontDistribution}
                         usePersistedSnapshotValues={Boolean(editingId) || isViewingHistoryVersion || viewOpen || indirectHoursSettingsMatchSaved}
