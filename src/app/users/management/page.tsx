@@ -233,6 +233,7 @@ type DayDashboardRow = {
   peopleRows: number;
   reports: number;
   indirectTurnoTotal: number;
+  indirectTurnoHhTotal?: number;
   bySpecialty: GroupSummary[];
   byFront: GroupSummary[];
   byFrontSpecialty: Array<{ front: string; specialties: GroupSummary[] }>;
@@ -938,20 +939,56 @@ const getReportDirectRows = (report: FieldReportRecord) => {
   return directRows;
 };
 
+const getExplicitAssignmentFrontLabel = (row: any) =>
+  normalizeLabel(row?.activity_front || row?.work_front || row?.front || row?.frente || '');
+
+const isBaseFrontLabel = (front: string) =>
+  front === 'CANALETAS' ||
+  front === 'PISCINAS' ||
+  front.includes('CONTRATO BASE CANALETAS') ||
+  front.includes('CONTRATO BASE PISCINAS');
+
+const getFrontLabelFromCrewName = (report: FieldReportRecord) => {
+  const crew = normalizeLabel(report?.crew_name || '');
+  const front = crew.replace(/^CUADRILLA\s+\d+\s+/, '').trim();
+  if (!front || isBaseFrontLabel(front)) return '';
+  return front.includes('NOC') || front.includes('USO DE RECURSOS') || front.includes('EJECUCION')
+    ? front
+    : '';
+};
+
+const getReportLevelFrontLabel = (report: FieldReportRecord) => {
+  const explicit = normalizeLabel(
+    report?.work_front ||
+    report?.front ||
+    report?.frente ||
+    report?.front_name ||
+    report?.report_title ||
+    report?.contract_name ||
+    report?.contract ||
+    ''
+  );
+  const crewFront = getFrontLabelFromCrewName(report);
+  if (explicit && isBaseFrontLabel(explicit) && crewFront) return crewFront;
+  return explicit;
+};
+
 const getFrontLabelForRow = (row: any, report: FieldReportRecord) => {
   return normalizeLabel(
     row?.activity_front ||
     row?.work_front ||
     row?.front ||
     row?.frente ||
-    report?.work_front ||
-    report?.front ||
-    report?.frente ||
-    report?.front_name ||
-    report?.contract_name ||
-    report?.contract ||
+    getReportLevelFrontLabel(report) ||
     'SIN FRENTE'
   );
+};
+
+const getFrontLabelForAssignmentHour = (row: any, report: FieldReportRecord, strictBaseFront: string) => {
+  const assignmentFront = getExplicitAssignmentFrontLabel(row);
+  if (assignmentFront && (!strictBaseFront || !isBaseFrontLabel(assignmentFront))) return assignmentFront;
+  if (strictBaseFront) return strictBaseFront;
+  return getFrontLabelForRow(null, report);
 };
 
 const getReportDirectFrontRows = (report: FieldReportRecord) => {
@@ -989,24 +1026,13 @@ const getReportDirectFrontRows = (report: FieldReportRecord) => {
       const parsed = toNumber(value);
       if (parsed <= 0) return;
       hhTotal += parsed;
-      const front = getFrontLabelForRow(assignmentRows[hourIdx], report);
+      const front = getFrontLabelForAssignmentHour(assignmentRows[hourIdx], report, strictBaseFront);
       hhByFront.set(front, Number(hhByFront.get(front) || 0) + parsed);
     });
 
     if (hhTotal <= 0 && extra <= 0) return;
 
     if (hhTotal > 0) {
-      if (strictBaseFront) {
-        out.push({
-          front: strictBaseFront,
-          specialty,
-          hh: hhTotal,
-          hhExtras: extra,
-          personKey: key,
-          directCount: 1,
-        });
-        return;
-      }
       const rankedFronts = Array.from(hhByFront.entries())
         .sort((a, b) => {
           if (b[1] !== a[1]) return b[1] - a[1];
@@ -1027,7 +1053,7 @@ const getReportDirectFrontRows = (report: FieldReportRecord) => {
       return;
     }
 
-    const fallbackFront = getFrontLabelForRow(null, report);
+    const fallbackFront = strictBaseFront || getFrontLabelForRow(null, report);
     out.push({ front: fallbackFront, specialty, hh: 0, hhExtras: extra, personKey: key, directCount: 1 });
   });
 
@@ -1066,15 +1092,16 @@ const getReportPersonnelFrontRows = (report: FieldReportRecord) => {
     const hours = getPersonHoursForRow(personHours, row, idx);
     const extra = getPersonExtraHoursForRow(extras, row, idx);
     const hhByFront = new Map<string, number>();
+    let hhTotal = 0;
 
     hours.forEach((value: any, hourIdx: number) => {
       const parsed = toNumber(value);
       if (parsed <= 0) return;
+      hhTotal += parsed;
       const front = getFrontLabelForRow(assignmentRows[hourIdx], report);
       hhByFront.set(front, Number(hhByFront.get(front) || 0) + parsed);
     });
 
-    const hhTotal = Array.from(hhByFront.values()).reduce((acc, value) => acc + Number(value || 0), 0);
     const common = {
       personKey: key,
       name: getPersonName(row),
@@ -4853,10 +4880,9 @@ export default function ManagementPage() {
                       <Typography sx={{ color: '#64748b' }}>No hay HH directas declaradas para mostrar.</Typography>
                     </Paper>
                   ) : (
-                    dashboardByDay.map((day, index) => (
+                    dashboardByDay.map((day) => (
                       <Accordion
                         key={day.date}
-                        defaultExpanded={index === 0}
                         disableGutters
                         sx={{
                           border: '1px solid #d8dee9',
@@ -4904,6 +4930,9 @@ export default function ManagementPage() {
                               </Typography>
                               <Typography sx={{ color: '#dbeafe' }}>
                                 Indirectos Turno: {day.indirectTurnoTotal}
+                              </Typography>
+                              <Typography sx={{ color: '#dbeafe' }}>
+                                HH Indirectos: {formatNumber(day.indirectTurnoHhTotal || 0)}
                               </Typography>
                             </Stack>
                           </Stack>
@@ -5037,22 +5066,35 @@ export default function ManagementPage() {
                                   <TableRow>
                                     <TableCell sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Cargo</TableCell>
                                     <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Indirectos</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
                                   {day.indirectTurnoByPosition.length === 0 ? (
                                     <TableRow>
-                                      <TableCell colSpan={2} sx={{ color: '#64748b', fontStyle: 'italic', py: 0.45, px: 1 }}>
+                                      <TableCell colSpan={3} sx={{ color: '#64748b', fontStyle: 'italic', py: 0.45, px: 1 }}>
                                         Sin indirectos en Turno para esta fecha.
                                       </TableCell>
                                     </TableRow>
                                   ) : (
-                                    day.indirectTurnoByPosition.map((item) => (
-                                      <TableRow key={item.label}>
-                                        <TableCell sx={{ py: 0.45, px: 1 }}>{item.label}</TableCell>
-                                        <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
+                                    <>
+                                      {day.indirectTurnoByPosition.map((item) => (
+                                        <TableRow key={item.label}>
+                                          <TableCell sx={{ py: 0.45, px: 1 }}>{item.label}</TableCell>
+                                          <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
+                                        </TableRow>
+                                      ))}
+                                      <TableRow>
+                                        <TableCell sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>TOTAL</TableCell>
+                                        <TableCell align="center" sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>
+                                          {day.indirectTurnoTotal}
+                                        </TableCell>
+                                        <TableCell align="right" sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>
+                                          {formatNumber(day.indirectTurnoHhTotal || 0)}
+                                        </TableCell>
                                       </TableRow>
-                                    ))
+                                    </>
                                   )}
                                 </TableBody>
                               </Table>

@@ -48,6 +48,7 @@ const FIELD_REPORT_MANAGEMENT_HH_SELECT = [
 ].join(', ')
 
 const HH_MATRIX_WEEK_ONE_START = '2026-04-06'
+const CURRENT_WORKDAY_START_DATE = '2026-06-16'
 
 const parseJsonMaybe = (value: any) => {
   if (typeof value !== 'string') return value
@@ -311,20 +312,56 @@ const getPersonExtraHoursForRow = (extras: Record<string, any>, row: any, idx: n
   return 0
 }
 
+const getExplicitAssignmentFrontLabel = (row: any) =>
+  normalizeLabel(row?.activity_front || row?.work_front || row?.front || row?.frente || '')
+
+const isBaseFrontLabel = (front: string) =>
+  front === 'CANALETAS' ||
+  front === 'PISCINAS' ||
+  front.includes('CONTRATO BASE CANALETAS') ||
+  front.includes('CONTRATO BASE PISCINAS')
+
+const getFrontLabelFromCrewName = (report: any) => {
+  const crew = normalizeLabel(report?.crew_name || '')
+  const front = crew.replace(/^CUADRILLA\s+\d+\s+/, '').trim()
+  if (!front || isBaseFrontLabel(front)) return ''
+  return front.includes('NOC') || front.includes('USO DE RECURSOS') || front.includes('EJECUCION')
+    ? front
+    : ''
+}
+
+const getReportLevelFrontLabel = (report: any) => {
+  const explicit = normalizeLabel(
+    report?.work_front ||
+    report?.front ||
+    report?.frente ||
+    report?.front_name ||
+    report?.report_title ||
+    report?.contract_name ||
+    report?.contract ||
+    ''
+  )
+  const crewFront = getFrontLabelFromCrewName(report)
+  if (explicit && isBaseFrontLabel(explicit) && crewFront) return crewFront
+  return explicit
+}
+
 const getFrontLabelForRow = (row: any, report: any) => {
   return normalizeLabel(
     row?.activity_front ||
     row?.work_front ||
     row?.front ||
     row?.frente ||
-    report?.work_front ||
-    report?.front ||
-    report?.frente ||
-    report?.front_name ||
-    report?.contract_name ||
-    report?.contract ||
+    getReportLevelFrontLabel(report) ||
     'SIN FRENTE'
   )
+}
+
+const getFrontLabelForAssignmentHour = (row: any, report: any, strictBaseFront: string) => {
+  const assignmentFront = getExplicitAssignmentFrontLabel(row)
+  if (assignmentFront && (!strictBaseFront || !isBaseFrontLabel(assignmentFront))) return assignmentFront
+  if (strictBaseFront) return strictBaseFront
+  return getFrontLabelForRow(null, report)
 }
 
 const getPersonLookupNamePositionKey = (name: any, position: any) => {
@@ -462,17 +499,13 @@ const getReportDirectFrontRows = (report: any) => {
       const parsed = toNumber(value)
       if (parsed <= 0) return
       hhTotal += parsed
-      const front = getFrontLabelForRow(assignmentRows[hourIdx], report)
+      const front = getFrontLabelForAssignmentHour(assignmentRows[hourIdx], report, strictBaseFront)
       hhByFront.set(front, Number(hhByFront.get(front) || 0) + parsed)
     })
 
     if (hhTotal <= 0 && extra <= 0) return
 
     if (hhTotal > 0) {
-      if (strictBaseFront) {
-        out.push({ front: strictBaseFront, specialty, hh: hhTotal, hhExtras: extra, personKey: key, directCount: 1 })
-        return
-      }
       const rankedFronts = Array.from(hhByFront.entries()).sort((a, b) => {
         if (b[1] !== a[1]) return b[1] - a[1]
         return a[0].localeCompare(b[0], 'es')
@@ -492,7 +525,7 @@ const getReportDirectFrontRows = (report: any) => {
       return
     }
 
-    const fallbackFront = getFrontLabelForRow(null, report)
+    const fallbackFront = strictBaseFront || getFrontLabelForRow(null, report)
     out.push({ front: fallbackFront, specialty, hh: 0, hhExtras: extra, personKey: key, directCount: 1 })
   })
 
@@ -715,7 +748,8 @@ const fetchIndirectTurnoByDateAndPosition = async (companyId: string, dateFrom: 
     if (!workDate || normalizeText(collaborator?.worker_type) !== 'indirecto') return
     const position = normalizeLabel(collaborator?.position || 'SIN CARGO')
     const byPosition = out.get(workDate) || new Map<string, GroupSummary>()
-    upsertGroup(byPosition, position, 11, 0)
+    const turnoHours = workDate >= CURRENT_WORKDAY_START_DATE ? 11 : 10
+    upsertGroup(byPosition, position, turnoHours, 0)
     out.set(workDate, byPosition)
   })
 
@@ -897,14 +931,15 @@ const buildSummary = (
       primaryFrontByPerson.set(personKey, primaryFront)
       directAssigneeByFront.set(primaryFront, Number(directAssigneeByFront.get(primaryFront) || 0) + 1)
     })
+    const indirectTurnoRows = Array.from((indirectTurnoByDateAndPosition.get(day.date) || new Map<string, GroupSummary>()).values())
     return {
       date: day.date,
       hh: day.hh,
       hhExtras: day.hhExtras,
       peopleRows: day.directPeople.size,
       reports: day.reports.size,
-      indirectTurnoTotal: Array.from((indirectTurnoByDateAndPosition.get(day.date) || new Map<string, GroupSummary>()).values())
-        .reduce((acc, item) => acc + Number(item.peopleRows || 0), 0),
+      indirectTurnoTotal: indirectTurnoRows.reduce((acc, item) => acc + Number(item.peopleRows || 0), 0),
+      indirectTurnoHhTotal: indirectTurnoRows.reduce((acc, item) => acc + Number(item.hh || 0), 0),
       bySpecialty: sortGroups(Array.from(day.bySpecialty.values())),
       byFront: sortedByFront.map((frontGroup) => ({
         ...frontGroup,
@@ -920,8 +955,7 @@ const buildSummary = (
           }),
       })),
       byPosition: sortGroups(Array.from(day.byPosition.values())),
-      indirectTurnoByPosition: Array.from((indirectTurnoByDateAndPosition.get(day.date) || new Map<string, GroupSummary>()).values())
-        .sort((a, b) => a.label.localeCompare(b.label, 'es')),
+      indirectTurnoByPosition: indirectTurnoRows.sort((a, b) => a.label.localeCompare(b.label, 'es')),
       specialtyAudit: Array.from(day.specialtyAudit.entries()).map(([specialty, audit]) => ({
         specialty,
         declaredRows: Number(audit.declaredRows || 0),
