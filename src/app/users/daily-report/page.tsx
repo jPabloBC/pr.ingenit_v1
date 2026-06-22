@@ -11228,32 +11228,6 @@ export default function DailyReportPage() {
         equip_total_qty: oneDecimalFormValue(effectiveV2SummaryMetrics.current.equipmentCount || 0),
         equip_total_hm: oneDecimalFormValue(effectiveV2SummaryMetrics.current.equipmentHm || 0)
       }
-      const sector4Snapshot = {
-        s4_prev_indirect_dot: Number(v2SummaryMetrics.previous.indirectDot || 0),
-        s4_prev_indirect_hh: Number(v2SummaryMetrics.previous.indirectHh || 0),
-        s4_prev_direct_dot: Number(v2SummaryMetrics.previous.directDot || 0),
-        s4_prev_direct_hh: Number(v2SummaryMetrics.previous.directHh || 0),
-        s4_prev_total_dot: Number(v2SummaryMetrics.previous.totalDot || 0),
-        s4_prev_total_hh: Number(v2SummaryMetrics.previous.totalHh || 0),
-        s4_prev_major_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.majorHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_prev_major_hm: Number(v2SummaryMetrics.previous.majorHm || 0),
-        s4_prev_minor_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.minorHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_prev_minor_hm: Number(v2SummaryMetrics.previous.minorHm || 0),
-        s4_prev_total_equip: Number(resolveMachineDotationFromHours(v2SummaryMetrics.previous.equipmentHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_prev_total_hm: Number(v2SummaryMetrics.previous.equipmentHm || 0),
-        s4_curr_indirect_dot: Number(effectiveV2SummaryMetrics.current.indirectDot || 0),
-        s4_curr_indirect_hh: Number(effectiveV2SummaryMetrics.current.indirectHh || 0),
-        s4_curr_direct_dot: Number(effectiveV2SummaryMetrics.current.directDot || 0),
-        s4_curr_direct_hh: Number(effectiveV2SummaryMetrics.current.directHh || 0),
-        s4_curr_total_dot: Number(effectiveV2SummaryMetrics.current.totalDot || 0),
-        s4_curr_total_hh: Number(effectiveV2SummaryMetrics.current.totalHh || 0),
-        s4_curr_major_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.majorHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_curr_major_hm: Number(effectiveV2SummaryMetrics.current.majorHm || 0),
-        s4_curr_minor_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.minorHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_curr_minor_hm: Number(effectiveV2SummaryMetrics.current.minorHm || 0),
-        s4_curr_total_equip: Number(resolveMachineDotationFromHours(effectiveV2SummaryMetrics.current.equipmentHm || 0, workdayMetadataForSave || form).toFixed(2)),
-        s4_curr_total_hm: Number(effectiveV2SummaryMetrics.current.equipmentHm || 0)
-      }
       const toSnapshotNumber = (value: unknown) => {
         if (typeof value === "number") return Number.isFinite(value) ? value : 0
         const raw = String(value ?? "").trim()
@@ -11471,6 +11445,41 @@ export default function DailyReportPage() {
           ...visibleSummaryFromRows
         }
       })()
+      const roundS4Hm = (value: number) => Number((Number.isFinite(value) ? value : 0).toFixed(2))
+      const s4PrevMajorHm = roundS4Hm(Number(v2SummaryMetrics.previous.majorHm || 0))
+      const s4PrevMinorHm = roundS4Hm(Number(v2SummaryMetrics.previous.minorHm || 0))
+      const s4PrevTotalHm = roundS4Hm(Number(v2SummaryMetrics.previous.equipmentHm || 0) || (s4PrevMajorHm + s4PrevMinorHm))
+      const s4DailyMajorHm = roundS4Hm(toSnapshotNumber(visibleSummarySnapshot.equip_major_hm))
+      const s4DailyMinorHm = roundS4Hm(toSnapshotNumber(visibleSummarySnapshot.equip_minor_hm))
+      const s4CurrMajorHm = roundS4Hm(s4PrevMajorHm + s4DailyMajorHm)
+      const s4CurrMinorHm = roundS4Hm(s4PrevMinorHm + s4DailyMinorHm)
+      const s4CurrTotalHm = roundS4Hm(s4PrevTotalHm + s4DailyMajorHm + s4DailyMinorHm)
+      const sector4Snapshot = {
+        s4_prev_indirect_dot: Number(v2SummaryMetrics.previous.indirectDot || 0),
+        s4_prev_indirect_hh: Number(v2SummaryMetrics.previous.indirectHh || 0),
+        s4_prev_direct_dot: Number(v2SummaryMetrics.previous.directDot || 0),
+        s4_prev_direct_hh: Number(v2SummaryMetrics.previous.directHh || 0),
+        s4_prev_total_dot: Number(v2SummaryMetrics.previous.totalDot || 0),
+        s4_prev_total_hh: Number(v2SummaryMetrics.previous.totalHh || 0),
+        s4_prev_major_equip: Number(resolveMachineDotationFromHours(s4PrevMajorHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_prev_major_hm: s4PrevMajorHm,
+        s4_prev_minor_equip: Number(resolveMachineDotationFromHours(s4PrevMinorHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_prev_minor_hm: s4PrevMinorHm,
+        s4_prev_total_equip: Number(resolveMachineDotationFromHours(s4PrevTotalHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_prev_total_hm: s4PrevTotalHm,
+        s4_curr_indirect_dot: Number(effectiveV2SummaryMetrics.current.indirectDot || 0),
+        s4_curr_indirect_hh: Number(effectiveV2SummaryMetrics.current.indirectHh || 0),
+        s4_curr_direct_dot: Number(effectiveV2SummaryMetrics.current.directDot || 0),
+        s4_curr_direct_hh: Number(effectiveV2SummaryMetrics.current.directHh || 0),
+        s4_curr_total_dot: Number(effectiveV2SummaryMetrics.current.totalDot || 0),
+        s4_curr_total_hh: Number(effectiveV2SummaryMetrics.current.totalHh || 0),
+        s4_curr_major_equip: Number(resolveMachineDotationFromHours(s4CurrMajorHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_curr_major_hm: s4CurrMajorHm,
+        s4_curr_minor_equip: Number(resolveMachineDotationFromHours(s4CurrMinorHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_curr_minor_hm: s4CurrMinorHm,
+        s4_curr_total_equip: Number(resolveMachineDotationFromHours(s4CurrTotalHm, workdayMetadataForSave || form).toFixed(2)),
+        s4_curr_total_hm: s4CurrTotalHm
+      }
       const brokenRowsCount =
         v2DetailSnapshot.v2_detail_indirect_rows.filter(isBrokenV2FrontSplitRow).length +
         v2DetailSnapshot.v2_detail_direct_rows.filter(isBrokenV2FrontSplitRow).length
