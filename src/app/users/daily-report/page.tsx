@@ -3771,7 +3771,7 @@ function DetailPersonnelEquipmentV2({
       [rowKey]: nextValues
     }
     onChange("v2_front_distribution_overrides", nextOverridePatch)
-    if (section !== "indirect" && onSyncOppositeFrontOverrides) {
+    if (onSyncOppositeFrontOverrides) {
       const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
       const targetFront = activeFront === "PISCINAS" ? "CANALETAS" : "PISCINAS"
       onSyncOppositeFrontOverrides(targetFront, {
@@ -4173,7 +4173,7 @@ function DetailPersonnelEquipmentV2({
     })
     return out
   }, [fieldReportsForDate, collaboratorsForTooltip, dailyStatusRowsForTooltip, nocFrontAssignment, form.work_front, matrixRows, directMatrixRows])
-  const getFrontCellTitle = (row: any, frontIdx: number) => {
+  const getFrontCellNames = (row: any, frontIdx: number) => {
     const rowKey =
       Object.prototype.hasOwnProperty.call(row || {}, "specialty") ||
       Object.prototype.hasOwnProperty.call(row || {}, "discipline")
@@ -4188,8 +4188,37 @@ function DetailPersonnelEquipmentV2({
             .toUpperCase()
             .trim()
     const names = Array.from(collaboratorTooltipByPositionFront.get(`${rowKey}__${frontIdx}`) || [])
-    if (names.length === 0) return ""
-    return `Declarado por:\n${names.map((name) => `- ${name}`).join("\n")}`
+    return Array.from(new Set(names.map((name) => String(name || "").trim()).filter(Boolean)))
+  }
+  const getFrontCellTooltip = (row: any, frontIdx: number, rowLimit: number) => {
+    const names = getFrontCellNames(row, frontIdx)
+    return (
+      <Box sx={{ maxWidth: 320, py: 0.5 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+          Dotación de frente
+        </Typography>
+        {names.length > 0 ? (
+          <Box sx={{ mb: 1 }}>
+            <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)", mb: 0.25 }}>
+              Declarado por
+            </Typography>
+            <Box component="ul" sx={{ m: 0, pl: 2 }}>
+              {names.map((name) => (
+                <Typography component="li" variant="caption" key={name} sx={{ lineHeight: 1.45 }}>
+                  {name}
+                </Typography>
+              ))}
+            </Box>
+          </Box>
+        ) : null}
+        <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)" }}>
+          Máximo fila
+        </Typography>
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+          {numericCell(rowLimit)}
+        </Typography>
+      </Box>
+    )
   }
   const renderMinorCells = (row?: MinorEquipmentRow) => (
     <>
@@ -4323,14 +4352,21 @@ function DetailPersonnelEquipmentV2({
               {getVisibleFrontValues(row, "indirect").map((frontValue, idx) => (
                 <td
                   key={`pfront-${rowIndex}-${idx}`}
-                  title={`${getFrontCellTitle(row, idx)}${getFrontCellTitle(row, idx) ? "\n" : ""}Máximo fila: ${numericCell(getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"))}`}
                   style={{
                     ...valueCellSx,
                     textAlign: "center",
                     ...(nocDotacionIndexes.includes(idx) ? { background: nocSoftCellBg } : {})
                   }}
                 >
-                  {renderFrontDistributionValue(row, "indirect", idx, frontValue)}
+                  <Tooltip
+                    arrow
+                    placement="top"
+                    title={getFrontCellTooltip(row, idx, getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"))}
+                  >
+                    <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
+                      {renderFrontDistributionValue(row, "indirect", idx, frontValue)}
+                    </Box>
+                  </Tooltip>
                 </td>
               ))}
               <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(getVisibleDotTotal(row))}</td>
@@ -4512,14 +4548,21 @@ function DetailPersonnelEquipmentV2({
                     {getVisibleFrontValues(row as any, "direct").map((frontValue, idx) => (
                       <td
                         key={`direct-front-${specialty}-${rowIdx}-${idx}`}
-                        title={`${getFrontCellTitle(row, idx)}${getFrontCellTitle(row, idx) ? "\n" : ""}Máximo fila: ${numericCell(getRowTurnoLimit(row, getBaseFrontValues(row), "direct"))}`}
                         style={{
                           ...valueCellSx,
                           textAlign: "center",
                           ...(nocDotacionIndexes.includes(idx) ? { background: nocSoftCellBg } : {})
                         }}
                       >
-                        {renderFrontDistributionValue(row, "direct", idx, frontValue)}
+                        <Tooltip
+                          arrow
+                          placement="top"
+                          title={getFrontCellTooltip(row, idx, getRowTurnoLimit(row, getBaseFrontValues(row), "direct"))}
+                        >
+                          <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
+                            {renderFrontDistributionValue(row, "direct", idx, frontValue)}
+                          </Box>
+                        </Tooltip>
                       </td>
                     ))}
                     <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(getVisibleDotTotal(row as any))}</td>

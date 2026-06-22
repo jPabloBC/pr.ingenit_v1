@@ -3548,8 +3548,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
   useEffect(() => {
     if (!open || !isAdminRole || !selectedReport) return
     let cancelled = false
-    if (selectedReport?.id && selectedReport?.__fullLoaded && Array.isArray(personnel) && personnel.length > 0) {
-      // Si el reporte ya trae personal persistido, evitamos recargar crew full al abrir/editar.
+    if (!editMode && selectedReport?.id && selectedReport?.__fullLoaded && Array.isArray(personnel) && personnel.length > 0) {
+      // Si el reporte ya trae personal persistido, evitamos recargar crew full al ver.
       setPersonalReady(true)
       return
     }
@@ -3602,7 +3602,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
     if (!open || !selectedReport) return
     // Existing reports must keep persisted personnel/hours snapshot.
     // Syncing from current crew members here can overwrite hydrated hours.
-	    if (selectedReport?.id && selectedReport?.__fullLoaded && selectedReportHydrationStatus === 'ready' && Array.isArray(personnel) && personnel.length > 0) return
+	    if (!editMode && selectedReport?.id && selectedReport?.__fullLoaded && selectedReportHydrationStatus === 'ready' && Array.isArray(personnel) && personnel.length > 0) return
     if (!editMode && selectedReport?.id && selectedReport?.__fullLoaded && Array.isArray(personnel) && personnel.length > 0) {
       return
     }
@@ -3669,15 +3669,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
         crewName: member?.crewName || member?.crew_name || previous?.crewName || previous?.crew_name || ''
       }
     }
-    const existingInSavedOrder = previousRows
-      .map((previous: any, idx: number) => {
-        const member = personKeys(previous, `previous-${idx}`)
-          .map((key) => memberByKey.get(key))
-          .find(Boolean)
-        if (!member) return null
-        return buildPersonnelRow(member, previous, idx)
-      })
-      .filter(Boolean) as any[]
+    const existingInSavedOrder = previousRows.map((previous: any, idx: number) => {
+      const member = personKeys(previous, `previous-${idx}`)
+        .map((key) => memberByKey.get(key))
+        .find(Boolean)
+      return member ? buildPersonnelRow(member, previous, idx) : previous
+    })
     const newMembers = uniqueMembers
       .filter((member: any, idx: number) => {
         const keys = personKeys(member, `member-${idx}`)
@@ -3709,6 +3706,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
       const next: Record<string, number[]> = {}
       Object.entries(hoursPrev || {}).forEach(([key, val]) => {
         if (validIds.has(String(key))) next[String(key)] = Array.isArray(val) ? [...val] : []
+      })
+      mergedPersonnel.forEach((person: any) => {
+        const id = String(person?.id || person?.collaborator_id || '')
+        if (id && !next[id]) next[id] = new Array(activityCount).fill(0)
       })
       return next
     })
