@@ -4192,31 +4192,78 @@ function DetailPersonnelEquipmentV2({
   }
   const getFrontCellTooltip = (row: any, frontIdx: number, rowLimit: number) => {
     const names = getFrontCellNames(row, frontIdx)
+    const normalizeTooltipText = (value: string) =>
+      String(value || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase()
+    const groupedNames = names.reduce<Array<{ source: string; names: string[] }>>((acc, rawName) => {
+      const normalized = normalizeTooltipText(rawName)
+      if (!normalized) return acc
+      const match = normalized.match(/^(.*?)\s*\(([^()]+)\)\s*$/)
+      const personName = normalizeTooltipText(match?.[1] || normalized)
+      const source = normalizeTooltipText(match?.[2] || "")
+      if (!personName) return acc
+      const existing = acc.find((group) => group.source === source)
+      if (existing) {
+        if (!existing.names.includes(personName)) existing.names.push(personName)
+      } else {
+        acc.push({ source, names: [personName] })
+      }
+      return acc
+    }, [])
     return (
-      <Box sx={{ maxWidth: 320, py: 0.5 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+      <Box sx={{ maxWidth: "min(620px, calc(100vw - 32px))", p: 0.75 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75, lineHeight: 1.2 }}>
           Dotación de frente
         </Typography>
-        {names.length > 0 ? (
-          <Box sx={{ mb: 1 }}>
-            <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)", mb: 0.25 }}>
-              Declarado por
-            </Typography>
-            <Box component="ul" sx={{ m: 0, pl: 2 }}>
-              {names.map((name) => (
-                <Typography component="li" variant="caption" key={name} sx={{ lineHeight: 1.45 }}>
-                  {name}
-                </Typography>
+        <Box sx={{ mb: 1, borderTop: "1px solid rgba(255,255,255,0.18)", pt: 0.75 }}>
+          {/* <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)", mb: 0.35 }}>
+            Declarado por
+          </Typography> */}
+          {groupedNames.length > 0 ? (
+            <Box
+              sx={{
+                maxHeight: 220,
+                overflowY: "auto",
+                pr: 0.5
+              }}
+            >
+              {groupedNames.map((group, groupIdx) => (
+                <Box key={`${group.source || "sin-fuente"}-${groupIdx}`} sx={{ mb: groupIdx === groupedNames.length - 1 ? 0 : 0.85 }}>
+                  {group.source ? (
+                    <Typography variant="caption" sx={{ display: "block", fontWeight: 800, color: "rgba(255,255,255,0.92)", lineHeight: 1.2, mb: 0.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {group.source}
+                    </Typography>
+                  ) : groupedNames.length > 1 ? (
+                    <Typography variant="caption" sx={{ display: "block", fontWeight: 800, color: "rgba(255,255,255,0.72)", lineHeight: 1.2, mb: 0.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      SIN FUENTE
+                    </Typography>
+                  ) : null}
+                  <Box component="ul" sx={{ m: 0, pl: 1.8 }}>
+                    {group.names.map((name) => (
+                      <Typography component="li" variant="caption" key={`${group.source}-${name}`} sx={{ lineHeight: 1.25, mb: 0.2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {name}
+                      </Typography>
+                    ))}
+                  </Box>
+                </Box>
               ))}
             </Box>
-          </Box>
-        ) : null}
-        <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)" }}>
-          Máximo fila
-        </Typography>
-        <Typography variant="body2" sx={{ fontWeight: 700 }}>
-          {numericCell(rowLimit)}
-        </Typography>
+          ) : (
+            <Typography variant="caption" sx={{ display: "block", color: "rgba(255,255,255,0.68)", lineHeight: 1.25 }}>
+              Sin declarantes asociados
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ borderTop: "1px solid rgba(255,255,255,0.18)", pt: 0.65 }}>
+          <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)" }}>
+            Máximo fila
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 700, lineHeight: 1.25 }}>
+            {numericCell(rowLimit)}
+          </Typography>
+        </Box>
       </Box>
     )
   }
