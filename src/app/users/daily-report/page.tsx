@@ -1928,6 +1928,7 @@ function DetailPersonnelEquipmentV2({
   fieldReportsForDate = [],
   reportFrontNames = [],
   nocFrontAssignment,
+  getFrontCounterpartInfo,
   prevencionistaFrontDistribution = {
     totalTurno: 0,
     reportCounts: { canaletas: 0, piscinas: 0, nocCanaletas: 0, nocPiscinas: 0 },
@@ -2035,6 +2036,11 @@ function DetailPersonnelEquipmentV2({
   fieldReportsForDate?: any[]
   reportFrontNames?: string[]
   nocFrontAssignment?: any
+  getFrontCounterpartInfo?: (row: any, section: "indirect" | "direct") => {
+    currentFront: "CANALETAS" | "PISCINAS"
+    counterpartFront: "CANALETAS" | "PISCINAS"
+    values: number[]
+  } | null
   prevencionistaFrontDistribution?: {
     totalTurno: number
     reportCounts: { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number }
@@ -4190,8 +4196,21 @@ function DetailPersonnelEquipmentV2({
     const names = Array.from(collaboratorTooltipByPositionFront.get(`${rowKey}__${frontIdx}`) || [])
     return Array.from(new Set(names.map((name) => String(name || "").trim()).filter(Boolean)))
   }
-  const getFrontCellTooltip = (row: any, frontIdx: number, rowLimit: number) => {
+  const getFrontCellTooltip = (row: any, section: FrontDistributionSection, frontIdx: number, rowLimit: number, currentValues: number[], columnLabel: string) => {
     const names = getFrontCellNames(row, frontIdx)
+    const counterpartInfo = getFrontCounterpartInfo?.(row, section) || null
+    const currentFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const currentValue = Number(currentValues?.[frontIdx] || 0)
+    const isFixedDotacionColumn = frontIdx === 0 || frontIdx === 1
+    const hasCounterpartColumn = Boolean(counterpartInfo && isFixedDotacionColumn && frontIdx < counterpartInfo.values.length)
+    const counterpartValue = hasCounterpartColumn ? Number(counterpartInfo?.values?.[frontIdx] || 0) : 0
+    const currentDistributed = (currentValues || []).reduce((acc, value) => acc + Math.max(0, Number(value || 0)), 0)
+    const counterpartDistributed = counterpartInfo
+      ? (counterpartInfo.values || []).reduce((acc, value) => acc + Math.max(0, Number(value || 0)), 0)
+      : 0
+    const distributed = Number((currentDistributed + counterpartDistributed).toFixed(2))
+    const available = Number(Math.max(0, Number(rowLimit || 0) - distributed).toFixed(2))
+    const excess = Number(Math.max(0, distributed - Number(rowLimit || 0)).toFixed(2))
     const normalizeTooltipText = (value: string) =>
       String(value || "")
         .replace(/\s+/g, " ")
@@ -4216,6 +4235,9 @@ function DetailPersonnelEquipmentV2({
       <Box sx={{ maxWidth: "min(620px, calc(100vw - 32px))", p: 0.75 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75, lineHeight: 1.2 }}>
           Dotación de frente
+        </Typography>
+        <Typography variant="caption" sx={{ display: "block", color: "rgba(255,255,255,0.78)", lineHeight: 1.2, mb: 0.75, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          Columna: {normalizeTooltipText(columnLabel) || "-"}
         </Typography>
         <Box sx={{ mb: 1, borderTop: "1px solid rgba(255,255,255,0.18)", pt: 0.75 }}>
           {/* <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)", mb: 0.35 }}>
@@ -4257,6 +4279,29 @@ function DetailPersonnelEquipmentV2({
           )}
         </Box>
         <Box sx={{ borderTop: "1px solid rgba(255,255,255,0.18)", pt: 0.65 }}>
+          <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)", mb: 0.35 }}>
+            Contraparte
+          </Typography>
+          {counterpartInfo ? (
+            <Box sx={{ display: "grid", gridTemplateColumns: "auto auto", columnGap: 1.5, rowGap: 0.25, mb: 0.8 }}>
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.72)" }}>Frente actual</Typography>
+              <Typography variant="caption" sx={{ fontWeight: 700, textAlign: "right" }}>{currentFront}: {numericCell(currentValue)}</Typography>
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.72)" }}>Contraparte</Typography>
+              <Typography variant="caption" sx={{ fontWeight: 700, textAlign: "right", color: hasCounterpartColumn ? "inherit" : "rgba(255,255,255,0.68)" }}>
+                {hasCounterpartColumn ? `${counterpartInfo.counterpartFront}: ${numericCell(counterpartValue)}` : "Columna no disponible en contraparte"}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.72)" }}>Distribuido fila</Typography>
+              <Typography variant="caption" sx={{ fontWeight: 700, textAlign: "right" }}>{numericCell(distributed)}</Typography>
+              <Typography variant="caption" sx={{ color: "rgba(255,255,255,0.72)" }}>{excess > 0 ? "Exceso fila" : "Disponible fila"}</Typography>
+              <Typography variant="caption" sx={{ fontWeight: 700, textAlign: "right", color: excess > 0 ? "#fecaca" : "inherit" }}>
+                {excess > 0 ? numericCell(excess) : numericCell(available)}
+              </Typography>
+            </Box>
+          ) : (
+            <Typography variant="caption" sx={{ display: "block", color: "rgba(255,255,255,0.68)", lineHeight: 1.25, mb: 0.8 }}>
+              Sin datos contraparte
+            </Typography>
+          )}
           <Typography variant="caption" sx={{ display: "block", fontWeight: 700, color: "rgba(255,255,255,0.82)" }}>
             Máximo fila
           </Typography>
@@ -4396,7 +4441,7 @@ function DetailPersonnelEquipmentV2({
               <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.teletrabajo)}</td>
               <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.pruebaPractica)}</td>
               <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.ofertaComercial)}</td>
-              {getVisibleFrontValues(row, "indirect").map((frontValue, idx) => (
+              {getVisibleFrontValues(row, "indirect").map((frontValue, idx, frontValues) => (
                 <td
                   key={`pfront-${rowIndex}-${idx}`}
                   style={{
@@ -4408,7 +4453,7 @@ function DetailPersonnelEquipmentV2({
                   <Tooltip
                     arrow
                     placement="top"
-                    title={getFrontCellTooltip(row, idx, getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"))}
+                    title={getFrontCellTooltip(row, "indirect", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
                   >
                     <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
                       {renderFrontDistributionValue(row, "indirect", idx, frontValue)}
@@ -4592,7 +4637,7 @@ function DetailPersonnelEquipmentV2({
                     <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.teletrabajo)}</td>
                     <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.pruebaPractica)}</td>
                     <td style={{ ...valueCellSx, textAlign: "center" }}>{oneDecimalCell(row.ofertaComercial)}</td>
-                    {getVisibleFrontValues(row as any, "direct").map((frontValue, idx) => (
+                    {getVisibleFrontValues(row as any, "direct").map((frontValue, idx, frontValues) => (
                       <td
                         key={`direct-front-${specialty}-${rowIdx}-${idx}`}
                         style={{
@@ -4604,7 +4649,7 @@ function DetailPersonnelEquipmentV2({
                         <Tooltip
                           arrow
                           placement="top"
-                          title={getFrontCellTooltip(row, idx, getRowTurnoLimit(row, getBaseFrontValues(row), "direct"))}
+                          title={getFrontCellTooltip(row, "direct", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "direct"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
                         >
                           <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
                             {renderFrontDistributionValue(row, "direct", idx, frontValue)}
@@ -9932,6 +9977,66 @@ export default function DailyReportPage() {
     return debugReturn("C", [Math.max(0, instalacionFaena + overrideDelta), manualSpecialFront, 0])
   }
 
+  const getFrontCounterpartInfo = React.useCallback((row: any, section: "indirect" | "direct") => {
+    if (viewOpen || isViewingHistoryVersion) return null
+    const currentFront: "CANALETAS" | "PISCINAS" = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+    const counterpartFront: "CANALETAS" | "PISCINAS" = currentFront === "PISCINAS" ? "CANALETAS" : "PISCINAS"
+    const hasLiveSources =
+      Array.isArray(fieldReportsForDate) && fieldReportsForDate.length > 0 ||
+      Array.isArray(dailyStatusRows) && dailyStatusRows.length > 0 ||
+      Boolean(frontDraftForms[counterpartFront])
+    if (!hasLiveSources) return null
+    const normalizeKeyPart = (value: any) =>
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .trim() || "-"
+    const rowKey = (() => {
+      const position = normalizeKeyPart(row?.position || "SIN CARGO")
+      if (section === "direct") {
+        const discipline = normalizeDirectKeyToken(row?.discipline || row?.specialty || "GENERAL") || "GENERAL"
+        const specialty = normalizeSpecialtyLabel(row?.specialty, row?.discipline, row?.position) || "GENERAL"
+        return `direct::${buildDirectFrontKey(discipline, specialty, position)}`
+      }
+      return `indirect::${position}`
+    })()
+    const parseOverrides = (value: any): Record<string, number[]> => {
+      if (!value) return {}
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value)
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, number[]> : {}
+        } catch {
+          return {}
+        }
+      }
+      return typeof value === "object" && !Array.isArray(value) ? value as Record<string, number[]> : {}
+    }
+    const baseValues = getV2DotacionFrenteValues(row, counterpartFront)
+    const draftOverrides = parseOverrides((frontDraftForms[counterpartFront] as any)?.v2_front_distribution_overrides)
+    const overrideValues = draftOverrides[rowKey]
+    const values = Array.from({ length: Math.max(baseValues.length, Array.isArray(overrideValues) ? overrideValues.length : 0, 3) }).map((_, idx) => {
+      const raw = Array.isArray(overrideValues) ? overrideValues[idx] : undefined
+      const fallback = baseValues[idx]
+      const parsed = Number(raw ?? fallback ?? 0)
+      return Number.isFinite(parsed) ? Math.max(0, parsed) : 0
+    })
+    return {
+      currentFront,
+      counterpartFront,
+      values
+    }
+  }, [
+    viewOpen,
+    isViewingHistoryVersion,
+    form.work_front,
+    fieldReportsForDate,
+    dailyStatusRows,
+    frontDraftForms,
+    getV2DotacionFrenteValues
+  ])
+
   const normalizeV2SummaryNumber = (value: number) => {
     const n = Number(value || 0)
     if (!Number.isFinite(n)) return 0
@@ -13204,6 +13309,7 @@ export default function DailyReportPage() {
                       fieldReportsForDate={fieldReportsForDate}
                       reportFrontNames={reportFrontNames}
                       nocFrontAssignment={nocFrontAssignment}
+                      getFrontCounterpartInfo={getFrontCounterpartInfo}
                       prevencionistaFrontDistribution={prevencionistaFrontDistribution}
                       usePersistedSnapshotValues={Boolean(isViewingHistoryVersion || viewOpen || (!editingId && indirectHoursSettingsMatchSaved))}
                     />
@@ -13880,6 +13986,7 @@ export default function DailyReportPage() {
                         fieldReportsForDate={fieldReportsForDate}
                         reportFrontNames={reportFrontNames}
                         nocFrontAssignment={nocFrontAssignment}
+                        getFrontCounterpartInfo={getFrontCounterpartInfo}
                         prevencionistaFrontDistribution={prevencionistaFrontDistribution}
                         usePersistedSnapshotValues={Boolean(editingId) || isViewingHistoryVersion || viewOpen || indirectHoursSettingsMatchSaved}
                         readOnly
