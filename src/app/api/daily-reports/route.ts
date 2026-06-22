@@ -832,7 +832,6 @@ const DAILY_REPORT_LIST_SELECT = `
   hh_productive,
   weather_label,
   source_field_report_ids,
-  notes,
   created_by,
   created_at,
   updated_at,
