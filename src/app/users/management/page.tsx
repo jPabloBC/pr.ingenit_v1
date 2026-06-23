@@ -71,6 +71,8 @@ const MANAGEMENT_FETCH_CACHE_TTL_MS = 30_000;
 const fieldReportsPromiseCache = new Map<string, { promise: Promise<FieldReportRecord[]>; expiresAt: number }>();
 let collaboratorSummaryPromiseCache: { promise: Promise<any[]>; expiresAt: number } | null = null;
 const hhSummaryPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
+const photoReportConfigPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
+let fieldReportDatesPromiseCache: { promise: Promise<string[]>; expiresAt: number } | null = null;
 
 const fetchManagementFieldReports = (queryString: string): Promise<FieldReportRecord[]> => {
   const now = Date.now();
@@ -121,6 +123,31 @@ const fetchCollaboratorSummary = (): Promise<any[]> => {
   return promise;
 };
 
+const fetchFieldReportDateKeys = (): Promise<string[]> => {
+  const now = Date.now();
+  if (fieldReportDatesPromiseCache && fieldReportDatesPromiseCache.expiresAt > now) {
+    return fieldReportDatesPromiseCache.promise;
+  }
+
+  const promise = fetch('/api/field-reports?dates=1')
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return Array.isArray(payload?.dates) ? payload.dates : [];
+    })
+    .catch((err) => {
+      fieldReportDatesPromiseCache = null;
+      throw err;
+    });
+
+  fieldReportDatesPromiseCache = {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  };
+
+  return promise;
+};
+
 const fetchManagementHhSummary = (queryString: string): Promise<any> => {
   const now = Date.now();
   const cached = hhSummaryPromiseCache.get(queryString);
@@ -144,6 +171,35 @@ const fetchManagementHhSummary = (queryString: string): Promise<any> => {
   });
 
   return promise;
+};
+
+const fetchPhotoReportConfig = (queryString = ''): Promise<any> => {
+  const now = Date.now();
+  const cached = photoReportConfigPromiseCache.get(queryString);
+  if (cached && cached.expiresAt > now) return cached.promise;
+
+  const url = queryString ? `/api/management/photo-report-config?${queryString}` : '/api/management/photo-report-config';
+  const promise = fetch(url)
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return payload || {};
+    })
+    .catch((err) => {
+      photoReportConfigPromiseCache.delete(queryString);
+      throw err;
+    });
+
+  photoReportConfigPromiseCache.set(queryString, {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  });
+
+  return promise;
+};
+
+const clearPhotoReportConfigCache = () => {
+  photoReportConfigPromiseCache.clear();
 };
 
 declare global {
@@ -466,6 +522,16 @@ const getLastCompletedWeekRange = () => {
     start: start || '2026-05-25',
     end: end || '2026-05-31',
   };
+};
+const buildWeekRangesFromDateKeys = (dates: string[]) => {
+  const byStart = new Map<string, { start: string; end: string }>();
+  dates.forEach((date) => {
+    const cleanDate = String(date || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) return;
+    const range = getWeekRangeFromDateKey(cleanDate);
+    if (range.start && !byStart.has(range.start)) byStart.set(range.start, range);
+  });
+  return Array.from(byStart.values()).sort((a, b) => b.start.localeCompare(a.start));
 };
 const listDateKeysBetween = (start: string, end: string) => {
   if (!start || !end || start > end) return [];
@@ -1316,6 +1382,7 @@ const sortGroups = (groups: GroupSummary[]) => {
 export default function ManagementPage() {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isActivitiesCompact = useMediaQuery(theme.breakpoints.down('md'));
   const [reports, setReports] = useState<FieldReportRecord[]>([]);
   const [hhSummary, setHhSummary] = useState<HhSummaryPayload | null>(null);
   const [collaboratorRows, setCollaboratorRows] = useState<any[]>([]);
@@ -1347,6 +1414,10 @@ export default function ManagementPage() {
   const [crewPersonnelSearch, setCrewPersonnelSearch] = useState('');
   const [crewPersonnelExporting, setCrewPersonnelExporting] = useState(false);
   const [activitiesSearch, setActivitiesSearch] = useState('');
+  const [activitiesSearchQuery, setActivitiesSearchQuery] = useState('');
+  const [activitiesAvailableDates, setActivitiesAvailableDates] = useState<string[]>([]);
+  const [activitiesWeekRange, setActivitiesWeekRange] = useState(() => getWeekRangeFromDateKey(dateToKey(new Date())));
+  const [activitiesWeeksReady, setActivitiesWeeksReady] = useState(false);
   const [interferenceDialogOpen, setInterferenceDialogOpen] = useState(false);
   const [interferenceSaving, setInterferenceSaving] = useState(false);
   const [interferenceForm, setInterferenceForm] = useState<InterferenceFormState>(DEFAULT_INTERFERENCE_FORM);
@@ -1422,11 +1493,24 @@ export default function ManagementPage() {
   const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'error' | 'info' } | null>(null);
   const equipmentAvailableDatesSet = useMemo(() => new Set(equipmentAvailableDates), [equipmentAvailableDates]);
   const needsDetailedReports = activeTab === 'crew-personnel' || activeTab === 'activities' || activeTab === 'photo-report';
+  const isActivitiesGlobalSearch = activeTab === 'activities' && activitiesSearch.trim().length > 0;
+  const hasActivitiesSearchQuery = activeTab === 'activities' && activitiesSearchQuery.trim().length > 0;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(MANAGEMENT_TAB_STORAGE_KEY, activeTab);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'activities') {
+      setActivitiesSearchQuery('');
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setActivitiesSearchQuery(activitiesSearch.trim());
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [activeTab, activitiesSearch]);
 
   const createEmptyEquipmentRow = (kind: EquipmentKind): ManagementEquipmentRow => ({
     report_date: equipmentDate,
@@ -2066,8 +2150,8 @@ export default function ManagementPage() {
       setPhotoConfigDirty(false);
       setPhotoConfigExistsForScope(true);
       setNotice({ message: 'Configuración guardada.', severity: 'success' });
-      const listRes = await fetch('/api/management/photo-report-config');
-      const listJson = await listRes.json().catch(() => null);
+      clearPhotoReportConfigCache();
+      const listJson = await fetchPhotoReportConfig();
       const list = Array.isArray(listJson?.configs) ? listJson.configs : [];
       setSavedPhotoConfigs(list);
     } catch (err: any) {
@@ -2812,6 +2896,7 @@ export default function ManagementPage() {
   }, [totalPhotoSlides]);
 
   useEffect(() => {
+    if (activeTab !== 'photo-report') return;
     let cancelled = false;
     setPhotoConfigHydratedKey('');
     setPhotoConfigExistsForScope(false);
@@ -2822,8 +2907,7 @@ export default function ManagementPage() {
           period_start: String(photoPeriodStartDate || ''),
           period_end: String(photoPeriodEndDate || ''),
         });
-        const res = await fetch(`/api/management/photo-report-config?${params.toString()}`);
-        const json = await res.json().catch(() => null);
+        const json = await fetchPhotoReportConfig(params.toString());
         if (cancelled) return;
         const cfg = json?.config || null;
         setPhotoConfigExistsForScope(Boolean(cfg));
@@ -2887,15 +2971,15 @@ export default function ManagementPage() {
     return () => {
       cancelled = true;
     };
-  }, [photoPersistenceKey, photoCoverReportNo, photoPeriodStartDate, photoPeriodEndDate]);
+  }, [activeTab, photoPersistenceKey, photoCoverReportNo, photoPeriodStartDate, photoPeriodEndDate]);
 
   useEffect(() => {
+    if (activeTab !== 'photo-report') return;
     let cancelled = false;
     const loadList = async () => {
       try {
         setSavedPhotoConfigsLoading(true);
-        const res = await fetch('/api/management/photo-report-config');
-        const json = await res.json().catch(() => null);
+        const json = await fetchPhotoReportConfig();
         if (cancelled) return;
         const list = Array.isArray(json?.configs) ? json.configs : [];
         setSavedPhotoConfigs(list);
@@ -2909,11 +2993,15 @@ export default function ManagementPage() {
     return () => {
       cancelled = true;
     };
-  }, [photoConfigHydratedKey]);
+  }, [activeTab, photoConfigHydratedKey]);
 
   useEffect(() => {
     if (!needsDetailedReports) {
       setLoading(false);
+      return;
+    }
+    if (activeTab === 'activities' && !activitiesWeeksReady && !hasActivitiesSearchQuery) {
+      setLoading(true);
       return;
     }
 
@@ -2921,9 +3009,21 @@ export default function ManagementPage() {
     setLoading(true);
     setError('');
 
-    const params = new URLSearchParams({ limit: '500' });
+    const params = new URLSearchParams({ limit: '200', summary: '1' });
+    if (activeTab === 'activities') {
+      params.set('activities_only', '1');
+      if (hasActivitiesSearchQuery) {
+        params.set('limit', '1000');
+        params.set('activity_search', activitiesSearchQuery.trim());
+      }
+    } else if (activeTab === 'crew-personnel') {
+      params.set('include_calc', '1');
+    }
 
-    if (photoPeriodStartDate && photoPeriodEndDate) {
+    if (activeTab === 'activities' && !hasActivitiesSearchQuery) {
+      params.set('date_from', activitiesWeekRange.start);
+      params.set('date_to', activitiesWeekRange.end);
+    } else if (photoPeriodStartDate && photoPeriodEndDate) {
       params.set('date_from', photoPeriodStartDate);
       params.set('date_to', photoPeriodEndDate);
     }
@@ -2947,7 +3047,39 @@ export default function ManagementPage() {
     return () => {
       mounted = false;
     };
-  }, [needsDetailedReports, photoPeriodStartDate, photoPeriodEndDate]);
+  }, [activeTab, activitiesSearchQuery, activitiesWeekRange.end, activitiesWeekRange.start, activitiesWeeksReady, hasActivitiesSearchQuery, needsDetailedReports, photoPeriodStartDate, photoPeriodEndDate]);
+
+  useEffect(() => {
+    if (activeTab !== 'activities') return;
+    let mounted = true;
+    fetchFieldReportDateKeys()
+      .then((dates) => {
+        if (!mounted) return;
+        const cleanDates = Array.from(new Set(
+          dates
+            .map((date) => String(date || '').slice(0, 10))
+            .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        )).sort((a, b) => b.localeCompare(a));
+        const weeks = buildWeekRangesFromDateKeys(cleanDates);
+        const currentWeek = getWeekRangeFromDateKey(dateToKey(new Date()));
+        const latestWeek = weeks.find((range) => range.start <= currentWeek.start) || weeks[0] || currentWeek;
+        setActivitiesAvailableDates(cleanDates);
+        setActivitiesWeekRange((prev) => {
+          const stillAvailable = weeks.some((range) => range.start === prev.start);
+          return stillAvailable ? prev : latestWeek;
+        });
+        setActivitiesWeeksReady(true);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setActivitiesAvailableDates([]);
+        setActivitiesWeeksReady(true);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab !== 'hh') return;
@@ -2995,6 +3127,7 @@ export default function ManagementPage() {
   }, [activeTab, hhMatrixEndDate, hhMatrixStartDate, hhSummaryReloadNonce]);
 
   useEffect(() => {
+    if (activeTab !== 'crew-personnel') return;
     let mounted = true;
     fetchCollaboratorSummary()
       .then((payload) => {
@@ -3007,7 +3140,7 @@ export default function ManagementPage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [activeTab]);
 
   const collaboratorLookupById = useMemo(() => {
     const map = new Map<string, any>();
@@ -3444,6 +3577,31 @@ export default function ManagementPage() {
   }, [hhMatrixRange.end, hhMatrixRange.start]);
 
   const currentCalendarWeekRange = useMemo(() => getWeekRangeFromDateKey(dateToKey(new Date())), []);
+  const activitiesAvailableWeeks = useMemo(() => buildWeekRangesFromDateKeys(activitiesAvailableDates), [activitiesAvailableDates]);
+  const latestAvailableActivitiesWeek = useMemo(
+    () => activitiesAvailableWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || activitiesAvailableWeeks[0] || currentCalendarWeekRange,
+    [activitiesAvailableWeeks, currentCalendarWeekRange]
+  );
+  const selectedActivitiesWeekIndex = activitiesWeekRange
+    ? activitiesAvailableWeeks.findIndex((range) => range.start === activitiesWeekRange.start)
+    : -1;
+  const previousActivitiesWeek = selectedActivitiesWeekIndex >= 0
+    ? activitiesAvailableWeeks[selectedActivitiesWeekIndex + 1] || null
+    : null;
+  const nextActivitiesWeekCandidate = selectedActivitiesWeekIndex > 0
+    ? activitiesAvailableWeeks[selectedActivitiesWeekIndex - 1] || null
+    : null;
+  const nextActivitiesWeek = nextActivitiesWeekCandidate && nextActivitiesWeekCandidate.start <= currentCalendarWeekRange.start
+    ? nextActivitiesWeekCandidate
+    : null;
+  const isViewingLatestActivitiesWeek = Boolean(
+    activitiesWeekRange &&
+    latestAvailableActivitiesWeek &&
+    activitiesWeekRange.start === latestAvailableActivitiesWeek.start
+  );
+  const activitiesWeekLabel = activitiesWeekRange?.start && activitiesWeekRange?.end
+    ? `Semana ${getProjectWeekNumber(activitiesWeekRange.start)}: ${formatSpanishShortDate(activitiesWeekRange.start)} al ${formatSpanishShortDate(activitiesWeekRange.end)}`
+    : 'Semana: cargando...';
   const latestAvailableWeekRange = useMemo(() => {
     if (hhSummary?.date_from || hhSummary?.date_to) {
       return getWeekRangeFromDateKey(String(hhSummary.date_from || hhSummary.date_to || ''));
@@ -5575,6 +5733,103 @@ export default function ManagementPage() {
                   </Stack>
                 </Paper>
               ) : activeTab === 'activities' ? (
+                <>
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    mb: { xs: 1, md: 1.25 },
+                    mx: 'auto',
+                    p: { xs: 1, md: 1.1 },
+                    width: { xs: '100%', lg: '70%' },
+                    maxWidth: 1400,
+                    borderColor: '#d8dee9',
+                    display: 'grid',
+                    gridTemplateColumns: { xs: '1fr', md: 'auto minmax(240px, 1fr) auto' },
+                    alignItems: { xs: 'stretch', md: 'center' },
+                    gap: 1,
+                  }}
+                >
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    disabled={isActivitiesGlobalSearch || !previousActivitiesWeek}
+                    onClick={() => previousActivitiesWeek && setActivitiesWeekRange(previousActivitiesWeek)}
+                    sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap' }}
+                  >
+                    Semana anterior
+                  </Button>
+                  <Typography
+                    sx={{
+                      color: isActivitiesGlobalSearch ? '#94a3b8' : '#0f172a',
+                      fontWeight: 600,
+                      textAlign: 'center',
+                      flex: 1,
+                      minWidth: 0,
+                      whiteSpace: { md: 'nowrap' },
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {activitiesWeekLabel}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} justifyContent={{ xs: 'stretch', md: 'flex-end' }} sx={{ flexShrink: 0, flexWrap: { xs: 'wrap', md: 'nowrap' } }}>
+                    <TextField
+                      select
+                      size="small"
+                      value={activitiesWeekRange?.start || ''}
+                      disabled={isActivitiesGlobalSearch}
+                      SelectProps={{
+                        renderValue: (value) => {
+                          const selected = activitiesAvailableWeeks.find((range) => range.start === value);
+                          return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana';
+                        },
+                      }}
+                      onChange={(event) => {
+                        const selected = activitiesAvailableWeeks.find((range) => range.start === event.target.value);
+                        if (selected) setActivitiesWeekRange(selected);
+                      }}
+                      sx={{
+                        width: { xs: '100%', sm: 142, md: 142 },
+                        minWidth: { xs: '100%', sm: 142, md: 142 },
+                        flex: { xs: '1 1 100%', sm: '0 0 142px', md: '0 0 142px' },
+                        '& .MuiInputBase-root': {
+                          height: 32,
+                        },
+                        '& .MuiSelect-select': {
+                          py: 0.55,
+                          fontWeight: 500,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        },
+                      }}
+                    >
+                      {activitiesAvailableWeeks.map((range) => (
+                        <MenuItem key={`activities-week-${range.start}`} value={range.start}>
+                          {`Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      disabled={isActivitiesGlobalSearch || isViewingLatestActivitiesWeek}
+                      onClick={() => setActivitiesWeekRange(latestAvailableActivitiesWeek)}
+                      sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
+                    >
+                      Última semana
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      disabled={isActivitiesGlobalSearch || !nextActivitiesWeek}
+                      onClick={() => nextActivitiesWeek && setActivitiesWeekRange(nextActivitiesWeek)}
+                      sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
+                    >
+                      Semana siguiente
+                    </Button>
+                  </Stack>
+                </Paper>
                 <Paper
                   variant="outlined"
                   sx={{
@@ -5619,48 +5874,162 @@ export default function ManagementPage() {
                           No hay actividades que coincidan con la búsqueda.
                         </Typography>
                       </Box>
+                    ) : isActivitiesCompact ? (
+                      <Stack spacing={1}>
+                        {filteredManagementActivities.map((row, rowIndex) => {
+                          const reportLabel = row.reportNo ? `N°${row.reportNo}` : row.reportId.slice(0, 8);
+                          const dateLabel = formatDate(row.date);
+                          const quantityLabel = formatNumber(row.quantity);
+                          return (
+                            <Box
+                              key={`${row.reportId}-${row.sourceIndex}-${row.name}`}
+                              sx={{
+                                border: '1px solid #e5e7eb',
+                                borderRadius: 1,
+                                px: 1,
+                                py: 0.85,
+                                display: 'grid',
+                                gap: 0.6,
+                                background: rowIndex % 2 === 0 ? '#f8fbff' : '#e8f5fc',
+                              }}
+                            >
+                              <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#334155', flexShrink: 0 }}>
+                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Fecha: </Box>
+                                  {dateLabel}
+                                </Typography>
+                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#1d4ed8', flexShrink: 0, textAlign: 'center' }}>
+                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Reporte: </Box>
+                                  {reportLabel}
+                                </Typography>
+                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#111827', flexShrink: 0, textAlign: 'center' }}>
+                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Cantidad: </Box>
+                                  {quantityLabel} {row.unit || ''}
+                                </Typography>
+                              </Stack>
+                              <Typography
+                                title={row.name || ''}
+                                sx={{
+                                  minWidth: 0,
+                                  fontSize: 13,
+                                  fontWeight: 800,
+                                  color: '#111827',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {row.name || '-'}
+                              </Typography>
+                              <Box
+                                sx={{
+                                  display: 'grid',
+                                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                                  columnGap: 1,
+                                  rowGap: 0.35,
+                                }}
+                              >
+                                {[
+                                  ['Frente', row.front || '-'],
+                                  ['Área', row.area || '-'],
+                                  ['Cuadrilla', row.crew || '-'],
+                                  ['Especialidad', row.specialty || '-'],
+                                ].map(([label, value]) => (
+                                  <Typography
+                                    key={`${row.reportId}-${row.sourceIndex}-${label}`}
+                                    title={value}
+                                    sx={{
+                                      minWidth: 0,
+                                      fontSize: 12,
+                                      color: '#475569',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>{label}: </Box>
+                                    {value}
+                                  </Typography>
+                                ))}
+                              </Box>
+                            </Box>
+                          );
+                        })}
+                      </Stack>
                     ) : (
-                      <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflowX: 'auto' }}>
-                        <Table size="small" sx={{ minWidth: 1280 }}>
+                      <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflowX: 'hidden' }}>
+                        <Table
+                          size="small"
+                          sx={{
+                            width: '100%',
+                            tableLayout: 'fixed',
+                            '& th, & td': {
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              px: 0.75,
+                            },
+                            '& th': {
+                              textAlign: 'center',
+                            },
+                          }}
+                        >
+                          <colgroup>
+                            <col style={{ width: 92 }} />
+                            <col style={{ width: 72 }} />
+                            <col style={{ width: '30%' }} />
+                            <col style={{ width: 82 }} />
+                            <col style={{ width: 72 }} />
+                            <col style={{ width: '15%' }} />
+                            <col style={{ width: '10%' }} />
+                            <col style={{ width: '14%' }} />
+                            <col style={{ width: '9%' }} />
+                          </colgroup>
                           <TableHead>
                             <TableRow>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Fecha</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Reporte</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Actividad</TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7' }}>Cantidad</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Unidad</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Frente</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Área</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Cuadrilla</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Especialidad</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Inicio</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Fin</TableCell>
+                              <TableCell title="Fecha" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Fecha</TableCell>
+                              <TableCell title="Reporte" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Reporte</TableCell>
+                              <TableCell title="Actividad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Actividad</TableCell>
+                              <TableCell title="Cantidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Cantidad</TableCell>
+                              <TableCell title="Unidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Unidad</TableCell>
+                              <TableCell title="Frente" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Frente</TableCell>
+                              <TableCell title="Área" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Área</TableCell>
+                              <TableCell title="Cuadrilla" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Cuadrilla</TableCell>
+                              <TableCell title="Especialidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Especialidad</TableCell>
                             </TableRow>
                           </TableHead>
                           <TableBody>
-                            {filteredManagementActivities.map((row) => (
-                              <TableRow key={`${row.reportId}-${row.sourceIndex}-${row.name}`}>
-                                <TableCell sx={{ py: 0.65 }}>{formatDate(row.date)}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>
-                                  {row.reportNo ? `N°${row.reportNo}` : row.reportId.slice(0, 8)}
-                                </TableCell>
-                                <TableCell sx={{ py: 0.65, fontWeight: 700 }}>{row.name}</TableCell>
-                                <TableCell align="right" sx={{ py: 0.65 }}>{formatNumber(row.quantity)}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>{row.unit || '-'}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>{row.front || '-'}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>{row.area || '-'}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>{row.crew || '-'}</TableCell>
-                                <TableCell sx={{ py: 0.65 }}>{row.specialty || '-'}</TableCell>
-                                <TableCell align="center" sx={{ py: 0.65 }}>{formatTime(row.startTime)}</TableCell>
-                                <TableCell align="center" sx={{ py: 0.65 }}>{formatTime(row.endTime)}</TableCell>
-                              </TableRow>
-                            ))}
+                            {filteredManagementActivities.map((row, rowIndex) => {
+                              const reportLabel = row.reportNo ? `N°${row.reportNo}` : row.reportId.slice(0, 8);
+                              const dateLabel = formatDate(row.date);
+                              const quantityLabel = formatNumber(row.quantity);
+                              return (
+                                <TableRow
+                                  key={`${row.reportId}-${row.sourceIndex}-${row.name}`}
+                                  sx={{
+                                    bgcolor: rowIndex % 2 === 0 ? '#f8fbff' : '#e8f5fc',
+                                    '&:hover': { bgcolor: '#dbeeff' },
+                                  }}
+                                >
+                                  <TableCell title={dateLabel} sx={{ py: 0.55, overflow: 'visible', textOverflow: 'clip' }}>{dateLabel}</TableCell>
+                                  <TableCell title={reportLabel} align="center" sx={{ py: 0.55, overflow: 'visible', textOverflow: 'clip' }}>{reportLabel}</TableCell>
+                                  <TableCell title={row.name || ''} sx={{ py: 0.65, fontWeight: 600 }}>{row.name}</TableCell>
+                                  <TableCell title={quantityLabel} align="center" sx={{ py: 0.55, overflow: 'visible', textOverflow: 'clip' }}>{quantityLabel}</TableCell>
+                                  <TableCell title={row.unit || '-'} align="center" sx={{ py: 0.55, overflow: 'visible', textOverflow: 'clip' }}>{row.unit || '-'}</TableCell>
+                                  <TableCell title={row.front || '-'} sx={{ py: 0.65 }}>{row.front || '-'}</TableCell>
+                                  <TableCell title={row.area || '-'} sx={{ py: 0.65 }}>{row.area || '-'}</TableCell>
+                                  <TableCell title={row.crew || '-'} sx={{ py: 0.65 }}>{row.crew || '-'}</TableCell>
+                                  <TableCell title={row.specialty || '-'} sx={{ py: 0.65 }}>{row.specialty || '-'}</TableCell>
+                                </TableRow>
+                              );
+                            })}
                           </TableBody>
                         </Table>
                       </TableContainer>
                     )}
                   </Stack>
                 </Paper>
+                </>
               ) : activeTab === 'report-fronts' ? (
                 <Paper
                   variant="outlined"

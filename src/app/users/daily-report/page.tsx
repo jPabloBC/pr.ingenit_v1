@@ -9594,6 +9594,11 @@ export default function DailyReportPage() {
   }, [reportFrontNames])
 
   const resolvedDailyReportDynamicFrontLabel = useMemo(() => {
+    const strictPersistedLabel = String(nocFrontColumnLabel || "").replace(/\s+/g, " ").trim()
+    if ((viewOpen || isViewingHistoryVersion) && strictPersistedLabel) {
+      return strictPersistedLabel
+    }
+
     const activeBaseCandidates = new Map<string, string>()
     const canaletasBaseCandidates = new Map<string, string>()
     const dynamicWorkFrontCandidates = new Map<string, string>()
@@ -9717,7 +9722,7 @@ export default function DailyReportPage() {
     if (dynamicLabels.length >= 1) return joinLabels(dynamicLabels)
 
     return ""
-  }, [fieldReportsForDate, form.work_front, nocFrontColumnLabel, reportFrontNameByNormalized, reportFrontNames])
+  }, [fieldReportsForDate, form.work_front, nocFrontColumnLabel, reportFrontNameByNormalized, reportFrontNames, viewOpen, isViewingHistoryVersion])
 
   const getV2DotacionFrenteValues = (row: {
     position?: string
@@ -12118,6 +12123,7 @@ export default function DailyReportPage() {
 
   const closeViewDialog = () => {
     setViewOpen(false)
+    setViewRecord(null)
     setHistoryViewMeta(null)
   }
 
@@ -12520,7 +12526,7 @@ export default function DailyReportPage() {
     setActiveActionRecordId(String(recordSummary.id || ""))
     try {
       const record = await fetchDailyReportDetail(String(recordSummary.id || ""))
-      setViewOpen(true)
+      setEditingId(null)
       setHistoryViewMeta(null)
       setReportTemplate(inferTemplateFromRecord(record))
       const normalized = hydrateStrictViewFormFromRecord(record)
@@ -12538,8 +12544,10 @@ export default function DailyReportPage() {
         : {}
       setDailyActivityEvidenceByLineKey(evidenceByLine as Record<string, EvidenceFileLite[]>)
       setViewRecord(record)
+      setViewOpen(true)
     } catch (err: any) {
       setViewOpen(false)
+      setViewRecord(null)
       showToast(err?.message || "No se pudo abrir el reporte", "error")
     } finally {
       setActiveActionRecordId(null)

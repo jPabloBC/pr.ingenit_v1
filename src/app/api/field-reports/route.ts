@@ -246,6 +246,27 @@ const FIELD_REPORT_LIST_SUMMARY_SELECT = [
   'end_time',
   'activities',
   'assignments',
+  'evidence_files',
+  'evidence',
+  'images',
+  'photos',
+  'created_by',
+  'created_at'
+].join(', ')
+
+const FIELD_REPORT_ACTIVITIES_SUMMARY_SELECT = [
+  'id',
+  'company_id',
+  'date',
+  'report_sequence_no',
+  'specialty',
+  'work_front',
+  'crew_id',
+  'crew_name',
+  'area',
+  'start_time',
+  'end_time',
+  'activities',
   'created_by',
   'created_at'
 ].join(', ')
@@ -1482,11 +1503,14 @@ export async function GET(req: NextRequest) {
     const dateTo = String(req.nextUrl.searchParams.get('date_to') || '').slice(0, 10)
     const summary = req.nextUrl.searchParams.get('summary') === '1'
     const slim = req.nextUrl.searchParams.get('slim') === '1'
+    const activitiesOnly = req.nextUrl.searchParams.get('activities_only') === '1'
+    const activitySearch = String(req.nextUrl.searchParams.get('activity_search') || '').trim()
     const datesOnly = req.nextUrl.searchParams.get('dates') === '1'
     const includeCalc = req.nextUrl.searchParams.get('include_calc') === '1'
     const hoursSummary = req.nextUrl.searchParams.get('hours_summary') === '1'
     const limitParam = parseInt(req.nextUrl.searchParams.get('limit') || '100', 10)
-    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 200) : 100
+    const limitMax = activitiesOnly && activitySearch ? 1000 : 200
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, limitMax) : 100
     const userSpecialty = role === 'user' ? await resolveUserSpecialty(supabaseAdmin, session) : ''
 
     if (datesOnly) {
@@ -1576,7 +1600,7 @@ export async function GET(req: NextRequest) {
     await writeFieldReportScreenViewOnce({ supabaseAdmin, session })
 
     const listSelect = summary
-      ? (slim ? FIELD_REPORT_LIST_SLIM_SELECT : (includeCalc ? FIELD_REPORT_DAILY_SUMMARY_SELECT : FIELD_REPORT_LIST_SUMMARY_SELECT))
+      ? (activitiesOnly ? FIELD_REPORT_ACTIVITIES_SUMMARY_SELECT : (slim ? FIELD_REPORT_LIST_SLIM_SELECT : (includeCalc ? FIELD_REPORT_DAILY_SUMMARY_SELECT : FIELD_REPORT_LIST_SUMMARY_SELECT)))
       : '*'
     const buildReportQuery = (select: string) => {
       let query = supabaseAdmin
@@ -1674,10 +1698,70 @@ export async function GET(req: NextRequest) {
         hint: String(error?.hint || '')
       }, { status: 500 })
     }
-    const listRows = Array.isArray(data) ? data : []
+    const normalizeSearchText = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim()
+    const parseArrayMaybe = (value: any): any[] => {
+      if (Array.isArray(value)) return value
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value)
+          return Array.isArray(parsed) ? parsed : []
+        } catch {
+          return []
+        }
+      }
+      return []
+    }
+    const filterActivityRowsForSearch = (rows: any[]) => {
+      if (!activitiesOnly || !activitySearch) return rows
+      const query = normalizeSearchText(activitySearch)
+      if (!query) return rows
+      return rows
+        .map((report: any) => {
+          const reportText = normalizeSearchText([
+            report?.date,
+            report?.report_sequence_no ? `N°${report.report_sequence_no}` : '',
+            report?.work_front,
+            report?.area,
+            report?.crew_name,
+            report?.specialty,
+          ].filter(Boolean).join(' '))
+          const activities = parseArrayMaybe(report?.activities)
+          const filteredActivities = activities.filter((activity: any) => {
+            const haystack = normalizeSearchText([
+              activity?.activity,
+              activity?.activity_name,
+              activity?.name,
+              activity?.title,
+              activity?.description,
+              activity?.detalle,
+              activity?.task,
+              activity?.unit,
+              activity?.unidad,
+              activity?.uom,
+              activity?.measure,
+              activity?.activity_front,
+              activity?.work_front,
+              activity?.front,
+              activity?.frente,
+              reportText,
+            ].filter(Boolean).join(' '))
+            return haystack.includes(query)
+          })
+          if (filteredActivities.length === 0) return null
+          return { ...report, activities: filteredActivities }
+        })
+        .filter(Boolean)
+    }
+    const listRows = filterActivityRowsForSearch(Array.isArray(data) ? data : [])
     if (role === 'user') {
       // If user specialty is missing, avoid hiding all reports.
       if (!userSpecialty) {
+        if (activitiesOnly) return NextResponse.json(listRows)
         const batch = await enrichReportsPeopleBatch(supabaseAdmin, String(session.user.companyId), listRows)
         const enriched = batch.reports
         return NextResponse.json(enriched)
@@ -1688,10 +1772,13 @@ export async function GET(req: NextRequest) {
         if (!raw) return true
         return specialtyMatches(r?.specialty, userSpecialty)
       })
-      const batch = await enrichReportsPeopleBatch(supabaseAdmin, String(session.user.companyId), filtered)
+      const activityFiltered = filterActivityRowsForSearch(filtered)
+      if (activitiesOnly) return NextResponse.json(activityFiltered)
+      const batch = await enrichReportsPeopleBatch(supabaseAdmin, String(session.user.companyId), activityFiltered)
       const enriched = batch.reports
       return NextResponse.json(enriched)
     }
+    if (activitiesOnly) return NextResponse.json(listRows)
     const batch = await enrichReportsPeopleBatch(supabaseAdmin, String(session.user.companyId), listRows)
     const enriched = batch.reports
     return NextResponse.json(enriched)
