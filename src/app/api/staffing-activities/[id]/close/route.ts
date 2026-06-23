@@ -20,6 +20,13 @@ const sessionProjectId = (session: any) =>
     session?.project_id
   )
 
+const activityMetadata = (activity: any) =>
+  activity?.metadata && typeof activity.metadata === 'object' && !Array.isArray(activity.metadata)
+    ? activity.metadata
+    : {}
+
+const activityStatus = (activity: any) => clean(activityMetadata(activity).status).toLowerCase()
+
 const auditCloseAttempt = async (params: {
   companyId: string
   projectId?: string | null
@@ -113,6 +120,34 @@ export async function PATCH(
     if (clean(beforeData.status) !== 'draft') {
       await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'not_draft' })
       return jsonError('Solo se pueden cerrar jornadas en estado draft', 409)
+    }
+
+    const { data: activities, error: activitiesError } = await supabaseAdmin
+      .from('pr_field_activity_logs')
+      .select('id, metadata')
+      .eq('session_id', id)
+      .eq('company_id', companyId)
+
+    if (activitiesError) return jsonError(activitiesError.message, 500)
+
+    const activityRows = Array.isArray(activities) ? activities : []
+    if (activityRows.length === 0) {
+      await auditCloseAttempt({ ...auditBase, allowed: false, reason: 'no_activities' })
+      return jsonError('No se puede cerrar una jornada sin actividades', 400)
+    }
+
+    const openActivities = activityRows.filter((activity) => activityStatus(activity) !== 'closed')
+    if (openActivities.length > 0) {
+      await auditCloseAttempt({
+        ...auditBase,
+        allowed: false,
+        reason: 'activities_not_closed',
+        metadata: {
+          ...auditBase.metadata,
+          open_activity_count: openActivities.length,
+        },
+      })
+      return jsonError('No se puede cerrar la jornada: hay actividades abiertas o sin cerrar', 400)
     }
 
     const metadata = {
