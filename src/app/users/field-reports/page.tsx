@@ -948,6 +948,7 @@ export default function FieldReportsPage() {
     setPersonnel([])
     setPersonHours({})
     setPersonExtraHours({})
+    setCrewMembers([])
     setEquipmentEntries([])
     setEquipmentHours({})
     setMaterialEntries([])
@@ -2015,6 +2016,54 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][V1] setAssignedActivit
       }
     }
   }, [crews, loadAssignedActivitiesForCrewDate, FIELD_REPORTS_DEBUG])
+
+  const loadAssignedActivitiesSnapshotForCrewsDate = useCallback(async (crewIds: string[], date: string) => {
+    const uniqueIds = Array.from(new Set((crewIds || []).map(String).filter(Boolean)))
+    if (uniqueIds.length === 0 || !date) return []
+    const mapActivitiesToAssignedRows = (activities: any[], crewId: string) => {
+      const crew = crews.find((c) => String(c.id) === String(crewId))
+      return (activities || []).map((act: any, idx: number) => ({
+        lineNumber: idx + 1,
+        activityId: String(act.id),
+        id: act.id,
+        company_id: act.company_id || null,
+        program_quantity: act.quantity ?? 0,
+        quantity: 0,
+        created_at: act.created_at || null,
+        updated_at: act.updated_at || null,
+        description: act.description ?? null,
+        unit: act.unit ?? null,
+        discipline: act.discipline ?? null,
+        observations: act.user_detail ?? act.observations ?? null,
+        item_id: act.item_id ?? null,
+        activity_detail_id: null,
+        activity_detail_code: null,
+        sub_id: act.sub_id ?? null,
+        area: act.area ?? null,
+        activity: act.activity ?? null,
+        package: act.package ?? null,
+        crewId: String(crewId),
+        crewName: crew?.name || '',
+      }))
+    }
+
+    const bulkUrl = `/api/crews/activities/by-date?date=${encodeURIComponent(date)}&include=activities&crewIds=${encodeURIComponent(uniqueIds.join(','))}`
+    perfCountRequest('modal-open', bulkUrl)
+    const res = await fetch(bulkUrl, { cache: 'no-store' })
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    const activitiesByCrew = data?.activitiesByCrew && typeof data.activitiesByCrew === 'object'
+      ? data.activitiesByCrew
+      : {}
+    return uniqueIds
+      .flatMap((crewId) => {
+        const rows = Array.isArray(activitiesByCrew[String(crewId)]) ? activitiesByCrew[String(crewId)] : []
+        const mapped = mapActivitiesToAssignedRows(rows, crewId)
+        activityRowsByCrewDateCacheRef.current.set(`${String(crewId)}::${String(date)}`, mapped)
+        return mapped
+      })
+      .map((row, idx) => ({ ...row, lineNumber: idx + 1 }))
+  }, [crews, perfCountRequest])
 
   const activitySyncKey = useCallback((row: any) => `${String(row?.activityId || row?.id || '')}::${String(row?.crewId || row?.crew_id || '')}`, [])
 
@@ -3565,7 +3614,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
 	        const full = await loadCrewFullCached(firstId, { force: !!editMode })
         const collabs = Array.isArray(full?.collaborators) ? full.collaborators : []
         const crewName = full?.crew?.name || crews.find((c: any) => String(c?.id) === firstId)?.name || ''
-        const results = [collabs.map((c: any) => ({ ...c, crewName }))]
+        const results = [collabs.map((c: any) => ({ ...c, crewId: firstId, crew_id: firstId, crewName }))]
         if (cancelled) return
         const merged = results.flat().filter(Boolean) as any[]
         // dedupe by collaborator id
@@ -3607,6 +3656,15 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
       return
     }
     if (!Array.isArray(crewMembers) || crewMembers.length === 0) return
+    const expectedCrewIds = Array.from(new Set((reportCrewIds || []).map(String).filter(Boolean)))
+    if (editMode && selectedReport?.id && expectedCrewIds.length > 0) {
+      const loadedCrewIds = new Set(
+        crewMembers
+          .map((member: any) => String(member?.crewId || member?.crew_id || '').trim())
+          .filter(Boolean)
+      )
+      if (loadedCrewIds.size === 0 || expectedCrewIds.some((id) => !loadedCrewIds.has(id))) return
+    }
 
     const capatazMembers = (crewMembers || []).filter((m: any) => isCapatazPosition(m?.position))
     const nonLeaderMembers = (crewMembers || []).filter((m: any) => !isLeaderPosition(m?.position))
@@ -3629,16 +3687,22 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
     if (uniqueMembers.length === 0) return
 
     const previousRows = Array.isArray(personnel) ? personnel : []
-    const personKeys = (value: any, fallback = '') => Array.from(new Set([
-      value?.id,
-      value?.collaborator_id,
-      value?.user_id,
-      value?.document,
-      value?.rut,
-      value?.name,
-      `${value?.first_name || ''} ${value?.last_name || ''}`.trim(),
-      fallback
-    ].map((key) => String(key || '').trim()).filter(Boolean)))
+    const personKeys = (value: any, fallback = '') => {
+      const document = String(value?.document || value?.rut || '').trim()
+      const compactDocument = document.toUpperCase().replace(/[^0-9A-Z]/g, '')
+      const fullName = String(value?.name || `${value?.first_name || ''} ${value?.last_name || ''}`.trim()).trim()
+      const normalizedName = normalizeText(fullName)
+      return Array.from(new Set([
+        value?.id,
+        value?.collaborator_id,
+        value?.user_id,
+        document,
+        compactDocument,
+        fullName,
+        normalizedName,
+        fallback
+      ].map((key) => String(key || '').trim()).filter(Boolean)))
+    }
     const memberByKey = new Map<string, any>()
     uniqueMembers.forEach((member: any, idx: number) => {
       personKeys(member, `member-${idx}`).forEach((key) => {
@@ -3669,12 +3733,17 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
         crewName: member?.crewName || member?.crew_name || previous?.crewName || previous?.crew_name || ''
       }
     }
+    const shouldDropRemovedCrewMembers = editMode && !!selectedReport
     const existingInSavedOrder = previousRows.map((previous: any, idx: number) => {
       const member = personKeys(previous, `previous-${idx}`)
         .map((key) => memberByKey.get(key))
         .find(Boolean)
-      return member ? buildPersonnelRow(member, previous, idx) : previous
-    })
+      if (member) return buildPersonnelRow(member, previous, idx)
+      return shouldDropRemovedCrewMembers ? null : previous
+    }).filter(Boolean)
+    const removedPersonnelCount = shouldDropRemovedCrewMembers
+      ? previousRows.length - existingInSavedOrder.length
+      : 0
     const newMembers = uniqueMembers
       .filter((member: any, idx: number) => {
         const keys = personKeys(member, `member-${idx}`)
@@ -3701,22 +3770,56 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][hydration]', {
     })))
     if (prevSignature === nextSignature) return
 
-    const validIds = new Set(mergedPersonnel.map((p: any) => String(p?.id || p?.collaborator_id || '')))
-    setPersonHours((hoursPrev) => {
-      const next: Record<string, number[]> = {}
-      Object.entries(hoursPrev || {}).forEach(([key, val]) => {
-        if (validIds.has(String(key))) next[String(key)] = Array.isArray(val) ? [...val] : []
+    const getPersonStorageId = (person: any, fallback = '') => String(
+      person?.id ||
+      person?.collaborator_id ||
+      person?.user_id ||
+      person?.document ||
+      person?.name ||
+      fallback
+    ).trim()
+    const buildPreviousValueLookup = <T,>(values: Record<string, T> | null | undefined) => {
+      const lookup = new Map<string, T>()
+      Object.entries(values || {}).forEach(([key, value]) => {
+        if (value != null) lookup.set(String(key), value as T)
       })
-      mergedPersonnel.forEach((person: any) => {
-        const id = String(person?.id || person?.collaborator_id || '')
-        if (id && !next[id]) next[id] = new Array(activityCount).fill(0)
+      previousRows.forEach((row: any, idx: number) => {
+        const firstValue = personKeys(row, `previous-${idx}`)
+          .map((key) => (values || {})[key])
+          .find((value) => value != null) as T | undefined
+        if (firstValue == null) return
+        personKeys(row, `previous-${idx}`).forEach((key) => {
+          if (!lookup.has(key)) lookup.set(key, firstValue)
+        })
+      })
+      return lookup
+    }
+    setPersonHours((hoursPrev) => {
+      const previousHoursByKey = buildPreviousValueLookup<number[]>(hoursPrev)
+      const next: Record<string, number[]> = {}
+      mergedPersonnel.forEach((person: any, idx: number) => {
+        const id = getPersonStorageId(person, `person-${idx}`)
+        if (!id) return
+        const existing = personKeys(person, `person-${idx}`)
+          .map((key) => previousHoursByKey.get(key))
+          .find((value) => Array.isArray(value))
+        const arr = Array.isArray(existing) ? [...existing] : new Array(activityCount).fill(0)
+        if (arr.length < activityCount) while (arr.length < activityCount) arr.push(0)
+        else if (arr.length > activityCount) arr.length = activityCount
+        next[id] = arr
       })
       return next
     })
     setPersonExtraHours((extraPrev) => {
+      const previousExtraByKey = buildPreviousValueLookup<number>(extraPrev)
       const next: Record<string, number> = {}
-      Object.entries(extraPrev || {}).forEach(([key, val]) => {
-        if (validIds.has(String(key))) next[String(key)] = Number(val) || 0
+      mergedPersonnel.forEach((person: any, idx: number) => {
+        const id = getPersonStorageId(person, `person-${idx}`)
+        if (!id) return
+        const existing = personKeys(person, `person-${idx}`)
+          .map((key) => previousExtraByKey.get(key))
+          .find((value) => value != null)
+        next[id] = Number(existing || 0) || 0
       })
       return next
     })
@@ -3730,8 +3833,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][crew-members-sync]', {
         previousPersonnelCount: previousRows.length,
         currentCrewMembersCount: crewMembers.length,
         mergedPersonnelCount: mergedPersonnel.length,
+        removedPersonnelCount,
         preservedOrder: previousRows.length > 0
       })
+    }
+    if (removedPersonnelCount > 0) {
+      showSnackbar(`Colaboradores sincronizados desde cuadrillas: ${removedPersonnelCount} eliminado(s)`, 'info')
     }
   }, [open, selectedReport, crewMembers, reportCrewIds, reportDate, personnel, editMode, selectedReportHydrationStatus])
 
@@ -5347,7 +5454,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
 	              const full = await loadCrewFullCached(id, { force: !isViewOnly })
               const crewName = selectedCrews.find((c) => String(c.id) === id)?.name || ''
               const collabs = Array.isArray(full?.collaborators) ? full.collaborators : []
-              return collabs.map((c: any) => ({ ...c, crewName }))
+              return collabs.map((c: any) => ({ ...c, crewId: id, crew_id: id, crewName }))
             })
           )
           const results = fullByCrew
@@ -5438,7 +5545,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
         const crew = data?.crew
         const collaborators: any[] = data?.collaborators || []
         const crewName = (crew && crew.name) || ''
-        setCrewMembers((collaborators || []).map((c: any) => ({ ...c, crewName })))
+        setCrewMembers((collaborators || []).map((c: any) => ({ ...c, crewId: String(crewId), crew_id: String(crewId), crewName })))
 
         const normalize = (v: any) => (v ? String(v).toLowerCase() : '')
         const byPosition = (posKeyword: string) => collaborators.find((c) => normalize(c.position).includes(posKeyword))
@@ -5505,7 +5612,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
           if (!isViewOnly || !reportSpecialty) {
             setSpecialty(reportSpecialty || crewSpecialty || '')
           }
-          setCrewMembers((crew && (crew.members || crew.collaborators)) || [])
+          setCrewMembers(((crew && (crew.members || crew.collaborators)) || []).map((c: any) => ({ ...c, crewId: String(crewId), crew_id: String(crewId), crewName: crew?.name || c?.crewName || c?.crew_name || '' })))
         }
       }
     })()
@@ -5577,25 +5684,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
         uniqueIds.forEach((id) => {
           activityRowsByCrewDateCacheRef.current.delete(`${String(id)}::${String(reportDate)}`)
         })
-        const results = await Promise.all(uniqueIds.map((id) => loadAssignedActivitiesForCrewDate(id, reportDate)))
-        const latestRows = results.flat().map((a, idx) => ({ ...a, lineNumber: idx + 1 }))
+        const latestRows = await loadAssignedActivitiesSnapshotForCrewsDate(uniqueIds, reportDate)
         if (cancelled) return
         const previousRows = assignedActivitiesRef.current || []
         const hasStoredActivitySnapshot = selectedReport?.assignments != null || selectedReport?.activities != null
         if (previousRows.length === 0 && hasStoredActivitySnapshot) {
           // El efecto que hidrata el reporte corre antes que este; esperamos al siguiente render
           // para no perder cantidades, descripciones ejecutadas o evidencias ya guardadas.
-          return
-        }
-        if (previousRows.length > 0 && latestRows.length === 0) {
-          if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][crew-activities-sync]', {
-            reportId: selectedReport?.id || null,
-            reportDate,
-            reportCrewIds: uniqueIds,
-            skipped: true,
-            reason: 'latest-empty-preserve-saved-order',
-            previousCount: previousRows.length
-          })
           return
         }
         const { merged, appendedCount, updatedCount, removedCount } = mergeAssignedActivitiesWithLatest(previousRows, latestRows as AssignedActivity[])
@@ -5638,7 +5733,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
       }
     })()
     return () => { cancelled = true }
-  }, [open, selectedReport, editMode, reportCrewIds, reportDate, assignedActivities.length, loadAssignedActivitiesForCrewDate, mergeAssignedActivitiesWithLatest, activitySyncKey, selectedReportHydrationStatus, v2StateReportId])
+  }, [open, selectedReport, editMode, reportCrewIds, reportDate, assignedActivities.length, loadAssignedActivitiesSnapshotForCrewsDate, mergeAssignedActivitiesWithLatest, activitySyncKey, selectedReportHydrationStatus, v2StateReportId])
 
   useEffect(() => {
     if (!open) {

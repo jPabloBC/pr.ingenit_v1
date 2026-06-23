@@ -38,6 +38,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns'
 import AddIcon from '@mui/icons-material/Add'
+import EditIcon from '@mui/icons-material/Edit'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import DoneAllIcon from '@mui/icons-material/DoneAll'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
@@ -315,7 +316,9 @@ export default function StaffingActivitiesPage() {
   const [activitySuggestions, setActivitySuggestions] = useState<string[]>([])
   const [loadingActivitySuggestions, setLoadingActivitySuggestions] = useState(false)
   const [uploadingActivityImages, setUploadingActivityImages] = useState<Record<number, boolean>>({})
+  const [editingActivityRef, setEditingActivityRef] = useState<{ id: string; sessionId: string } | null>(null)
   const [collaboratorSearch, setCollaboratorSearch] = useState('')
+  const [activeMobilePanel, setActiveMobilePanel] = useState<'crew' | 'activity' | 'history'>('activity')
   const currentUserId = String((session?.user as any)?.id || '').trim()
 
   const selectedFront = useMemo(
@@ -643,6 +646,51 @@ export default function StaffingActivitiesPage() {
       .filter((image) => image.key)
   }
 
+  const activityTypeFromValue = (value: any): ActivityForm['activity_type'] => {
+    const type = String(value?.metadata?.activity_type || value?.activity_type || '').trim().toLowerCase()
+    if (type === 'operational') return 'operational'
+    if (type === 'administrative') return 'administrative'
+    return ''
+  }
+
+  const activityStatusFromValue = (value: any) =>
+    String(value?.metadata?.status || '').trim().toLowerCase()
+
+  const activityStatusLabel = (status: unknown) => {
+    const normalizedStatus = String(status || '').trim().toLowerCase()
+    if (normalizedStatus === 'draft') return 'Borrador'
+    if (normalizedStatus === 'in_progress') return 'En progreso'
+    if (normalizedStatus === 'closed') return 'Cerrada'
+    return 'Sin estado'
+  }
+
+  const sessionStatusLabel = (status: unknown) => {
+    const normalizedStatus = String(status || '').trim().toLowerCase()
+    if (normalizedStatus === 'draft') return 'Borrador'
+    if (normalizedStatus === 'reopened') return 'Reabierta'
+    if (normalizedStatus === 'submitted') return 'Enviada'
+    return String(status || '-')
+  }
+
+  const activityFormFromValue = (value: any): ActivityForm => {
+    const type = activityTypeFromValue(value)
+    return {
+      activity: String(value?.activity || '').trim(),
+      activity_type: type,
+      activity_start_time: String(value?.activity_start_time || '').slice(0, 5),
+      activity_end_time: String(value?.activity_end_time || '').slice(0, 5),
+      activity_observations: String(value?.activity_observations || '').trim(),
+      restrictions: String(value?.restrictions || '').trim(),
+      quantity: type === 'operational' ? String(value?.quantity ?? value?.metadata?.quantity ?? '').trim() : '',
+      unit: type === 'operational' ? String(value?.unit ?? value?.metadata?.unit ?? '').trim() : '',
+      images: activityImagesFromValue(value),
+    }
+  }
+
+  const editableActivitiesCount = sessions.reduce((count, session) => (
+    count + (Array.isArray(session.activities) ? session.activities.length : 0)
+  ), 0)
+
   const uploadActivityImages = async (index: number, fileList: FileList | null) => {
     const files = Array.from(fileList || []).filter((file) => String(file.type || '').startsWith('image/'))
     if (!files.length) return
@@ -738,6 +786,7 @@ export default function StaffingActivitiesPage() {
     setActivitySuggestions([])
     setActivitySuggestionQuery('')
     setActiveActivityIndex(null)
+    setEditingActivityRef(null)
   }
 
   const addActivity = () => setActivities((prev) => [...prev, emptyActivity()])
@@ -825,6 +874,8 @@ export default function StaffingActivitiesPage() {
       activity_end_time: activity.activity_end_time || null,
       activity_observations: activity.activity_observations.trim() || null,
       restrictions: activity.restrictions.trim() || null,
+      unit: activity.activity_type === 'operational' ? activity.unit.trim() || null : null,
+      quantity: activity.activity_type === 'operational' ? activity.quantity.trim() || null : null,
       metadata: {
         activity_type: activity.activity_type,
         quantity: activity.activity_type === 'operational' ? activity.quantity.trim() || null : null,
@@ -848,6 +899,25 @@ export default function StaffingActivitiesPage() {
 
     try {
       setSaving(true)
+
+      if (editingActivityRef?.id && editingActivityRef.sessionId === selectedActivitySessionId) {
+        const res = await fetch(`/api/staffing-activities/${encodeURIComponent(selectedActivitySessionId)}/activities`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            activity_id: editingActivityRef.id,
+            ...cleanActivity,
+          }),
+        })
+
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json?.error || 'No se pudo actualizar la actividad')
+
+        setNotice({ severity: 'success', message: 'Actividad actualizada.' })
+        resetActivityForm()
+        await loadSessions(date)
+        return
+      }
 
       const res = await fetch(`/api/staffing-activities/${encodeURIComponent(selectedActivitySessionId)}/activities`, {
         method: 'POST',
@@ -888,6 +958,8 @@ export default function StaffingActivitiesPage() {
           unit: activity.activity_type === 'operational' ? activity.unit.trim() || null : null,
           images: activity.activity_type === 'operational' && Array.isArray(activity.images) ? activity.images : [],
         },
+        unit: activity.activity_type === 'operational' ? activity.unit.trim() || null : null,
+        quantity: activity.activity_type === 'operational' ? activity.quantity.trim() || null : null,
       }))
       .filter((activity) => activity.activity)
 
@@ -1034,6 +1106,32 @@ export default function StaffingActivitiesPage() {
     return staffingSession.activities.flatMap((activity) => activityImagesFromValue(activity))
   }
 
+  const beginEditActivity = (staffingSession: StaffingSession, activity: any) => {
+    const sessionStatus = String(staffingSession.status || '').toLowerCase()
+    const isCreator = Boolean(currentUserId && String(staffingSession.created_by || '').trim() === currentUserId)
+
+    if (!isCreator || !['draft', 'reopened'].includes(sessionStatus)) {
+      setNotice({ severity: 'error', message: 'Solo puedes editar actividades de una cuadrilla propia abierta.' })
+      return
+    }
+
+    if (activityStatusFromValue(activity) === 'closed') {
+      setNotice({ severity: 'error', message: 'No se puede editar una actividad cerrada.' })
+      return
+    }
+
+    const activityId = String(activity?.id || '').trim()
+    if (!activityId) {
+      setNotice({ severity: 'error', message: 'No se encontró el ID de la actividad.' })
+      return
+    }
+
+    setSelectedActivitySessionId(staffingSession.id)
+    setActivities([activityFormFromValue(activity)])
+    setEditingActivityRef({ id: activityId, sessionId: staffingSession.id })
+    setNotice({ severity: 'info', message: 'Actividad cargada para edición.' })
+  }
+
   const selectedCollaboratorFromId = (id: string): Partial<Collaborator> | null => {
     return collaboratorsById.get(id) || null
   }
@@ -1144,6 +1242,19 @@ export default function StaffingActivitiesPage() {
     return `${frontText} · ${supervisorText}`
   }
 
+  const mobilePanelDisplay = (panel: 'crew' | 'activity' | 'history') => ({
+    xs: activeMobilePanel === panel ? 'block' : 'none',
+    md: 'block',
+  })
+
+  const openActivitiesCount = sessions.reduce((count, staffingSession) => (
+    count + (Array.isArray(staffingSession.activities)
+      ? staffingSession.activities.filter((activity: any) => activityStatusFromValue(activity) !== 'closed').length
+      : 0)
+  ), 0)
+
+  const closedActivitiesCount = Math.max(editableActivitiesCount - openActivitiesCount, 0)
+
   return (
     <>
       <UserHeader title="Dotación y actividades" />
@@ -1157,7 +1268,64 @@ export default function StaffingActivitiesPage() {
         }}
       >
         <Stack spacing={2.5}>
-          <Paper sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+          <Paper
+            sx={{
+              display: { xs: 'block', md: 'none' },
+              p: 1.25,
+              borderRadius: 1,
+              border: '1px solid #e2e8f0',
+              boxShadow: 'none',
+              position: 'sticky',
+              top: 0,
+              zIndex: 5,
+              bgcolor: '#fff',
+            }}
+          >
+            <Stack spacing={1}>
+              <Stack direction="row" spacing={1} sx={{ overflowX: 'auto', pb: 0.25 }}>
+                {[
+                  { id: 'crew', label: 'Cuadrilla', value: ownCrewHeaderCount },
+                  { id: 'activity', label: 'Registrar', value: selectedActivitySessionId ? 'Activa' : 'Sin cuadrilla' },
+                  { id: 'history', label: 'Actividades', value: `${editableActivitiesCount}` },
+                ].map((item) => {
+                  const selected = activeMobilePanel === item.id
+                  return (
+                    <Button
+                      key={item.id}
+                      variant={selected ? 'contained' : 'outlined'}
+                      onClick={() => setActiveMobilePanel(item.id as 'crew' | 'activity' | 'history')}
+                      sx={{
+                        minWidth: 112,
+                        height: 52,
+                        flexShrink: 0,
+                        textTransform: 'none',
+                        borderRadius: 1,
+                        bgcolor: selected ? colors.blue3 : '#fff',
+                        borderColor: selected ? colors.blue3 : '#cbd5e1',
+                        color: selected ? '#fff' : '#0f172a',
+                        '&:hover': {
+                          bgcolor: selected ? colors.blue2 : '#f8fafc',
+                          borderColor: colors.blue3,
+                        },
+                      }}
+                    >
+                      <Box sx={{ textAlign: 'left', width: '100%' }}>
+                        <Typography sx={{ fontSize: 13, fontWeight: 850, lineHeight: 1.15 }}>{item.label}</Typography>
+                        <Typography sx={{ fontSize: 11, opacity: selected ? 0.9 : 0.65, lineHeight: 1.2 }} noWrap>{item.value}</Typography>
+                      </Box>
+                    </Button>
+                  )
+                })}
+              </Stack>
+              <Stack direction="row" spacing={1} sx={{ color: '#64748b', fontSize: 12, px: 0.5 }}>
+                <Box>{date || 'Sin fecha'}</Box>
+                <Box>Abiertas {openActivitiesCount}</Box>
+                <Box>Cerradas {closedActivitiesCount}</Box>
+              </Stack>
+            </Stack>
+          </Paper>
+
+          <Paper sx={{ display: mobilePanelDisplay('crew'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a', mb: 1.5 }}>Cuadrilla del día</Typography>
             {!loadingAvailableDates && !hasAvailableDates ? (
               <Alert severity="info" sx={{ mb: 1.5 }}>
@@ -1554,13 +1722,20 @@ export default function StaffingActivitiesPage() {
             </Stack>
           </Paper>
 
-          <Paper sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+          <Paper sx={{ display: mobilePanelDisplay('activity'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Registrar actividad</Typography>
-                <Typography sx={{ color: '#64748b', fontSize: 13 }}>Agrega actividades a una cuadrilla abierta del día.</Typography>
+                <Typography sx={{ color: '#64748b', fontSize: 13 }}>
+                  {editingActivityRef ? 'Editando una actividad existente.' : 'Agrega actividades a una cuadrilla abierta del día.'}
+                </Typography>
               </Box>
-              <Button startIcon={<AddIcon />} onClick={addActivity} disabled={!canRegisterActivities} sx={{ textTransform: 'none', fontWeight: 800 }}>Agregar</Button>
+              <Stack direction="row" spacing={1}>
+                {editingActivityRef ? (
+                  <Button onClick={resetActivityForm} sx={{ textTransform: 'none', fontWeight: 800 }}>Cancelar edición</Button>
+                ) : null}
+                <Button startIcon={<AddIcon />} onClick={addActivity} disabled={!canRegisterActivities || Boolean(editingActivityRef)} sx={{ textTransform: 'none', fontWeight: 800 }}>Agregar</Button>
+              </Stack>
             </Stack>
             <FormControl fullWidth size="small" disabled={!canCreateForDate || openStaffingSessions.length === 0} sx={{ mb: 1.5 }}>
               <InputLabel id="activity-session-select-label">Cuadrilla</InputLabel>
@@ -1805,7 +1980,7 @@ export default function StaffingActivitiesPage() {
                         '&:hover': { bgcolor: colors.blue2 },
                       }}
                     >
-                      Guardar
+                      {editingActivityRef && index === 0 ? 'Guardar cambios' : 'Guardar'}
                     </Button>
 
                     <IconButton
@@ -1859,15 +2034,135 @@ export default function StaffingActivitiesPage() {
             </Stack>
           </Paper>
 
-          <Paper sx={{ p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+          <Paper sx={{ display: mobilePanelDisplay('history'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
               <Box>
-                <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Borradores / jornadas registradas</Typography>
-                <Typography sx={{ color: '#64748b', fontSize: 13 }}>{sessions.length} jornadas para {date}</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Actividades</Typography>
+                <Typography sx={{ color: '#64748b', fontSize: 13 }}>{editableActivitiesCount} actividades para {date}</Typography>
               </Box>
               {loadingSessions ? <CircularProgress size={22} /> : null}
             </Stack>
-            <TableContainer>
+            <Stack spacing={1.25} sx={{ display: { xs: 'flex', md: 'none' } }}>
+              {sessions.length === 0 ? (
+                <Typography sx={{ color: '#64748b', py: 3, textAlign: 'center' }}>No hay jornadas para la fecha.</Typography>
+              ) : null}
+              {sessions.map((session) => {
+                const status = String(session.status || '').toLowerCase()
+                const isCreator = Boolean(currentUserId && String(session.created_by || '').trim() === currentUserId)
+                const isDraft = status === 'draft'
+                const hasGeneratedCrew = Boolean(session.generated_crew_id)
+                const isToday = String(session.work_date || date || '').slice(0, 10) === todayYmd()
+                const canClose = isCreator && isDraft && !hasGeneratedCrew
+                const canDelete = canClose && isToday
+                const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+                const canEditSessionActivities = isCreator && ['draft', 'reopened'].includes(status)
+                const sessionImages = sessionActivityImages(session)
+
+                return (
+                  <Box
+                    key={session.id}
+                    sx={{
+                      border: '1px solid #e2e8f0',
+                      borderRadius: 1,
+                      p: 1.25,
+                      bgcolor: '#fff',
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 900, color: '#0f172a', fontSize: 14 }} noWrap>
+                          {session.work_front_name || 'Sin frente'}
+                        </Typography>
+                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                          {sessionStatusLabel(session.status)} · {Array.isArray(session.workers) ? session.workers.length : 0} colaboradores
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={0.5}>
+                        <Tooltip title="Cerrar jornada">
+                          <span>
+                            <IconButton aria-label="Cerrar jornada" size="small" disabled={!canClose || closingId === session.id} onClick={() => void closeDay(session.id)}>
+                              {closingId === session.id ? <CircularProgress size={18} /> : <DoneAllIcon fontSize="small" />}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                        <Tooltip title="Eliminar borrador">
+                          <span>
+                            <IconButton aria-label="Eliminar borrador" size="small" disabled={!canDelete || deletingId === session.id} onClick={() => void deleteDraft(session.id)}>
+                              {deletingId === session.id ? <CircularProgress size={18} /> : <DeleteOutlineIcon fontSize="small" />}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Stack>
+                    </Stack>
+
+                    <Stack spacing={0.75} sx={{ mt: 1 }}>
+                      {sessionActivities.length === 0 ? (
+                        <Typography sx={{ fontSize: 13, color: '#64748b' }}>Sin actividades registradas.</Typography>
+                      ) : null}
+                      {sessionActivities.map((activity: any, activityIndex: number) => {
+                        const activityStatus = activityStatusFromValue(activity)
+                        const activityType = activityTypeFromValue(activity)
+                        const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
+                        const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
+                        const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
+
+                        return (
+                          <Box
+                            key={String(activity?.id || activityIndex)}
+                            sx={{
+                              display: 'grid',
+                              gridTemplateColumns: '1fr auto',
+                              gap: 1,
+                              alignItems: 'center',
+                              borderTop: '1px solid #f1f5f9',
+                              pt: 0.75,
+                            }}
+                          >
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography sx={{ fontSize: 13.5, fontWeight: 850, color: '#0f172a' }} noWrap>
+                                {activity?.activity || `Actividad ${activityIndex + 1}`}
+                              </Typography>
+                              <Typography sx={{ color: '#64748b', fontSize: 12 }} noWrap>
+                                {[
+                                  activityStatusLabel(activityStatus),
+                                  activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : null,
+                                  activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : null,
+                                  activityType === 'operational' && activityQuantity && activityUnit ? `${activityQuantity} ${activityUnit}` : null,
+                                ].filter(Boolean).join(' · ')}
+                              </Typography>
+                            </Box>
+                            <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
+                              <span>
+                                <IconButton
+                                  aria-label="Editar actividad"
+                                  size="small"
+                                  disabled={!canEditActivity}
+                                  onClick={() => beginEditActivity(session, activity)}
+                                >
+                                  <EditIcon fontSize="small" />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Box>
+                        )
+                      })}
+                    </Stack>
+
+                    {sessionImages.length > 0 ? (
+                      <Button
+                        size="small"
+                        onClick={() => void openStaffingEvidence(sessionImages[0].key)}
+                        sx={{ mt: 0.75, minWidth: 0, p: 0, textTransform: 'none', fontSize: 12 }}
+                      >
+                        Ver imagen ({sessionImages.length})
+                      </Button>
+                    ) : null}
+                  </Box>
+                )
+              })}
+            </Stack>
+
+            <TableContainer sx={{ display: { xs: 'none', md: 'block' } }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -1897,6 +2192,8 @@ export default function StaffingActivitiesPage() {
                     const sessionSupervisorIds = sessionRoleIds(session, 'supervisor')
                     const sessionForemanIds = sessionRoleIds(session, 'foreman')
                     const sessionImages = sessionActivityImages(session)
+                    const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+                    const canEditSessionActivities = isCreator && ['draft', 'reopened'].includes(status)
                     return (
                       <TableRow key={session.id} hover>
                         <TableCell sx={{ fontWeight: 800 }}>{session.work_front_name || '-'}</TableCell>
@@ -1905,7 +2202,46 @@ export default function StaffingActivitiesPage() {
                         <TableCell align="right">{Array.isArray(session.workers) ? session.workers.length : 0}</TableCell>
                         <TableCell align="right">
                           <Stack spacing={0.25} alignItems="flex-end">
-                            <Typography sx={{ fontSize: 13 }}>{Array.isArray(session.activities) ? session.activities.length : 0}</Typography>
+                            {sessionActivities.length === 0 ? (
+                              <Typography sx={{ fontSize: 13, color: '#64748b' }}>Sin actividades</Typography>
+                            ) : null}
+                            {sessionActivities.map((activity: any, activityIndex: number) => {
+                              const activityStatus = activityStatusFromValue(activity)
+                              const activityType = activityTypeFromValue(activity)
+                              const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
+                              const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
+                              const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
+
+                              return (
+                                <Stack key={String(activity?.id || activityIndex)} direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" sx={{ maxWidth: 360 }}>
+                                  <Box sx={{ minWidth: 0, textAlign: 'right' }}>
+                                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }} noWrap>
+                                      {activity?.activity || `Actividad ${activityIndex + 1}`}
+                                    </Typography>
+                                    <Typography sx={{ fontSize: 12, color: '#64748b' }} noWrap>
+                                      {[
+                                        activityStatusLabel(activityStatus),
+                                        activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : null,
+                                        activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : null,
+                                        activityType === 'operational' && activityQuantity && activityUnit ? `${activityQuantity} ${activityUnit}` : null,
+                                      ].filter(Boolean).join(' · ')}
+                                    </Typography>
+                                  </Box>
+                                  <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
+                                    <span>
+                                      <IconButton
+                                        aria-label="Editar actividad"
+                                        size="small"
+                                        disabled={!canEditActivity}
+                                        onClick={() => beginEditActivity(session, activity)}
+                                      >
+                                        <EditIcon fontSize="small" />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                </Stack>
+                              )
+                            })}
                             {sessionImages.length > 0 ? (
                               <Button
                                 size="small"
@@ -1917,7 +2253,7 @@ export default function StaffingActivitiesPage() {
                             ) : null}
                           </Stack>
                         </TableCell>
-                        <TableCell>{session.status || '-'}</TableCell>
+                        <TableCell>{sessionStatusLabel(session.status)}</TableCell>
                         <TableCell align="right">
                           <IconButton aria-label="Cerrar jornada" disabled={!canClose || closingId === session.id} onClick={() => void closeDay(session.id)}>
                             {closingId === session.id ? <CircularProgress size={18} /> : <DoneAllIcon />}
