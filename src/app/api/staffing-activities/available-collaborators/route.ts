@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { isValidYmdDate } from '@/lib/staffing/validateStaffingPayload'
-import { fetchAvailableCollaborators } from '@/lib/staffing/availableCollaborators'
+import { fetchAvailableCollaborators, resolveTurnoSourceDate, todayYmd } from '@/lib/staffing/availableCollaborators'
 
 export const dynamic = 'force-dynamic'
 
@@ -188,6 +188,10 @@ export async function GET(req: NextRequest) {
     if (!isValidYmdDate(workDate)) {
       return NextResponse.json({ error: 'date debe usar formato YYYY-MM-DD' }, { status: 400 })
     }
+    const today = todayYmd()
+    if (workDate !== today) {
+      return NextResponse.json({ error: 'La dotación solo se puede crear para la fecha actual.' }, { status: 400 })
+    }
 
     const requestedProjectId = clean(req.nextUrl.searchParams.get('project_id'))
     const { projectId, error: projectScopeError } = resolveProjectId({
@@ -200,10 +204,42 @@ export async function GET(req: NextRequest) {
     const projectCompanyError = await validateProjectInCompany(projectId, companyId)
     if (projectCompanyError) return projectCompanyError
 
-    const collaborators = await fetchAvailableCollaborators({
+    const attendanceSourceDate = await resolveTurnoSourceDate({
       supabaseAdmin,
       companyId,
       workDate,
+    })
+    if (!attendanceSourceDate) {
+      return NextResponse.json({
+        collaborators: [],
+        assigned_collaborators: [],
+        total_collaborators_count: 0,
+        available_collaborators_count: 0,
+        assigned_collaborators_count: 0,
+        total_on_shift_count: 0,
+        direct_operational_on_shift_count: 0,
+        available_direct_operational_count: 0,
+        assigned_direct_operational_count: 0,
+        date: workDate,
+        attendance_source_date: null,
+        company_id: companyId,
+        project_id: projectId || null,
+        availability_scope: 'company',
+        project_filter_applied: false,
+        note: 'No existe asistencia de hoy ni del día anterior para usar como base de dotación.',
+        rule: {
+          status: 'turno',
+          reason: '11',
+          staffing_date: workDate,
+          attendance_source_date: null,
+        },
+      })
+    }
+
+    const collaborators = await fetchAvailableCollaborators({
+      supabaseAdmin,
+      companyId,
+      workDate: attendanceSourceDate,
     })
     const directOperationalCollaborators = collaborators.filter(isDirectOperationalCollaborator)
 
@@ -411,14 +447,17 @@ export async function GET(req: NextRequest) {
       available_direct_operational_count: availableDirectOperationalCollaborators.length,
       assigned_direct_operational_count: assignedDirectOperationalCount,
       date: workDate,
+      attendance_source_date: attendanceSourceDate,
       company_id: companyId,
       project_id: projectId || null,
       availability_scope: 'company',
       project_filter_applied: false,
-      note: 'La disponibilidad se calcula por empresa y fecha; el modelo actual no tiene filtro real por proyecto.',
+      note: 'La disponibilidad se calcula por empresa. La dotación es de hoy; si hoy no tiene asistencia, se usa la asistencia del día anterior.',
       rule: {
         status: 'turno',
         reason: '11',
+        staffing_date: workDate,
+        attendance_source_date: attendanceSourceDate,
       },
     })
   } catch (err) {

@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCurrentActor } from '@/lib/currentActor'
-import { fetchTurnoAvailableDates } from '@/lib/staffing/availableCollaborators'
+import { resolveTurnoSourceDate, todayYmd } from '@/lib/staffing/availableCollaborators'
 
 export const dynamic = 'force-dynamic'
 
@@ -78,15 +78,19 @@ export async function GET(req: NextRequest) {
     const projectCompanyError = await validateProjectInCompany(projectId, companyId)
     if (projectCompanyError) return projectCompanyError
 
-    const dates = await fetchTurnoAvailableDates({
-      supabaseAdmin,
-      companyId,
-      startDate,
-      endDate,
-    })
+    const today = todayYmd()
+    const sourceDate = today >= startDate && today <= endDate
+      ? await resolveTurnoSourceDate({
+        supabaseAdmin,
+        companyId,
+        workDate: today,
+      })
+      : null
+    const dates = sourceDate ? [today] : []
 
     return NextResponse.json({
       dates,
+      attendance_source_date: sourceDate,
       year,
       month,
       start_date: startDate,
@@ -95,10 +99,12 @@ export async function GET(req: NextRequest) {
       project_id: projectId || null,
       availability_scope: 'company',
       project_filter_applied: false,
-      note: 'La disponibilidad se calcula por empresa; pr_collaborator_daily_status no se filtra por proyecto en la lógica existente.',
+      note: 'La dotación solo se crea para la fecha actual; si hoy no tiene asistencia cargada, se usa la asistencia del día anterior.',
       rule: {
         status: 'turno',
         reason: '11',
+        staffing_date: today,
+        attendance_source_date: sourceDate,
       },
     })
   } catch (err) {

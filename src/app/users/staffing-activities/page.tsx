@@ -11,6 +11,9 @@ import {
   Chip,
   CircularProgress,
   Container,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Divider,
   FormControl,
   IconButton,
@@ -36,14 +39,18 @@ import {
 } from '@mui/material'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
+import { PickersDay } from '@mui/x-date-pickers/PickersDay'
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns'
 import AddIcon from '@mui/icons-material/Add'
+import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew'
+import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos'
+import CloseIcon from '@mui/icons-material/Close'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
-import DoneAllIcon from '@mui/icons-material/DoneAll'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SaveIcon from '@mui/icons-material/Save'
+import SendIcon from '@mui/icons-material/Send'
 import UserHeader from '@/components/layout/UserHeader'
 import { colors } from '@/theme/theme'
 import { format } from 'date-fns'
@@ -70,6 +77,7 @@ type ReportFront = {
 
 type ActivityForm = {
   activity: string
+  activity_description: string
   activity_type: '' | 'operational' | 'administrative'
   activity_start_time: string
   activity_end_time: string
@@ -86,6 +94,11 @@ type StaffingEvidenceFile = {
   type: string
   size: number
   uploaded_at: string
+}
+
+type StaffingEvidenceViewerItem = StaffingEvidenceFile & {
+  activityLabel?: string
+  url?: string
 }
 
 type AssignedStaffingCollaborator = {
@@ -142,6 +155,7 @@ const parseYmdToDate = (value: string) => {
 
 const emptyActivity = (): ActivityForm => ({
   activity: '',
+  activity_description: '',
   activity_type: '',
   activity_start_time: '',
   activity_end_time: '',
@@ -303,22 +317,29 @@ export default function StaffingActivitiesPage() {
   const [selectedActivitySessionId, setSelectedActivitySessionId] = useState('')
   const [sessions, setSessions] = useState<StaffingSession[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [attendanceSourceDate, setAttendanceSourceDate] = useState<string | null>(null)
   const [loadingAvailableDates, setLoadingAvailableDates] = useState(false)
   const [loadingFronts, setLoadingFronts] = useState(false)
   const [loadingCollaborators, setLoadingCollaborators] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deletingActivityId, setDeletingActivityId] = useState<string | null>(null)
   const [closingId, setClosingId] = useState<string | null>(null)
+  const [highlightMissingActivityIds, setHighlightMissingActivityIds] = useState<string[]>([])
   const [notice, setNotice] = useState<{ severity: 'success' | 'error' | 'info'; message: string } | null>(null)
   const [activeActivityIndex, setActiveActivityIndex] = useState<number | null>(null)
   const [activitySuggestionQuery, setActivitySuggestionQuery] = useState('')
   const [activitySuggestions, setActivitySuggestions] = useState<string[]>([])
   const [loadingActivitySuggestions, setLoadingActivitySuggestions] = useState(false)
   const [uploadingActivityImages, setUploadingActivityImages] = useState<Record<number, boolean>>({})
+  const [evidenceViewerOpen, setEvidenceViewerOpen] = useState(false)
+  const [evidenceViewerLoading, setEvidenceViewerLoading] = useState(false)
+  const [evidenceViewerIndex, setEvidenceViewerIndex] = useState(0)
+  const [evidenceViewerItems, setEvidenceViewerItems] = useState<StaffingEvidenceViewerItem[]>([])
   const [editingActivityRef, setEditingActivityRef] = useState<{ id: string; sessionId: string } | null>(null)
   const [collaboratorSearch, setCollaboratorSearch] = useState('')
-  const [activeMobilePanel, setActiveMobilePanel] = useState<'crew' | 'activity' | 'history'>('activity')
+  const [activeMobilePanel, setActiveMobilePanel] = useState<'crew' | 'activity' | 'history'>('crew')
   const currentUserId = String((session?.user as any)?.id || '').trim()
 
   const selectedFront = useMemo(
@@ -332,7 +353,10 @@ export default function StaffingActivitiesPage() {
 
   const hasAvailableDates = availableDates.length > 0
 
-  const canCreateForDate = Boolean(date && availableDateSet.has(date))
+  const today = todayYmd()
+  const isPastSelectedDate = Boolean(date && date < today)
+  const isTodaySelectedDate = Boolean(date && date === today)
+  const canCreateForDate = Boolean(date && availableDateSet.has(date) && isTodaySelectedDate)
 
   const canRegisterActivities = Boolean(canCreateForDate && selectedActivitySessionId)
 
@@ -383,8 +407,10 @@ export default function StaffingActivitiesPage() {
           json.dates
             .map((item: unknown) => String(item || '').slice(0, 10))
             .filter((item: string) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+            .filter((item: string) => item >= todayYmd())
         )).sort((a: string, b: string) => a.localeCompare(b))
         : []
+      setAttendanceSourceDate(String(json?.attendance_source_date || '').trim().slice(0, 10) || null)
       setAvailableDates(rows)
       if (options.selectInitial) {
         setDate((prev) => {
@@ -397,6 +423,7 @@ export default function StaffingActivitiesPage() {
       if (rows.length === 0 && options.selectInitial) resetForm()
     } catch (err) {
       setAvailableDates([])
+      setAttendanceSourceDate(null)
       if (options.selectInitial) {
         setDate('')
         resetForm()
@@ -421,8 +448,10 @@ export default function StaffingActivitiesPage() {
           json.dates
             .map((item: unknown) => String(item || '').slice(0, 10))
             .filter((item: string) => /^\d{4}-\d{2}-\d{2}$/.test(item))
+            .filter((item: string) => item >= todayYmd())
         )).sort((a: string, b: string) => a.localeCompare(b))
         : []
+      setAttendanceSourceDate(String(json?.attendance_source_date || '').trim().slice(0, 10) || null)
       setAvailableDates(rows)
       setDate((prev) => {
         if (prev && rows.includes(prev)) return prev
@@ -433,6 +462,7 @@ export default function StaffingActivitiesPage() {
       if (rows.length === 0) resetForm()
     } catch (err) {
       setAvailableDates([])
+      setAttendanceSourceDate(null)
       setDate('')
       resetForm()
       setNotice({ severity: 'error', message: (err as Error)?.message || 'Error cargando fechas disponibles' })
@@ -589,6 +619,7 @@ export default function StaffingActivitiesPage() {
 
   const shouldDisableDate = (value: Date | null) => {
     if (!value || Number.isNaN(value.getTime())) return true
+    if (format(value, 'yyyy-MM-dd') !== todayYmd()) return true
     if (availableDateSet.size === 0) return true
     return !availableDateSet.has(format(value, 'yyyy-MM-dd'))
   }
@@ -667,19 +698,45 @@ export default function StaffingActivitiesPage() {
   const sessionStatusLabel = (status: unknown) => {
     const normalizedStatus = String(status || '').trim().toLowerCase()
     if (normalizedStatus === 'draft') return 'Borrador'
-    if (normalizedStatus === 'reopened') return 'Reabierta'
-    if (normalizedStatus === 'submitted') return 'Enviada'
+    if (normalizedStatus === 'reopened') return 'Borrador'
+    if (normalizedStatus === 'submitted') return 'Enviado'
+    if (normalizedStatus === 'closed') return 'Cerrado'
     return String(status || '-')
+  }
+
+  const activitySendValidationMessage = (activity: Partial<ActivityForm> | any) => {
+    const activityName = String(activity?.activity || '').trim()
+    const activityDescription = String(activity?.activity_description || '').trim()
+    const activityType = activityTypeFromValue(activity)
+    const startTime = String(activity?.activity_start_time || '').trim()
+    const endTime = String(activity?.activity_end_time || '').trim()
+    const quantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
+    const unit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
+    const images = activityImagesFromValue(activity)
+
+    if (!activityName) return 'Ingresa la actividad.'
+    if (!activityDescription) return 'Ingresa la descripción de la actividad.'
+    if (!activityType) return 'Selecciona el tipo de actividad.'
+    if (!startTime) return 'Ingresa la hora inicio.'
+    if (!endTime) return 'Ingresa la hora fin.'
+    if (activityType === 'operational' && (!quantity || !unit)) {
+      return 'Las actividades operacionales requieren cantidad y unidad.'
+    }
+    if (activityType === 'operational' && images.length === 0) {
+      return 'Las actividades operacionales requieren evidencia.'
+    }
+    return ''
   }
 
   const activityFormFromValue = (value: any): ActivityForm => {
     const type = activityTypeFromValue(value)
     return {
       activity: String(value?.activity || '').trim(),
+      activity_description: String(value?.activity_description || '').trim(),
       activity_type: type,
       activity_start_time: String(value?.activity_start_time || '').slice(0, 5),
       activity_end_time: String(value?.activity_end_time || '').slice(0, 5),
-      activity_observations: String(value?.activity_observations || '').trim(),
+      activity_observations: String((value?.observations ?? value?.activity_observations) || '').trim(),
       restrictions: String(value?.restrictions || '').trim(),
       quantity: type === 'operational' ? String(value?.quantity ?? value?.metadata?.quantity ?? '').trim() : '',
       unit: type === 'operational' ? String(value?.unit ?? value?.metadata?.unit ?? '').trim() : '',
@@ -691,15 +748,73 @@ export default function StaffingActivitiesPage() {
     count + (Array.isArray(session.activities) ? session.activities.length : 0)
   ), 0)
 
+  const optimizeImageFile = async (file: File): Promise<File> => {
+    if (!file.type.startsWith('image/')) return file
+    try {
+      const srcUrl = URL.createObjectURL(file)
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve(image)
+        image.onerror = reject
+        image.src = srcUrl
+      })
+
+      const maxDimension = 1920
+      const ratio = Math.min(1, maxDimension / Math.max(img.width, img.height))
+      const width = Math.max(1, Math.round(img.width * ratio))
+      const height = Math.max(1, Math.round(img.height * ratio))
+
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        URL.revokeObjectURL(srcUrl)
+        return file
+      }
+      ctx.drawImage(img, 0, 0, width, height)
+      URL.revokeObjectURL(srcUrl)
+
+      const outputType = file.type === 'image/webp' ? 'image/webp' : 'image/jpeg'
+      const quality = outputType === 'image/webp' ? 0.9 : 0.88
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, outputType, quality))
+      if (!blob) return file
+      if (blob.size >= file.size * 0.98) return file
+
+      const baseName = file.name.replace(/\.[a-zA-Z0-9]+$/, '')
+      const ext = outputType === 'image/webp' ? '.webp' : '.jpg'
+      return new File([blob], `${baseName}${ext}`, { type: outputType, lastModified: Date.now() })
+    } catch {
+      return file
+    }
+  }
+
+  const optimizeImageFiles = async (files: File[]) => {
+    const optimized: File[] = []
+    for (const file of files) optimized.push(await optimizeImageFile(file))
+    return optimized
+  }
+
   const uploadActivityImages = async (index: number, fileList: FileList | null) => {
     const files = Array.from(fileList || []).filter((file) => String(file.type || '').startsWith('image/'))
     if (!files.length) return
     if (activities[index]?.activity_type !== 'operational') return
+    const currentCount = Array.isArray(activities[index]?.images) ? activities[index].images.length : 0
+    const remaining = Math.max(0, 5 - currentCount)
+    if (remaining <= 0) {
+      setNotice({ severity: 'error', message: 'Maximo 5 imagenes por actividad operacional.' })
+      return
+    }
+    const selectedFiles = files.slice(0, remaining)
+    if (selectedFiles.length !== files.length) {
+      setNotice({ severity: 'info', message: 'Solo se agregaran imagenes hasta completar un maximo de 5 por actividad operacional.' })
+    }
 
     setUploadingActivityImages((prev) => ({ ...prev, [index]: true }))
     try {
+      const optimizedFiles = await optimizeImageFiles(selectedFiles)
       const uploaded: StaffingEvidenceFile[] = []
-      for (const file of files) {
+      for (const file of optimizedFiles) {
         const presignRes = await fetch('/api/staffing-activities/evidence/presign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -735,7 +850,7 @@ export default function StaffingActivitiesPage() {
       if (uploaded.length) {
         setActivities((prev) => prev.map((activity, idx) => (
           idx === index
-            ? { ...activity, images: [...(activity.images || []), ...uploaded].slice(0, 10) }
+            ? { ...activity, images: [...(activity.images || []), ...uploaded].slice(0, 5) }
             : activity
         )))
       }
@@ -754,16 +869,32 @@ export default function StaffingActivitiesPage() {
     )))
   }
 
-  const openStaffingEvidence = async (key: string) => {
-    const cleanKey = String(key || '').trim()
-    if (!cleanKey) return
+  const openStaffingEvidenceGallery = async (items: StaffingEvidenceViewerItem[], initialKey: string) => {
+    const cleanItems = items
+      .map((item) => ({ ...item, key: String(item?.key || '').trim() }))
+      .filter((item) => item.key)
+    const cleanKey = String(initialKey || cleanItems[0]?.key || '').trim()
+    if (!cleanItems.length || !cleanKey) return
+
+    const initialIndex = Math.max(0, cleanItems.findIndex((item) => item.key === cleanKey))
+    setEvidenceViewerOpen(true)
+    setEvidenceViewerLoading(true)
+    setEvidenceViewerIndex(initialIndex >= 0 ? initialIndex : 0)
+    setEvidenceViewerItems(cleanItems)
+
     try {
-      const res = await fetch(`/api/staffing-activities/evidence/view?key=${encodeURIComponent(cleanKey)}`, { cache: 'no-store' })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json?.url) throw new Error(json?.error || 'No se pudo abrir la imagen')
-      window.open(String(json.url), '_blank', 'noopener,noreferrer')
+      const loadedItems = await Promise.all(cleanItems.map(async (item) => {
+        const res = await fetch(`/api/staffing-activities/evidence/view?key=${encodeURIComponent(item.key)}`, { cache: 'no-store' })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok || !json?.url) throw new Error(json?.error || 'No se pudo abrir la imagen')
+        return { ...item, url: String(json.url) }
+      }))
+      setEvidenceViewerItems(loadedItems)
     } catch (err) {
       setNotice({ severity: 'error', message: (err as Error)?.message || 'Error abriendo imagen' })
+      setEvidenceViewerOpen(false)
+    } finally {
+      setEvidenceViewerLoading(false)
     }
   }
 
@@ -822,7 +953,9 @@ export default function StaffingActivitiesPage() {
 
   const saveCrewDraft = async () => {
     if (!date) return setNotice({ severity: 'error', message: 'No hay fechas con colaboradores en turno.' })
-    if (!canCreateForDate) return setNotice({ severity: 'error', message: 'Selecciona una fecha con colaboradores en turno.' })
+    if (isPastSelectedDate) return setNotice({ severity: 'error', message: 'No se puede crear dotación para fechas pasadas.' })
+    if (!isTodaySelectedDate) return setNotice({ severity: 'error', message: 'La dotación solo se puede crear para la fecha actual.' })
+    if (!canCreateForDate) return setNotice({ severity: 'error', message: 'No existe asistencia de hoy ni del día anterior para usar como base de dotación.' })
     if (!selectedFront) return setNotice({ severity: 'error', message: 'Selecciona un frente o área de trabajo.' })
     if (supervisorIds.length === 0) return setNotice({ severity: 'error', message: 'Selecciona al menos un supervisor.' })
     if (foremanIds.length === 0) return setNotice({ severity: 'error', message: 'Selecciona al menos un capataz.' })
@@ -870,9 +1003,10 @@ export default function StaffingActivitiesPage() {
 
     const cleanActivity = {
       activity: activity.activity.trim(),
+      activity_description: activity.activity_description.trim(),
       activity_start_time: activity.activity_start_time || null,
       activity_end_time: activity.activity_end_time || null,
-      activity_observations: activity.activity_observations.trim() || null,
+      observations: activity.activity_observations.trim() || null,
       restrictions: activity.restrictions.trim() || null,
       unit: activity.activity_type === 'operational' ? activity.unit.trim() || null : null,
       quantity: activity.activity_type === 'operational' ? activity.quantity.trim() || null : null,
@@ -887,15 +1021,7 @@ export default function StaffingActivitiesPage() {
     if (!date) return setNotice({ severity: 'error', message: 'No hay fechas con colaboradores en turno.' })
     if (!canCreateForDate) return setNotice({ severity: 'error', message: 'Selecciona una fecha con colaboradores en turno.' })
     if (!selectedActivitySessionId) return setNotice({ severity: 'error', message: 'Selecciona una cuadrilla para registrar actividades.' })
-    if (!cleanActivity.activity) return setNotice({ severity: 'error', message: 'Ingresa una actividad.' })
-    if (!cleanActivity.metadata.activity_type) return setNotice({ severity: 'error', message: 'Selecciona el tipo de actividad.' })
-
-    if (
-      cleanActivity.metadata.activity_type === 'operational' &&
-      (!cleanActivity.metadata.quantity || !cleanActivity.metadata.unit)
-    ) {
-      return setNotice({ severity: 'error', message: 'Las actividades operacionales requieren cantidad y unidad.' })
-    }
+    if (!cleanActivity.activity) return setNotice({ severity: 'error', message: 'Ingresa la actividad.' })
 
     try {
       setSaving(true)
@@ -913,7 +1039,7 @@ export default function StaffingActivitiesPage() {
         const json = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(json?.error || 'No se pudo actualizar la actividad')
 
-        setNotice({ severity: 'success', message: 'Actividad actualizada.' })
+      setNotice({ severity: 'success', message: 'Descripción de actividad actualizada.' })
         resetActivityForm()
         await loadSessions(date)
         return
@@ -930,7 +1056,7 @@ export default function StaffingActivitiesPage() {
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json?.error || 'No se pudo guardar la actividad')
 
-      setNotice({ severity: 'success', message: 'Actividad registrada.' })
+      setNotice({ severity: 'success', message: 'Descripción de actividad registrada.' })
 
       setActivities((prev) => prev.map((item, itemIndex) => (
         itemIndex === index ? emptyActivity() : item
@@ -948,9 +1074,10 @@ export default function StaffingActivitiesPage() {
     const cleanActivities = activities
       .map((activity) => ({
         activity: activity.activity.trim(),
+        activity_description: activity.activity_description.trim(),
         activity_start_time: activity.activity_start_time || null,
         activity_end_time: activity.activity_end_time || null,
-        activity_observations: activity.activity_observations.trim() || null,
+        observations: activity.activity_observations.trim() || null,
         restrictions: activity.restrictions.trim() || null,
         metadata: {
           activity_type: activity.activity_type,
@@ -967,12 +1094,6 @@ export default function StaffingActivitiesPage() {
     if (!canCreateForDate) return setNotice({ severity: 'error', message: 'Selecciona una fecha con colaboradores en turno.' })
     if (!selectedActivitySessionId) return setNotice({ severity: 'error', message: 'Selecciona una cuadrilla para registrar actividades.' })
     if (cleanActivities.length === 0) return setNotice({ severity: 'error', message: 'Ingresa al menos una actividad.' })
-    if (cleanActivities.some((activity) => !activity.metadata.activity_type)) {
-      return setNotice({ severity: 'error', message: 'Selecciona el tipo de actividad.' })
-    }
-    if (cleanActivities.some((activity) => activity.metadata.activity_type === 'operational' && (!activity.metadata.quantity || !activity.metadata.unit))) {
-      return setNotice({ severity: 'error', message: 'Las actividades operacionales requieren cantidad y unidad.' })
-    }
 
     try {
       setSaving(true)
@@ -992,42 +1113,6 @@ export default function StaffingActivitiesPage() {
       setNotice({ severity: 'error', message: (err as Error)?.message || 'Error guardando actividades' })
     } finally {
       setSaving(false)
-    }
-  }
-
-  const deleteDraft = async (sessionId: string) => {
-    if (!window.confirm('Eliminar este borrador de cuadrilla del día?')) return
-    try {
-      setDeletingId(sessionId)
-      const res = await fetch(`/api/staffing-activities/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(json?.error || 'No se pudo eliminar el borrador')
-      setNotice({ severity: 'success', message: 'Borrador eliminado.' })
-      await Promise.all([loadSessions(date), loadCollaborators(date)])
-    } catch (err) {
-      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error eliminando borrador' })
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
-  const closeDay = async (sessionId: string) => {
-    const closureNotes = window.prompt('Notas de cierre de jornada (opcional):') ?? null
-    try {
-      setClosingId(sessionId)
-      const res = await fetch(`/api/staffing-activities/${encodeURIComponent(sessionId)}/close`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ closure_notes: closureNotes }),
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(json?.error || 'No se pudo cerrar la jornada')
-      setNotice({ severity: 'success', message: 'Jornada cerrada.' })
-      await Promise.all([loadSessions(date), loadCollaborators(date)])
-    } catch (err) {
-      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error cerrando jornada' })
-    } finally {
-      setClosingId(null)
     }
   }
 
@@ -1051,9 +1136,24 @@ export default function StaffingActivitiesPage() {
   }
 
   const renderSelectedCollaborators = (ids: string[]) => (
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+    <Box sx={{ display: 'flex', flexWrap: 'nowrap', gap: 0.35, minWidth: 0, overflow: 'hidden' }}>
       {uniqueStrings(ids).map((id) => (
-        <Chip key={id} label={collaboratorLabel(id)} size="small" sx={{ maxWidth: 180 }} />
+        <Chip
+          key={id}
+          label={collaboratorLabel(id)}
+          size="small"
+          sx={{
+            maxWidth: { xs: 92, md: 180 },
+            height: { xs: 20, md: 24 },
+            '& .MuiChip-label': {
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              px: { xs: 0.75, md: 1 },
+              fontSize: { xs: 10, md: 12 },
+            },
+          }}
+        />
       ))}
     </Box>
   )
@@ -1101,11 +1201,6 @@ export default function StaffingActivitiesPage() {
       : toStringArray(staffingSession.foreman_id)
   }
 
-  const sessionActivityImages = (staffingSession: StaffingSession) => {
-    if (!Array.isArray(staffingSession.activities)) return []
-    return staffingSession.activities.flatMap((activity) => activityImagesFromValue(activity))
-  }
-
   const beginEditActivity = (staffingSession: StaffingSession, activity: any) => {
     const sessionStatus = String(staffingSession.status || '').toLowerCase()
     const isCreator = Boolean(currentUserId && String(staffingSession.created_by || '').trim() === currentUserId)
@@ -1130,6 +1225,39 @@ export default function StaffingActivitiesPage() {
     setActivities([activityFormFromValue(activity)])
     setEditingActivityRef({ id: activityId, sessionId: staffingSession.id })
     setNotice({ severity: 'info', message: 'Actividad cargada para edición.' })
+  }
+
+  const deleteActivity = async (staffingSession: StaffingSession, activity: any) => {
+    const activityId = String(activity?.id || '').trim()
+    if (!activityId) {
+      setNotice({ severity: 'error', message: 'No se pudo identificar la actividad.' })
+      return
+    }
+
+    const activityLabel = String(activity?.activity || activity?.activity_description || 'esta actividad').trim()
+    const confirmed = window.confirm(
+      `Eliminar actividad: ${activityLabel}\n\nRiesgo: esta acción es permanente y eliminará la actividad, sus datos asociados y sus evidencias registradas. No podrás recuperarla desde esta pantalla.\n\nAceptar y continuar?`
+    )
+    if (!confirmed) return
+
+    try {
+      setDeletingActivityId(activityId)
+      const res = await fetch(`/api/staffing-activities/${encodeURIComponent(staffingSession.id)}/activities`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activity_id: activityId }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || 'No se pudo eliminar la actividad')
+
+      if (editingActivityRef?.id === activityId) resetActivityForm()
+      setNotice({ severity: 'success', message: 'Actividad eliminada.' })
+      await loadSessions(date)
+    } catch (err) {
+      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error eliminando actividad' })
+    } finally {
+      setDeletingActivityId(null)
+    }
   }
 
   const selectedCollaboratorFromId = (id: string): Partial<Collaborator> | null => {
@@ -1247,31 +1375,174 @@ export default function StaffingActivitiesPage() {
     md: 'block',
   })
 
-  const openActivitiesCount = sessions.reduce((count, staffingSession) => (
+  const canCloseStaffingSession = (session: StaffingSession) => {
+    const status = String(session.status || '').toLowerCase()
+    const isCreator = Boolean(currentUserId && String(session.created_by || '').trim() === currentUserId)
+    const isDraft = status === 'draft'
+    const hasGeneratedCrew = Boolean(session.generated_crew_id)
+    return isCreator && isDraft && !hasGeneratedCrew
+  }
+
+  const canDeleteStaffingSession = (session: StaffingSession) => {
+    const isToday = String(session.work_date || date || '').slice(0, 10) === todayYmd()
+    return canCloseStaffingSession(session) && isToday
+  }
+
+  const activityHasRequiredData = (activity: any) => {
+    return activitySendValidationMessage(activity) === ''
+  }
+
+  const completeActivitiesCount = sessions.reduce((count, staffingSession) => (
     count + (Array.isArray(staffingSession.activities)
-      ? staffingSession.activities.filter((activity: any) => activityStatusFromValue(activity) !== 'closed').length
+      ? staffingSession.activities.filter((activity: any) => activityHasRequiredData(activity)).length
       : 0)
   ), 0)
+  const pendingActivitiesCount = Math.max(editableActivitiesCount - completeActivitiesCount, 0)
 
-  const closedActivitiesCount = Math.max(editableActivitiesCount - openActivitiesCount, 0)
+  const activityMissingFields = (activity: any) => {
+    const activityType = activityTypeFromValue(activity)
+    const missing: string[] = []
+
+    if (!String(activity?.activity || '').trim()) missing.push('actividad')
+    if (!String(activity?.activity_description || '').trim()) missing.push('descripcion')
+    if (!activityType) missing.push('tipo')
+    if (!String(activity?.activity_start_time || '').trim()) missing.push('inicio')
+    if (!String(activity?.activity_end_time || '').trim()) missing.push('fin')
+    if (activityType === 'operational') {
+      if (!String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()) missing.push('cantidad')
+      if (!String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()) missing.push('unidad')
+      if (activityImagesFromValue(activity).length === 0) missing.push('evidencia')
+    }
+    return missing
+  }
+
+  const missingFieldSx = (active: boolean) => active
+    ? {
+        color: '#b45309',
+        textDecoration: 'underline',
+        textDecorationColor: '#f59e0b',
+        textDecorationThickness: '2px',
+        textUnderlineOffset: '3px',
+      }
+    : undefined
+
+  const missingFieldLabel = (field: string) => ({
+    tipo: 'tipo',
+    evidencia: 'evidencia',
+  }[field] || field)
+
+  const sessionActivitiesAreReadyToSend = (session: StaffingSession) => {
+    const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+    return (
+      sessionActivities.length > 0 &&
+      sessionActivities.every((activity: any) => activityHasRequiredData(activity))
+    )
+  }
+
+  const closableSessions = sessions.filter(canCloseStaffingSession)
+  const readyToSendSessions = closableSessions.filter(sessionActivitiesAreReadyToSend)
+  const deletableSessions = sessions.filter(canDeleteStaffingSession)
+  const generalSessionStatusLabel = Array.from(
+    new Set(sessions.map((session) => sessionStatusLabel(session.status)).filter(Boolean))
+  ).join(' / ') || '-'
+  const hasSubmittedSessions = sessions.some((session) => String(session.status || '').toLowerCase() === 'submitted')
+  const sendJourneyButtonLabel = !closableSessions.length && hasSubmittedSessions ? 'Jornada enviada' : 'Enviar jornada'
+  const activityHistoryRows = sessions.flatMap((session) => {
+    const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+    return sessionActivities.map((activity: any, activityIndex: number) => ({
+      session,
+      activity,
+      activityIndex,
+    }))
+  })
+  const sessionsWithIncompleteActivities = closableSessions.filter((session) => {
+    const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+    return sessionActivities.length === 0 || sessionActivities.some((activity: any) => !activityHasRequiredData(activity))
+  })
+  const sendJourneyDisabledReason = !closableSessions.length
+    ? 'No hay jornadas en borrador disponibles para enviar.'
+    : sessionsWithIncompleteActivities.length
+      ? 'Completa los datos requeridos de todas las actividades antes de enviar.'
+      : ''
+  const hasSendWarnings = Boolean(sendJourneyDisabledReason && closableSessions.length)
+
+  const closeAvailableSessions = async () => {
+    if (readyToSendSessions.length === 0) {
+      const missingIds = activityHistoryRows
+        .filter(({ session, activity }) => canCloseStaffingSession(session) && activityMissingFields(activity).length > 0)
+        .map(({ activity }) => String(activity?.id || '').trim())
+        .filter(Boolean)
+
+      setHighlightMissingActivityIds(missingIds)
+      setNotice({
+        severity: 'info',
+        message: sendJourneyDisabledReason || 'Completa los datos requeridos antes de enviar la jornada.',
+      })
+      return
+    }
+
+    setHighlightMissingActivityIds([])
+    const closureNotes = window.prompt('Notas de cierre de jornada (opcional):') ?? null
+    try {
+      setClosingId('__bulk__')
+      await Promise.all(readyToSendSessions.map(async (session) => {
+        const res = await fetch(`/api/staffing-activities/${encodeURIComponent(session.id)}/close`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ closure_notes: closureNotes }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json?.error || 'No se pudo cerrar la jornada')
+      }))
+      setNotice({ severity: 'success', message: readyToSendSessions.length === 1 ? 'Jornada enviada.' : 'Jornadas enviadas.' })
+      await Promise.all([loadSessions(date), loadCollaborators(date)])
+    } catch (err) {
+      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error enviando jornada' })
+    } finally {
+      setClosingId(null)
+    }
+  }
+
+  const deleteAvailableDrafts = async () => {
+    if (deletableSessions.length === 0) return
+    const message = deletableSessions.length === 1
+      ? 'Eliminar este borrador de cuadrilla del día?'
+      : `Eliminar ${deletableSessions.length} borradores de cuadrilla del día?`
+    if (!window.confirm(message)) return
+    try {
+      setDeletingId('__bulk__')
+      await Promise.all(deletableSessions.map(async (session) => {
+        const res = await fetch(`/api/staffing-activities/${encodeURIComponent(session.id)}`, { method: 'DELETE' })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json?.error || 'No se pudo eliminar el borrador')
+      }))
+      setNotice({ severity: 'success', message: deletableSessions.length === 1 ? 'Borrador eliminado.' : 'Borradores eliminados.' })
+      await Promise.all([loadSessions(date), loadCollaborators(date)])
+    } catch (err) {
+      setNotice({ severity: 'error', message: (err as Error)?.message || 'Error eliminando borrador' })
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   return (
     <>
       <UserHeader title="Dotación y actividades" />
       <Container
         maxWidth={false}
+        disableGutters
         sx={{
-          py: 3,
+          py: 1,
           width: '100%',
           maxWidth: '100%',
-          px: 0,
+          px: { xs: 0.75, md: 1.5 },
         }}
       >
-        <Stack spacing={2.5}>
+        <Stack spacing={0.5}>
           <Paper
             sx={{
               display: { xs: 'block', md: 'none' },
-              p: 1.25,
+              p: 0.75,
               borderRadius: 1,
               border: '1px solid #e2e8f0',
               boxShadow: 'none',
@@ -1281,8 +1552,15 @@ export default function StaffingActivitiesPage() {
               bgcolor: '#fff',
             }}
           >
-            <Stack spacing={1}>
-              <Stack direction="row" spacing={1} sx={{ overflowX: 'auto', pb: 0.25 }}>
+            <Stack spacing={0.5}>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  gap: 0.5,
+                  width: '100%',
+                }}
+              >
                 {[
                   { id: 'crew', label: 'Cuadrilla', value: ownCrewHeaderCount },
                   { id: 'activity', label: 'Registrar', value: selectedActivitySessionId ? 'Activa' : 'Sin cuadrilla' },
@@ -1295,8 +1573,11 @@ export default function StaffingActivitiesPage() {
                       variant={selected ? 'contained' : 'outlined'}
                       onClick={() => setActiveMobilePanel(item.id as 'crew' | 'activity' | 'history')}
                       sx={{
-                        minWidth: 112,
-                        height: 52,
+                        minWidth: 0,
+                        width: '100%',
+                        height: 40,
+                        px: 0.2,
+                        py: 0.2,
                         flexShrink: 0,
                         textTransform: 'none',
                         borderRadius: 1,
@@ -1309,30 +1590,87 @@ export default function StaffingActivitiesPage() {
                         },
                       }}
                     >
-                      <Box sx={{ textAlign: 'left', width: '100%' }}>
-                        <Typography sx={{ fontSize: 13, fontWeight: 850, lineHeight: 1.15 }}>{item.label}</Typography>
-                        <Typography sx={{ fontSize: 11, opacity: selected ? 0.9 : 0.65, lineHeight: 1.2 }} noWrap>{item.value}</Typography>
+                      <Box sx={{ textAlign: 'center', width: '100%', minWidth: 0 }}>
+                        <Typography sx={{ fontSize: 12, fontWeight: 850, lineHeight: 1.05 }} noWrap>{item.label}</Typography>
+                        <Typography sx={{ fontSize: 10.25, opacity: selected ? 0.9 : 0.65, lineHeight: 1.05, mt: 0.35 }} noWrap>{item.value}</Typography>
                       </Box>
                     </Button>
                   )
                 })}
-              </Stack>
-              <Stack direction="row" spacing={1} sx={{ color: '#64748b', fontSize: 12, px: 0.5 }}>
+              </Box>
+              <Stack
+                direction="row"
+                spacing={0.75}
+                justifyContent="center"
+                sx={{
+                  color: '#94a3b8',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  px: 0.25,
+                  textAlign: 'center',
+                  flexWrap: 'wrap',
+                  rowGap: 0.25,
+                }}
+              >
                 <Box>{date || 'Sin fecha'}</Box>
-                <Box>Abiertas {openActivitiesCount}</Box>
-                <Box>Cerradas {closedActivitiesCount}</Box>
+                <Box>Completas {completeActivitiesCount}</Box>
+                <Box>Pendientes {pendingActivitiesCount}</Box>
               </Stack>
             </Stack>
           </Paper>
 
-          <Paper sx={{ display: mobilePanelDisplay('crew'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-            <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a', mb: 1.5 }}>Cuadrilla del día</Typography>
+          <Paper sx={{ display: mobilePanelDisplay('crew'), p: { xs: 0.75, md: 0.75 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+            <Typography variant="h6" sx={{ fontWeight: 500, color: '#0f172a', mb: { xs: 0.9, md: 0.5 } }}>Cuadrilla del día</Typography>
             {!loadingAvailableDates && !hasAvailableDates ? (
-              <Alert severity="info" sx={{ mb: 1.5 }}>
+              <Alert severity="info" sx={{ mb: 1 }}>
                 No hay fechas con colaboradores en turno para el mes visible. No es posible crear cuadrillas hasta seleccionar una fecha disponible.
               </Alert>
             ) : null}
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '180px 1fr 1fr 1fr auto' }, gap: 1.5, alignItems: 'center' }}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: '180px 1fr 1fr 1fr auto' },
+                gap: { xs: 1.25, md: 0.75 },
+                alignItems: 'center',
+                '& .MuiInputBase-root': {
+                  minHeight: 40,
+                  height: 40,
+                  alignItems: 'center',
+                },
+                '& .MuiInputBase-input': {
+                  py: 0,
+                  height: 40,
+                  boxSizing: 'border-box',
+                  display: 'flex',
+                  alignItems: 'center',
+                  fontSize: 15,
+                  lineHeight: 1.2,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  '&::placeholder': {
+                    fontSize: 15,
+                    opacity: 0.75,
+                  },
+                },
+                '& .MuiSelect-select': {
+                  display: 'flex',
+                  alignItems: 'center',
+                  minHeight: '0 !important',
+                  height: '40px !important',
+                  py: '0 !important',
+                  boxSizing: 'border-box',
+                  fontSize: 15,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                },
+                '& .MuiInputLabel-root': {
+                  lineHeight: 1.1,
+                  fontSize: { xs: 14.5, md: 13.5 },
+                },
+              }}
+            >
               <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={es}>
                 <DatePicker
                   label="Fecha"
@@ -1357,25 +1695,100 @@ export default function StaffingActivitiesPage() {
                     void loadAvailableDates(new Date(value.getFullYear(), visibleMonth.getMonth(), 1))
                   }}
                   disabled={loadingAvailableDates}
+                  slots={{
+                    day: (props) => {
+                      const dayValue = props.day instanceof Date && !Number.isNaN(props.day.getTime())
+                        ? format(props.day, 'yyyy-MM-dd')
+                        : ''
+                      const usesPreviousAttendance = dayValue === todayYmd() && Boolean(attendanceSourceDate && attendanceSourceDate !== todayYmd())
+                      return (
+                        <PickersDay
+                          {...props}
+                          sx={{
+                            ...(usesPreviousAttendance
+                              ? {
+                                bgcolor: '#fef3c7',
+                                border: '1px solid #f59e0b',
+                                color: '#92400e',
+                                fontWeight: 700,
+                                '&:hover': {
+                                  bgcolor: '#fde68a',
+                                },
+                                '&.Mui-selected': {
+                                  bgcolor: '#f59e0b',
+                                  color: '#fff',
+                                  '&:hover': {
+                                    bgcolor: '#d97706',
+                                  },
+                                },
+                              }
+                              : {}),
+                          }}
+                        />
+                      )
+                    },
+                  }}
                   slotProps={{
                     textField: {
                       fullWidth: true,
+                      size: 'small',
                       helperText: !loadingAvailableDates && !hasAvailableDates ? 'Sin fechas disponibles' : undefined,
+                      sx: {
+                        '& .MuiInputBase-input': {
+                          textAlign: { xs: 'center', md: 'left' },
+                        },
+                      },
                     },
                   }}
                 />
               </LocalizationProvider>
-              <FormControl fullWidth disabled={loadingFronts || !canCreateForDate}>
+              <FormControl fullWidth size="small" disabled={loadingFronts || !canCreateForDate}>
                 <InputLabel id="front-select-label">Frente / Área de trabajo</InputLabel>
-                <Select labelId="front-select-label" label="Frente / Área de trabajo" value={frontValue} onChange={(event) => setFrontValue(String(event.target.value))}>
+                <Select
+                  labelId="front-select-label"
+                  label="Frente / Área de trabajo"
+                  value={frontValue}
+                  onChange={(event) => setFrontValue(String(event.target.value))}
+                  MenuProps={{
+                    PaperProps: {
+                      sx: {
+                        maxWidth: { xs: 'calc(100vw - 24px)', md: 420 },
+                        '& .MuiMenu-list': { py: 0.25 },
+                      },
+                    },
+                  }}
+                >
                   {fronts.map((front, index) => (
-                    <MenuItem key={frontKey(front, index)} value={frontKey(front, index)}>
-                      {front.name || front.code || 'Frente sin nombre'}{front.is_active === false ? ' (inactivo)' : ''}
+                    <MenuItem
+                      key={frontKey(front, index)}
+                      value={frontKey(front, index)}
+                      sx={{
+                        minHeight: { xs: 30, md: 38 },
+                        py: { xs: 0.25, md: 0.5 },
+                        px: { xs: 1, md: 1.25 },
+                        maxWidth: '100%',
+                      }}
+                    >
+                      <Typography
+                        noWrap
+                        sx={{
+                          minWidth: 0,
+                          maxWidth: '100%',
+                          fontSize: { xs: 11, md: 13 },
+                          lineHeight: 1.2,
+                          color: '#0f172a',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {front.name || front.code || 'Frente sin nombre'}{front.is_active === false ? ' (inactivo)' : ''}
+                      </Typography>
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
-              <FormControl fullWidth disabled={!canCreateForDate}>
+              <FormControl fullWidth size="small" disabled={!canCreateForDate}>
                 <InputLabel id="supervisor-select-label">Supervisores</InputLabel>
                 <Select
                   multiple
@@ -1386,13 +1799,13 @@ export default function StaffingActivitiesPage() {
                   renderValue={(selected) => renderSelectedCollaborators(toStringArray(selected))}
                 >
                   {supervisorOptions.map((collaborator) => (
-                    <MenuItem key={collaborator.id} value={collaborator.id}>
-                      <Checkbox checked={supervisorIds.includes(collaborator.id)} sx={{ mr: 1 }} />
-                      <Box>
-                        <Typography sx={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>
+                    <MenuItem key={collaborator.id} value={collaborator.id} sx={{ minHeight: { xs: 38, md: 48 }, py: { xs: 0.4, md: 0.75 }, px: { xs: 1, md: 1.5 } }}>
+                      <Checkbox size="small" checked={supervisorIds.includes(collaborator.id)} sx={{ mr: 0.75, p: 0.25 }} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography noWrap sx={{ fontWeight: 850, color: '#0f172a', fontSize: { xs: 11.5, md: 14 }, lineHeight: 1.15 }}>
                           {fullNameUpper(collaborator)}
                         </Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                        <Typography noWrap sx={{ color: '#64748b', fontSize: { xs: 9.5, md: 12 }, lineHeight: 1.15 }}>
                           {collaboratorSubtitle(collaborator)}
                         </Typography>
                       </Box>
@@ -1400,7 +1813,7 @@ export default function StaffingActivitiesPage() {
                   ))}
                 </Select>
               </FormControl>
-              <FormControl fullWidth disabled={!canCreateForDate}>
+              <FormControl fullWidth size="small" disabled={!canCreateForDate}>
                 <InputLabel id="foreman-select-label">Capataces</InputLabel>
                 <Select
                   multiple
@@ -1411,13 +1824,13 @@ export default function StaffingActivitiesPage() {
                   renderValue={(selected) => renderSelectedCollaborators(toStringArray(selected))}
                 >
                   {foremanOptions.map((collaborator) => (
-                    <MenuItem key={collaborator.id} value={collaborator.id}>
-                      <Checkbox checked={foremanIds.includes(collaborator.id)} sx={{ mr: 1 }} />
-                      <Box>
-                        <Typography sx={{ fontWeight: 850, color: '#0f172a', fontSize: 14 }}>
+                    <MenuItem key={collaborator.id} value={collaborator.id} sx={{ minHeight: { xs: 38, md: 48 }, py: { xs: 0.4, md: 0.75 }, px: { xs: 1, md: 1.5 } }}>
+                      <Checkbox size="small" checked={foremanIds.includes(collaborator.id)} sx={{ mr: 0.75, p: 0.25 }} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography noWrap sx={{ fontWeight: 850, color: '#0f172a', fontSize: { xs: 11.5, md: 14 }, lineHeight: 1.15 }}>
                           {fullNameUpper(collaborator)}
                         </Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                        <Typography noWrap sx={{ color: '#64748b', fontSize: { xs: 9.5, md: 12 }, lineHeight: 1.15 }}>
                           {collaboratorSubtitle(collaborator)}
                         </Typography>
                       </Box>
@@ -1434,14 +1847,14 @@ export default function StaffingActivitiesPage() {
                   void loadSessions(date)
                 }}
                 disabled={loadingAvailableDates}
-                sx={{ textTransform: 'none', fontWeight: 800, minHeight: 56 }}
+                sx={{ textTransform: 'none', fontWeight: 800, minHeight: 40, px: 1.5 }}
               >
                 Actualizar
               </Button>
             </Box>
-            <Divider sx={{ my: 2 }} />
+            <Divider sx={{ my: 0.5 }} />
 
-            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 0.5 }}>
               <TextField
                 size="small"
                 value={collaboratorSearch}
@@ -1452,6 +1865,22 @@ export default function StaffingActivitiesPage() {
                   maxWidth: 520,
                   '& .MuiInputBase-root': {
                     bgcolor: 'white',
+                    minHeight: 40,
+                    height: 40,
+                    alignItems: 'center',
+                  },
+                  '& .MuiInputBase-input': {
+                    py: 0,
+                    height: 40,
+                    boxSizing: 'border-box',
+                    display: 'flex',
+                    alignItems: 'center',
+                    fontSize: 15,
+                    lineHeight: 1.2,
+                    '&::placeholder': {
+                      fontSize: 15,
+                      opacity: 0.75,
+                    },
                   },
                 }}
               />
@@ -1461,7 +1890,7 @@ export default function StaffingActivitiesPage() {
               sx={{
                 display: 'grid',
                 gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr 1fr' },
-                gap: 1.5,
+                gap: 0.75,
                 alignItems: 'stretch',
               }}
             >
@@ -1473,10 +1902,10 @@ export default function StaffingActivitiesPage() {
                   height: '100%',
                 }}
               >
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1, minHeight: 28 }}>
-                  <Typography sx={{ fontWeight: 850, color: '#0f172a' }}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, minHeight: 24, minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontWeight: 500, color: '#0f172a', minWidth: 0, maxWidth: '100%' }}>
                     Colaboradores{' '}
-                    <Box component="span" sx={{ color: '#64748b', fontWeight: 600 }}>
+                    <Box component="span" sx={{ color: '#64748b', fontWeight: 500, fontSize: { xs: 12, md: 14 } }}>
                       ({availabilityCounts.directOperationalOnShift} · disponibles {availabilityCounts.availableDirectOperational} · asignados {availabilityCounts.assignedDirectOperational})
                     </Box>
                   </Typography>
@@ -1496,20 +1925,57 @@ export default function StaffingActivitiesPage() {
                   }}
                 >
                   {filteredSelectableMembers.length === 0 && !loadingCollaborators ? (
-                    <Typography sx={{ py: 3, color: '#64748b', textAlign: 'center' }}>No hay colaboradores disponibles para la fecha.</Typography>
+                    <Typography sx={{ py: 3, color: '#64748b', textAlign: 'center', fontSize: 12.5 }}>
+                      No hay colaboradores disponibles para la fecha.
+                    </Typography>
                   ) : null}
                   {filteredSelectableMembers.map((collaborator) => {
                     const checked = memberIds.includes(collaborator.id)
+                    const position = collaboratorPositionUpper(collaborator)
+                    const document = formatChileRut(collaborator.document)
                     return (
-                      <ListItemButton key={collaborator.id} disabled={!canCreateForDate} onClick={() => toggleMember(collaborator.id)}>
-                        <ListItemIcon sx={{ minWidth: 38 }}>
-                          <Checkbox edge="start" checked={checked} tabIndex={-1} disableRipple />
+                      <ListItemButton
+                        key={collaborator.id}
+                        disabled={!canCreateForDate}
+                        onClick={() => toggleMember(collaborator.id)}
+                        sx={{
+                          px: { xs: 0.75, md: 1 },
+                          py: { xs: 0.45, md: 0.75 },
+                          minHeight: { xs: 42, md: 56 },
+                        }}
+                      >
+                        <ListItemIcon sx={{ minWidth: { xs: 28, md: 38 } }}>
+                          <Checkbox edge="start" size="small" checked={checked} tabIndex={-1} disableRipple />
                         </ListItemIcon>
                         <ListItemText
                           primary={fullNameUpper(collaborator)}
-                          secondary={collaboratorSubtitle(collaborator)}
-                          primaryTypographyProps={{ fontWeight: 800, color: '#0f172a' }}
-                          secondaryTypographyProps={{ color: '#64748b', fontSize: 12.5 }}
+                          secondary={
+                            <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, gap: 0.5 }}>
+                              <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {position}
+                              </Box>
+                              {document ? (
+                                <Box component="span" sx={{ flexShrink: 0 }}>
+                                  · {document}
+                                </Box>
+                              ) : null}
+                            </Box>
+                          }
+                          sx={{ my: 0, minWidth: 0 }}
+                          primaryTypographyProps={{
+                            fontWeight: 800,
+                            color: '#0f172a',
+                            fontSize: { xs: 12, md: 14 },
+                            lineHeight: 1.15,
+                            noWrap: true,
+                          }}
+                          secondaryTypographyProps={{
+                            component: 'div',
+                            color: '#64748b',
+                            fontSize: { xs: 10.5, md: 12.5 },
+                            lineHeight: 1.15,
+                            minWidth: 0,
+                          }}
                         />
                       </ListItemButton>
                     )
@@ -1525,10 +1991,28 @@ export default function StaffingActivitiesPage() {
                   height: '100%',
                 }}
               >
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1, minHeight: 28 }}>
-                  <Typography sx={{ fontWeight: 850, color: '#0f172a' }}>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
+                  onClick={() => void saveCrewDraft()}
+                  disabled={saving || !canCreateForDate}
+                  sx={{
+                    display: { xs: 'inline-flex', md: 'none' },
+                    mb: 0.75,
+                    minHeight: 40,
+                    textTransform: 'none',
+                    fontWeight: 500,
+                    bgcolor: colors.blue3,
+                    '&:hover': { bgcolor: colors.blue2 },
+                  }}
+                >
+                  Crear cuadrilla
+                </Button>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, minHeight: 24, minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontWeight: 500, color: '#0f172a', minWidth: 0, maxWidth: '100%' }}>
                     Mi cuadrilla{' '}
-                    <Box component="span" sx={{ color: '#64748b', fontWeight: 600 }}>
+                    <Box component="span" sx={{ color: '#64748b', fontWeight: 500, fontSize: { xs: 12, md: 14 } }}>
                       ({ownCrewHeaderCount})
                     </Box>
                   </Typography>
@@ -1617,10 +2101,10 @@ export default function StaffingActivitiesPage() {
                   height: '100%',
                 }}
               >
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1, minHeight: 28 }}>
-                  <Typography sx={{ fontWeight: 850, color: '#0f172a' }}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, minHeight: 24, minWidth: 0 }}>
+                  <Typography noWrap sx={{ fontWeight: 500, color: '#0f172a', minWidth: 0, maxWidth: '100%' }}>
                     Asignados en otras cuadrillas{' '}
-                    <Box component="span" sx={{ color: '#64748b', fontWeight: 600 }}>
+                    <Box component="span" sx={{ color: '#64748b', fontWeight: 500, fontSize: { xs: 12, md: 14 } }}>
                       ({assignedCollaborators.filter((item) => !item.is_own_session).length} colaboradores)
                     </Box>
                   </Typography>
@@ -1637,7 +2121,7 @@ export default function StaffingActivitiesPage() {
                   }}
                 >
                   {filteredOtherAssignedGroups.length === 0 ? (
-                    <Typography sx={{ py: 3, color: '#64748b', textAlign: 'center' }}>No hay asignaciones de otros usuarios.</Typography>
+                    <Typography sx={{ py: 3, color: '#64748b', textAlign: 'center', fontSize: { xs: 13, md: 16 } }}>No hay asignaciones de otros usuarios.</Typography>
                   ) : null}
                   {filteredOtherAssignedGroups.map(([sessionId, items]) => {
                     const sortedItems = sortAssignedByHierarchy(items)
@@ -1709,7 +2193,7 @@ export default function StaffingActivitiesPage() {
                 </Box>
               </Box>
             </Box>
-            <Stack direction="row" justifyContent="flex-end" sx={{ mt: 2 }}>
+            <Stack direction="row" justifyContent="flex-end" sx={{ display: { xs: 'none', md: 'flex' }, mt: 1 }}>
               <Button
                 variant="contained"
                 startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
@@ -1722,12 +2206,37 @@ export default function StaffingActivitiesPage() {
             </Stack>
           </Paper>
 
-          <Paper sx={{ display: mobilePanelDisplay('activity'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+          <Paper
+            sx={{
+              display: mobilePanelDisplay('activity'),
+              p: { xs: 0.75, md: 0.75 },
+              borderRadius: 1,
+              border: '1px solid #e2e8f0',
+              boxShadow: 'none',
+              '& .MuiInputBase-input': {
+                fontSize: 15,
+                lineHeight: 1.2,
+                '&::placeholder': {
+                  fontSize: 15,
+                  opacity: 0.75,
+                },
+              },
+              '& .MuiSelect-select': {
+                fontSize: 15,
+              },
+              '& .MuiInputLabel-root': {
+                fontSize: { xs: 14.5, md: 13.5 },
+                lineHeight: 1.1,
+              },
+            }}
+          >
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
               <Box>
-                <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Registrar actividad</Typography>
-                <Typography sx={{ color: '#64748b', fontSize: 13 }}>
-                  {editingActivityRef ? 'Editando una actividad existente.' : 'Agrega actividades a una cuadrilla abierta del día.'}
+                <Typography variant="h6" sx={{ fontWeight: 500, color: '#0f172a', fontSize: { xs: 16, md: 20 }, lineHeight: 1.15 }}>
+                  Registrar descripción de actividad
+                </Typography>
+                <Typography sx={{ color: '#64748b', fontSize: { xs: 12.5, md: 13 }, lineHeight: 1.45 }}>
+                  {editingActivityRef ? 'Editando una descripción existente.' : 'Registra descripciones concretas para una cuadrilla abierta del día.'}
                 </Typography>
               </Box>
               <Stack direction="row" spacing={1}>
@@ -1737,7 +2246,7 @@ export default function StaffingActivitiesPage() {
                 <Button startIcon={<AddIcon />} onClick={addActivity} disabled={!canRegisterActivities || Boolean(editingActivityRef)} sx={{ textTransform: 'none', fontWeight: 800 }}>Agregar</Button>
               </Stack>
             </Stack>
-            <FormControl fullWidth size="small" disabled={!canCreateForDate || openStaffingSessions.length === 0} sx={{ mb: 1.5 }}>
+            <FormControl fullWidth size="small" disabled={!canCreateForDate || openStaffingSessions.length === 0} sx={{ mb: 0.75 }}>
               <InputLabel id="activity-session-select-label">Cuadrilla</InputLabel>
               <Select
                 labelId="activity-session-select-label"
@@ -1792,7 +2301,7 @@ export default function StaffingActivitiesPage() {
               </Select>
             </FormControl>
             {canCreateForDate && openStaffingSessions.length === 0 ? (
-              <Alert severity="info" sx={{ mb: 1.5 }}>
+              <Alert severity="info" sx={{ mb: 1 }}>
                 Crea una cuadrilla abierta para poder registrar actividades.
               </Alert>
             ) : null}
@@ -1836,10 +2345,20 @@ export default function StaffingActivitiesPage() {
                         {...params}
                         label="Actividad"
                         size="small"
+                        required
                       />
                     )}
                     disabled={!canRegisterActivities}
-                    sx={{ gridColumn: { xs: '1', md: '1 / -1' } }}
+                    sx={{ gridColumn: { xs: '1', md: '1 / 3' } }}
+                  />
+
+                  <TextField
+                    label="Descripción de actividad"
+                    value={activity.activity_description}
+                    onChange={(event) => updateActivity(index, { activity_description: event.target.value })}
+                    size="small"
+                    disabled={!canRegisterActivities}
+                    sx={{ gridColumn: { xs: '1', md: '3 / -1' } }}
                   />
 
                   <FormControl size="small" disabled={!canRegisterActivities}>
@@ -1891,25 +2410,34 @@ export default function StaffingActivitiesPage() {
                     </>
                   )}
 
-                  <TextField
-                    label="Hora inicio"
-                    type="time"
-                    value={activity.activity_start_time}
-                    onChange={(event) => updateActivity(index, { activity_start_time: event.target.value })}
-                    size="small"
-                    InputLabelProps={{ shrink: true }}
-                    disabled={!canRegisterActivities}
-                  />
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 1,
+                      gridColumn: { xs: '1', md: '4 / 6' },
+                    }}
+                  >
+                    <TextField
+                      label="Hora inicio"
+                      type="time"
+                      value={activity.activity_start_time}
+                      onChange={(event) => updateActivity(index, { activity_start_time: event.target.value })}
+                      size="small"
+                      InputLabelProps={{ shrink: true }}
+                      disabled={!canRegisterActivities}
+                    />
 
-                  <TextField
-                    label="Hora fin"
-                    type="time"
-                    value={activity.activity_end_time}
-                    onChange={(event) => updateActivity(index, { activity_end_time: event.target.value })}
-                    size="small"
-                    InputLabelProps={{ shrink: true }}
-                    disabled={!canRegisterActivities}
-                  />
+                    <TextField
+                      label="Hora fin"
+                      type="time"
+                      value={activity.activity_end_time}
+                      onChange={(event) => updateActivity(index, { activity_end_time: event.target.value })}
+                      size="small"
+                      InputLabelProps={{ shrink: true }}
+                      disabled={!canRegisterActivities}
+                    />
+                  </Box>
 
                   <Stack
                     direction="row"
@@ -2006,14 +2534,17 @@ export default function StaffingActivitiesPage() {
                       key={`${image.key}-${imageIndex}`}
                       label={image.name || `Imagen ${imageIndex + 1}`}
                       size="small"
-                      onClick={() => void openStaffingEvidence(image.key)}
+                      onClick={() => void openStaffingEvidenceGallery(
+                        (activity.images || []).map((item) => ({ ...item, activityLabel: activity.activity || `Actividad ${index + 1}` })),
+                        image.key
+                      )}
                       onDelete={() => removeActivityImage(index, imageIndex)}
                       sx={{ gridColumn: { xs: '1', md: '1 / -1' }, maxWidth: 240 }}
                     />
                   ))}
 
                   <TextField
-                    label="Observaciones / excepciones"
+                    label="Observaciones"
                     value={activity.activity_observations}
                     onChange={(event) => updateActivity(index, { activity_observations: event.target.value })}
                     size="small"
@@ -2034,127 +2565,169 @@ export default function StaffingActivitiesPage() {
             </Stack>
           </Paper>
 
-          <Paper sx={{ display: mobilePanelDisplay('history'), p: { xs: 2, md: 2.5 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+          <Paper sx={{ display: mobilePanelDisplay('history'), p: { xs: 0.75, md: 0.75 }, borderRadius: 1, border: '1px solid #e2e8f0', boxShadow: 'none' }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between" spacing={0.75} sx={{ mb: 0.75 }}>
               <Box>
-                <Typography variant="h6" sx={{ fontWeight: 900, color: '#0f172a' }}>Actividades</Typography>
-                <Typography sx={{ color: '#64748b', fontSize: 13 }}>{editableActivitiesCount} actividades para {date}</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 500, color: '#0f172a', fontSize: { xs: 18, md: 20 }, lineHeight: 1.15 }}>Actividades</Typography>
+                <Typography sx={{ color: '#64748b', fontSize: { xs: 12.5, md: 13 }, lineHeight: 1.45 }}>
+                  {editableActivitiesCount} actividades para {date} · Estado: {generalSessionStatusLabel}
+                </Typography>
               </Box>
-              {loadingSessions ? <CircularProgress size={22} /> : null}
+              <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: 'center', sm: 'flex-end' }} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                {loadingSessions ? <CircularProgress size={22} /> : null}
+                <Tooltip title={sendJourneyDisabledReason || 'Enviar cierre de jornada'}>
+                  <span>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={closingId === '__bulk__' ? <CircularProgress size={16} color="inherit" /> : <SendIcon fontSize="small" />}
+                      disabled={!closableSessions.length || Boolean(closingId)}
+                      onClick={() => void closeAvailableSessions()}
+                      sx={{
+                        width: { xs: '100%', sm: 'auto' },
+                        minHeight: { xs: 36, sm: 30 },
+                        textTransform: 'none',
+                        bgcolor: hasSendWarnings ? '#f8fafc' : colors.blue2,
+                        color: hasSendWarnings ? '#94a3b8' : '#fff',
+                        border: hasSendWarnings ? '1px solid #e2e8f0' : '1px solid transparent',
+                        boxShadow: 'none',
+                        '& .MuiButton-startIcon': {
+                          color: hasSendWarnings ? '#94a3b8' : 'inherit',
+                        },
+                        '&:hover': {
+                          bgcolor: hasSendWarnings ? '#f1f5f9' : colors.blue1,
+                          boxShadow: 'none',
+                        },
+                        '&.Mui-disabled': {
+                          bgcolor: '#f3f4f6',
+                          color: '#94a3b8',
+                          border: '1px solid transparent',
+                          boxShadow: 'none',
+                        },
+                      }}
+                    >
+                      {sendJourneyButtonLabel}
+                    </Button>
+                  </span>
+                </Tooltip>
+                {deletableSessions.length > 0 ? (
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    size="small"
+                    startIcon={deletingId === '__bulk__' ? <CircularProgress size={16} color="inherit" /> : <DeleteOutlineIcon fontSize="small" />}
+                    disabled={Boolean(deletingId)}
+                    onClick={() => void deleteAvailableDrafts()}
+                    sx={{ textTransform: 'none' }}
+                  >
+                    Eliminar borrador
+                  </Button>
+                ) : null}
+              </Stack>
             </Stack>
             <Stack spacing={1.25} sx={{ display: { xs: 'flex', md: 'none' } }}>
-              {sessions.length === 0 ? (
-                <Typography sx={{ color: '#64748b', py: 3, textAlign: 'center' }}>No hay jornadas para la fecha.</Typography>
+              {activityHistoryRows.length === 0 ? (
+                <Typography sx={{ color: '#64748b', py: 3, textAlign: 'center', fontSize: { xs: 13, md: 16 } }}>No hay actividades para la fecha.</Typography>
               ) : null}
-              {sessions.map((session) => {
+              {activityHistoryRows.map(({ session, activity, activityIndex }, rowIndex) => {
                 const status = String(session.status || '').toLowerCase()
                 const isCreator = Boolean(currentUserId && String(session.created_by || '').trim() === currentUserId)
-                const isDraft = status === 'draft'
-                const hasGeneratedCrew = Boolean(session.generated_crew_id)
-                const isToday = String(session.work_date || date || '').slice(0, 10) === todayYmd()
-                const canClose = isCreator && isDraft && !hasGeneratedCrew
-                const canDelete = canClose && isToday
-                const sessionActivities = Array.isArray(session.activities) ? session.activities : []
                 const canEditSessionActivities = isCreator && ['draft', 'reopened'].includes(status)
-                const sessionImages = sessionActivityImages(session)
+                const activityStatus = activityStatusFromValue(activity)
+                const activityType = activityTypeFromValue(activity)
+                const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
+                const canDeleteActivity = canEditActivity
+                const activityId = String(activity?.id || '').trim()
+                const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
+                const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
+                const activityStartTime = activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : '-'
+                const activityEndTime = activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : '-'
+                const activityImages = activityImagesFromValue(activity)
+                const sessionEvidenceItems: StaffingEvidenceViewerItem[] = (Array.isArray(session.activities) ? session.activities : [])
+                  .flatMap((sessionActivity: any, sessionActivityIndex: number) => {
+                    const activityLabel = String(sessionActivity?.activity || `Actividad ${sessionActivityIndex + 1}`).trim()
+                    return activityImagesFromValue(sessionActivity).map((image) => ({ ...image, activityLabel }))
+                  })
+                const missingFields = activityMissingFields(activity)
+                const highlightMissing = Boolean(activityId && highlightMissingActivityIds.includes(activityId))
 
                 return (
                   <Box
-                    key={session.id}
+                    key={`${session.id}-${String(activity?.id || activityIndex)}`}
                     sx={{
                       border: '1px solid #e2e8f0',
                       borderRadius: 1,
                       p: 1.25,
-                      bgcolor: '#fff',
+                      bgcolor: highlightMissing ? '#fffbeb' : '#fff',
                     }}
                   >
                     <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ fontWeight: 900, color: '#0f172a', fontSize: 14 }} noWrap>
-                          {session.work_front_name || 'Sin frente'}
+                      <Box sx={{ display: 'grid', gridTemplateColumns: '34px minmax(0, 1fr)', gap: 1, minWidth: 0, flex: 1 }}>
+                        <Typography sx={{ color: colors.blue2, fontWeight: 800, fontSize: 13 }}>
+                          Nº{rowIndex + 1}
                         </Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: 12 }}>
-                          {sessionStatusLabel(session.status)} · {Array.isArray(session.workers) ? session.workers.length : 0} colaboradores
-                        </Typography>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography sx={{ fontSize: 13.5, fontWeight: 850, color: '#0f172a', ...missingFieldSx(highlightMissing && missingFields.includes('actividad')) }} noWrap>
+                            {activity?.activity || `Actividad ${activityIndex + 1}`}
+                          </Typography>
+                          <Typography sx={{ color: '#64748b', fontSize: 12, ...missingFieldSx(highlightMissing && missingFields.includes('descripcion')) }} noWrap>
+                            {activity?.activity_description || '-'}
+                          </Typography>
+                          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 0.5, mt: 0.5 }}>
+                            {[
+                              ['Inicio', activityStartTime, 'inicio'],
+                              ['Fin', activityEndTime, 'fin'],
+                              ['Cantidad', activityType === 'operational' ? activityQuantity || '-' : '-', 'cantidad'],
+                              ['Unidad', activityType === 'operational' ? activityUnit || '-' : '-', 'unidad'],
+                            ].map(([label, value, field]) => (
+                              <Typography key={label} sx={{ color: '#64748b', fontSize: 12, ...missingFieldSx(highlightMissing && missingFields.includes(String(field))) }} noWrap>
+                                <Box component="span" sx={{ fontWeight: 700 }}>{label}:</Box> {value}
+                              </Typography>
+                            ))}
+                          </Box>
+                          {highlightMissing && missingFields.some((field) => ['tipo', 'evidencia'].includes(field)) ? (
+                            <Typography sx={{ color: '#b45309', fontSize: 12, mt: 0.5 }}>
+                              Falta: {missingFields.filter((field) => ['tipo', 'evidencia'].includes(field)).map(missingFieldLabel).join(', ')}
+                            </Typography>
+                          ) : null}
+                        </Box>
                       </Box>
                       <Stack direction="row" spacing={0.5}>
-                        <Tooltip title="Cerrar jornada">
+                        <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
                           <span>
-                            <IconButton aria-label="Cerrar jornada" size="small" disabled={!canClose || closingId === session.id} onClick={() => void closeDay(session.id)}>
-                              {closingId === session.id ? <CircularProgress size={18} /> : <DoneAllIcon fontSize="small" />}
+                            <IconButton
+                              aria-label="Editar actividad"
+                              size="small"
+                              disabled={!canEditActivity}
+                              onClick={() => beginEditActivity(session, activity)}
+                            >
+                              <EditIcon fontSize="small" />
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title="Eliminar borrador">
+                        <Tooltip title={canDeleteActivity ? 'Eliminar actividad' : 'No editable'}>
                           <span>
-                            <IconButton aria-label="Eliminar borrador" size="small" disabled={!canDelete || deletingId === session.id} onClick={() => void deleteDraft(session.id)}>
-                              {deletingId === session.id ? <CircularProgress size={18} /> : <DeleteOutlineIcon fontSize="small" />}
+                            <IconButton
+                              aria-label="Eliminar actividad"
+                              size="small"
+                              color="error"
+                              disabled={!canDeleteActivity || !activityId || deletingActivityId === activityId}
+                              onClick={() => void deleteActivity(session, activity)}
+                            >
+                              {deletingActivityId === activityId ? <CircularProgress size={18} /> : <DeleteOutlineIcon fontSize="small" />}
                             </IconButton>
                           </span>
                         </Tooltip>
                       </Stack>
                     </Stack>
 
-                    <Stack spacing={0.75} sx={{ mt: 1 }}>
-                      {sessionActivities.length === 0 ? (
-                        <Typography sx={{ fontSize: 13, color: '#64748b' }}>Sin actividades registradas.</Typography>
-                      ) : null}
-                      {sessionActivities.map((activity: any, activityIndex: number) => {
-                        const activityStatus = activityStatusFromValue(activity)
-                        const activityType = activityTypeFromValue(activity)
-                        const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
-                        const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
-                        const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
-
-                        return (
-                          <Box
-                            key={String(activity?.id || activityIndex)}
-                            sx={{
-                              display: 'grid',
-                              gridTemplateColumns: '1fr auto',
-                              gap: 1,
-                              alignItems: 'center',
-                              borderTop: '1px solid #f1f5f9',
-                              pt: 0.75,
-                            }}
-                          >
-                            <Box sx={{ minWidth: 0 }}>
-                              <Typography sx={{ fontSize: 13.5, fontWeight: 850, color: '#0f172a' }} noWrap>
-                                {activity?.activity || `Actividad ${activityIndex + 1}`}
-                              </Typography>
-                              <Typography sx={{ color: '#64748b', fontSize: 12 }} noWrap>
-                                {[
-                                  activityStatusLabel(activityStatus),
-                                  activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : null,
-                                  activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : null,
-                                  activityType === 'operational' && activityQuantity && activityUnit ? `${activityQuantity} ${activityUnit}` : null,
-                                ].filter(Boolean).join(' · ')}
-                              </Typography>
-                            </Box>
-                            <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
-                              <span>
-                                <IconButton
-                                  aria-label="Editar actividad"
-                                  size="small"
-                                  disabled={!canEditActivity}
-                                  onClick={() => beginEditActivity(session, activity)}
-                                >
-                                  <EditIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          </Box>
-                        )
-                      })}
-                    </Stack>
-
-                    {sessionImages.length > 0 ? (
+                    {activityImages.length > 0 ? (
                       <Button
                         size="small"
-                        onClick={() => void openStaffingEvidence(sessionImages[0].key)}
+                        onClick={() => void openStaffingEvidenceGallery(sessionEvidenceItems, activityImages[0].key)}
                         sx={{ mt: 0.75, minWidth: 0, p: 0, textTransform: 'none', fontSize: 12 }}
                       >
-                        Ver imagen ({sessionImages.length})
+                        Ver imagen ({activityImages.length})
                       </Button>
                     ) : null}
                   </Box>
@@ -2166,101 +2739,101 @@ export default function StaffingActivitiesPage() {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Frente</TableCell>
-                    <TableCell>Supervisor</TableCell>
-                    <TableCell>Capataz</TableCell>
-                    <TableCell align="right">Colaboradores</TableCell>
-                    <TableCell align="right">Actividades</TableCell>
-                    <TableCell>Estado</TableCell>
+                    <TableCell sx={{ width: 72 }}>Nº</TableCell>
+                    <TableCell>Actividades</TableCell>
+                    <TableCell align="center">Inicio / Fin</TableCell>
+                    <TableCell align="center">Cantidad</TableCell>
+                    <TableCell align="center">Unidad</TableCell>
+                    <TableCell align="center">Imágenes</TableCell>
                     <TableCell align="right">Acciones</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {sessions.length === 0 ? (
+                  {activityHistoryRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} align="center" sx={{ color: '#64748b', py: 4 }}>No hay jornadas para la fecha.</TableCell>
+                      <TableCell colSpan={7} align="center" sx={{ color: '#64748b', py: 4 }}>No hay actividades para la fecha.</TableCell>
                     </TableRow>
                   ) : null}
-                  {sessions.map((session) => {
+                  {activityHistoryRows.map(({ session, activity, activityIndex }, rowIndex) => {
                     const status = String(session.status || '').toLowerCase()
                     const isCreator = Boolean(currentUserId && String(session.created_by || '').trim() === currentUserId)
-                    const isDraft = status === 'draft'
-                    const hasGeneratedCrew = Boolean(session.generated_crew_id)
-                    const isToday = String(session.work_date || date || '').slice(0, 10) === todayYmd()
-                    const canClose = isCreator && isDraft && !hasGeneratedCrew
-                    const canDelete = canClose && isToday
-                    const sessionSupervisorIds = sessionRoleIds(session, 'supervisor')
-                    const sessionForemanIds = sessionRoleIds(session, 'foreman')
-                    const sessionImages = sessionActivityImages(session)
-                    const sessionActivities = Array.isArray(session.activities) ? session.activities : []
+                    const activityImages = activityImagesFromValue(activity)
+                    const sessionEvidenceItems: StaffingEvidenceViewerItem[] = (Array.isArray(session.activities) ? session.activities : [])
+                      .flatMap((sessionActivity: any, sessionActivityIndex: number) => {
+                        const activityLabel = String(sessionActivity?.activity || `Actividad ${sessionActivityIndex + 1}`).trim()
+                        return activityImagesFromValue(sessionActivity).map((image) => ({ ...image, activityLabel }))
+                      })
                     const canEditSessionActivities = isCreator && ['draft', 'reopened'].includes(status)
+                    const activityStatus = activityStatusFromValue(activity)
+                    const activityType = activityTypeFromValue(activity)
+                    const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
+                    const canDeleteActivity = canEditActivity
+                    const activityId = String(activity?.id || '').trim()
+                    const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
+                    const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
+                    const activityStartTime = activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : '-'
+                    const activityEndTime = activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : '-'
+                    const activityTimeRange = `${activityStartTime === '-' ? '--:--' : activityStartTime} - ${activityEndTime === '-' ? '--:--' : activityEndTime}`
+                    const missingFields = activityMissingFields(activity)
+                    const highlightMissing = Boolean(activityId && highlightMissingActivityIds.includes(activityId))
                     return (
-                      <TableRow key={session.id} hover>
-                        <TableCell sx={{ fontWeight: 800 }}>{session.work_front_name || '-'}</TableCell>
-                        <TableCell>{collaboratorLabels(sessionSupervisorIds)}</TableCell>
-                        <TableCell>{collaboratorLabels(sessionForemanIds)}</TableCell>
-                        <TableCell align="right">{Array.isArray(session.workers) ? session.workers.length : 0}</TableCell>
-                        <TableCell align="right">
-                          <Stack spacing={0.25} alignItems="flex-end">
-                            {sessionActivities.length === 0 ? (
-                              <Typography sx={{ fontSize: 13, color: '#64748b' }}>Sin actividades</Typography>
+                      <TableRow key={`${session.id}-${String(activity?.id || activityIndex)}`} hover sx={{ bgcolor: highlightMissing ? '#fffbeb' : undefined }}>
+                        <TableCell sx={{ width: 72, fontWeight: 700 }}>{rowIndex + 1}</TableCell>
+                        <TableCell>
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a', ...missingFieldSx(highlightMissing && missingFields.includes('actividad')) }}>
+                              {activity?.activity || `Actividad ${activityIndex + 1}`}
+                            </Typography>
+                            <Typography sx={{ fontSize: 12, color: '#64748b', ...missingFieldSx(highlightMissing && missingFields.includes('descripcion')) }}>
+                              {activity?.activity_description || '-'}
+                            </Typography>
+                            {highlightMissing && missingFields.some((field) => ['tipo', 'evidencia'].includes(field)) ? (
+                              <Typography sx={{ color: '#b45309', fontSize: 12 }}>
+                                Falta: {missingFields.filter((field) => ['tipo', 'evidencia'].includes(field)).map(missingFieldLabel).join(', ')}
+                              </Typography>
                             ) : null}
-                            {sessionActivities.map((activity: any, activityIndex: number) => {
-                              const activityStatus = activityStatusFromValue(activity)
-                              const activityType = activityTypeFromValue(activity)
-                              const canEditActivity = canEditSessionActivities && activityStatus !== 'closed'
-                              const activityUnit = String(activity?.unit ?? activity?.metadata?.unit ?? '').trim()
-                              const activityQuantity = String(activity?.quantity ?? activity?.metadata?.quantity ?? '').trim()
-
-                              return (
-                                <Stack key={String(activity?.id || activityIndex)} direction="row" spacing={0.75} alignItems="center" justifyContent="flex-end" sx={{ maxWidth: 360 }}>
-                                  <Box sx={{ minWidth: 0, textAlign: 'right' }}>
-                                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }} noWrap>
-                                      {activity?.activity || `Actividad ${activityIndex + 1}`}
-                                    </Typography>
-                                    <Typography sx={{ fontSize: 12, color: '#64748b' }} noWrap>
-                                      {[
-                                        activityStatusLabel(activityStatus),
-                                        activity?.activity_start_time ? String(activity.activity_start_time).slice(0, 5) : null,
-                                        activity?.activity_end_time ? String(activity.activity_end_time).slice(0, 5) : null,
-                                        activityType === 'operational' && activityQuantity && activityUnit ? `${activityQuantity} ${activityUnit}` : null,
-                                      ].filter(Boolean).join(' · ')}
-                                    </Typography>
-                                  </Box>
-                                  <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
-                                    <span>
-                                      <IconButton
-                                        aria-label="Editar actividad"
-                                        size="small"
-                                        disabled={!canEditActivity}
-                                        onClick={() => beginEditActivity(session, activity)}
-                                      >
-                                        <EditIcon fontSize="small" />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                </Stack>
-                              )
-                            })}
-                            {sessionImages.length > 0 ? (
-                              <Button
-                                size="small"
-                                onClick={() => void openStaffingEvidence(sessionImages[0].key)}
-                                sx={{ minWidth: 0, p: 0, textTransform: 'none', fontSize: 12 }}
-                              >
-                                Ver imagen ({sessionImages.length})
-                              </Button>
-                            ) : null}
-                          </Stack>
+                          </Box>
                         </TableCell>
-                        <TableCell>{sessionStatusLabel(session.status)}</TableCell>
+                        <TableCell align="center" sx={missingFieldSx(highlightMissing && (missingFields.includes('inicio') || missingFields.includes('fin')))}>{activityTimeRange}</TableCell>
+                        <TableCell align="center" sx={missingFieldSx(highlightMissing && missingFields.includes('cantidad'))}>{activityType === 'operational' ? activityQuantity || '-' : '-'}</TableCell>
+                        <TableCell align="center" sx={missingFieldSx(highlightMissing && missingFields.includes('unidad'))}>{activityType === 'operational' ? activityUnit || '-' : '-'}</TableCell>
+                        <TableCell align="center" sx={missingFieldSx(highlightMissing && missingFields.includes('evidencia'))}>
+                          {activityImages.length > 0 ? (
+                            <Button
+                              size="small"
+                              onClick={() => void openStaffingEvidenceGallery(sessionEvidenceItems, activityImages[0].key)}
+                              sx={{ minWidth: 0, p: 0, textTransform: 'none', fontSize: 12 }}
+                            >
+                              Ver ({activityImages.length})
+                            </Button>
+                          ) : '-'}
+                        </TableCell>
                         <TableCell align="right">
-                          <IconButton aria-label="Cerrar jornada" disabled={!canClose || closingId === session.id} onClick={() => void closeDay(session.id)}>
-                            {closingId === session.id ? <CircularProgress size={18} /> : <DoneAllIcon />}
-                          </IconButton>
-                          <IconButton aria-label="Eliminar borrador" disabled={!canDelete || deletingId === session.id} onClick={() => void deleteDraft(session.id)}>
-                            {deletingId === session.id ? <CircularProgress size={18} /> : <DeleteOutlineIcon />}
-                          </IconButton>
+                          <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                            <Tooltip title={canEditActivity ? 'Editar actividad' : 'No editable'}>
+                              <span>
+                                <IconButton
+                                  aria-label="Editar actividad"
+                                  disabled={!canEditActivity}
+                                  onClick={() => beginEditActivity(session, activity)}
+                                >
+                                  <EditIcon />
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                            <Tooltip title={canDeleteActivity ? 'Eliminar actividad' : 'No editable'}>
+                              <span>
+                                <IconButton
+                                  aria-label="Eliminar actividad"
+                                  color="error"
+                                  disabled={!canDeleteActivity || !activityId || deletingActivityId === activityId}
+                                  onClick={() => void deleteActivity(session, activity)}
+                                >
+                                  {deletingActivityId === activityId ? <CircularProgress size={18} /> : <DeleteOutlineIcon />}
+                                </IconButton>
+                              </span>
+                            </Tooltip>
+                          </Stack>
                         </TableCell>
                       </TableRow>
                     )
@@ -2271,6 +2844,103 @@ export default function StaffingActivitiesPage() {
           </Paper>
         </Stack>
       </Container>
+      <Dialog
+        open={evidenceViewerOpen}
+        onClose={() => setEvidenceViewerOpen(false)}
+        fullWidth
+        maxWidth="md"
+        PaperProps={{ sx: { bgcolor: '#0f172a', color: '#fff' } }}
+      >
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            py: 1,
+            pr: 1,
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography noWrap sx={{ fontWeight: 600, fontSize: { xs: 14, md: 16 } }}>
+              {evidenceViewerItems[evidenceViewerIndex]?.activityLabel || 'Evidencia'}
+            </Typography>
+            <Typography sx={{ color: '#cbd5e1', fontSize: 12 }}>
+              {evidenceViewerItems.length > 0 ? `${evidenceViewerIndex + 1} de ${evidenceViewerItems.length}` : 'Sin imagenes'}
+            </Typography>
+          </Box>
+          <IconButton aria-label="Cerrar visor" onClick={() => setEvidenceViewerOpen(false)} sx={{ color: '#fff' }}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: { xs: 1, md: 2 }, position: 'relative' }}>
+          <Box
+            sx={{
+              minHeight: { xs: '58vh', md: '68vh' },
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              bgcolor: '#020617',
+              borderRadius: 1,
+              overflow: 'hidden',
+              position: 'relative',
+            }}
+          >
+            {evidenceViewerLoading ? (
+              <CircularProgress sx={{ color: '#fff' }} />
+            ) : evidenceViewerItems[evidenceViewerIndex]?.url ? (
+              <Box
+                component="img"
+                src={evidenceViewerItems[evidenceViewerIndex].url}
+                alt={evidenceViewerItems[evidenceViewerIndex]?.name || 'Evidencia'}
+                sx={{
+                  maxWidth: '100%',
+                  maxHeight: { xs: '58vh', md: '68vh' },
+                  objectFit: 'contain',
+                  display: 'block',
+                }}
+              />
+            ) : (
+              <Typography sx={{ color: '#cbd5e1' }}>No se pudo cargar la imagen.</Typography>
+            )}
+
+            {evidenceViewerItems.length > 1 ? (
+              <>
+                <IconButton
+                  aria-label="Imagen anterior"
+                  onClick={() => setEvidenceViewerIndex((prev) => (prev - 1 + evidenceViewerItems.length) % evidenceViewerItems.length)}
+                  sx={{
+                    position: 'absolute',
+                    left: { xs: 6, md: 12 },
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: '#fff',
+                    bgcolor: 'rgba(15, 23, 42, 0.62)',
+                    '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.82)' },
+                  }}
+                >
+                  <ArrowBackIosNewIcon fontSize="small" />
+                </IconButton>
+                <IconButton
+                  aria-label="Imagen siguiente"
+                  onClick={() => setEvidenceViewerIndex((prev) => (prev + 1) % evidenceViewerItems.length)}
+                  sx={{
+                    position: 'absolute',
+                    right: { xs: 6, md: 12 },
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: '#fff',
+                    bgcolor: 'rgba(15, 23, 42, 0.62)',
+                    '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.82)' },
+                  }}
+                >
+                  <ArrowForwardIosIcon fontSize="small" />
+                </IconButton>
+              </>
+            ) : null}
+          </Box>
+        </DialogContent>
+      </Dialog>
       <Snackbar open={Boolean(notice)} autoHideDuration={5000} onClose={() => setNotice(null)}>
         {notice ? <Alert severity={notice.severity} onClose={() => setNotice(null)}>{notice.message}</Alert> : undefined}
       </Snackbar>

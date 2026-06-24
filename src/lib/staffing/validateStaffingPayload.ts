@@ -9,9 +9,10 @@ export type StaffingWorkerInput = {
 export type StaffingActivityInput = {
   program_activity_id: string | null
   activity: string
+  activity_description: string | null
   activity_start_time: string | null
   activity_end_time: string | null
-  activity_observations: string | null
+  observations: string | null
   restrictions: string | null
   area: string | null
   unit: string | null
@@ -139,7 +140,10 @@ const normalizeWorkerList = (source: unknown, defaultRole: string | null = null)
 
 const normalizeActivity = (value: any, index: number): StaffingActivityInput | null => {
   const activity = nullableText(value?.activity ?? value?.name ?? value?.title)
+  const activityDescription = nullableText(value?.activity_description ?? value?.activityDescription ?? value?.description)
   if (!activity) return null
+  const activityStartTime = normalizeTime(value?.activity_start_time ?? value?.activityStartTime)
+  const activityEndTime = normalizeTime(value?.activity_end_time ?? value?.activityEndTime)
 
   const rawQuantity = value?.quantity
   const quantity =
@@ -161,19 +165,23 @@ const normalizeActivity = (value: any, index: number): StaffingActivityInput | n
     throw new Error(`Orden inválido en actividad ${index + 1}`)
   }
 
+  const metadata = asObject(value?.metadata)
+  const unit = nullableText(value?.unit)
+
   return {
-    program_activity_id: nullableText(value?.program_activity_id ?? value?.programActivityId ?? value?.activity_id),
+    program_activity_id: nullableText(value?.program_activity_id ?? value?.programActivityId),
     activity,
-    activity_start_time: normalizeTime(value?.activity_start_time ?? value?.activityStartTime),
-    activity_end_time: normalizeTime(value?.activity_end_time ?? value?.activityEndTime),
-    activity_observations: nullableText(value?.activity_observations ?? value?.activityObservations ?? value?.observations),
+    activity_description: activityDescription,
+    activity_start_time: activityStartTime,
+    activity_end_time: activityEndTime,
+    observations: nullableText(value?.observations ?? value?.activity_observations ?? value?.activityObservations),
     restrictions: nullableText(value?.restrictions),
     area: nullableText(value?.area),
-    unit: nullableText(value?.unit),
+    unit,
     quantity,
     user_detail: nullableText(value?.user_detail ?? value?.userDetail ?? value?.detail),
     display_order: displayOrder,
-    metadata: asObject(value?.metadata),
+    metadata,
   }
 }
 

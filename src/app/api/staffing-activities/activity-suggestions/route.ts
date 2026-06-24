@@ -27,7 +27,7 @@ const uniqueSuggestions = (rows: any[]) => {
   const seen = new Set<string>()
   const out: string[] = []
   ;(rows || []).forEach((row) => {
-    const activity = clean(row?.activity)
+    const activity = clean(row?.activity ?? row?.activity_description)
     const key = activity.toLocaleLowerCase('es')
     if (!activity || seen.has(key)) return
     seen.add(key)
@@ -43,6 +43,7 @@ const isMissingRelationError = (error: any) => {
 
 const fetchSuggestions = async (params: {
   table: string
+  activityColumn: 'activity_description' | 'activity'
   companyId: string
   projectId: string
   query: string
@@ -50,10 +51,10 @@ const fetchSuggestions = async (params: {
 }) => {
   let request = supabaseAdmin
     .from(params.table)
-    .select('activity, created_at')
+    .select(`${params.activityColumn}, created_at`)
     .eq('company_id', params.companyId)
-    .not('activity', 'is', null)
-    .ilike('activity', `%${params.query}%`)
+    .not(params.activityColumn, 'is', null)
+    .ilike(params.activityColumn, `%${params.query}%`)
     .order('created_at', { ascending: false })
     .limit(50)
 
@@ -79,6 +80,7 @@ export async function GET(req: NextRequest) {
 
     let { data, error } = await fetchSuggestions({
       table: 'pr_field_activity_logs',
+      activityColumn: 'activity',
       companyId,
       projectId,
       query: q,
@@ -88,6 +90,7 @@ export async function GET(req: NextRequest) {
     if (error && isMissingRelationError(error)) {
       ;({ data, error } = await fetchSuggestions({
         table: 'pr_field_staffing_activities',
+        activityColumn: 'activity',
         companyId,
         projectId,
         query: q,
@@ -98,6 +101,7 @@ export async function GET(req: NextRequest) {
     if (error && projectId && isMissingRelationError(error)) {
       ;({ data, error } = await fetchSuggestions({
         table: 'pr_field_staffing_activities',
+        activityColumn: 'activity',
         companyId,
         projectId: '',
         query: q,

@@ -46,6 +46,24 @@ export type StaffingCollaboratorValidation = {
   collaborators: any[]
 }
 
+export const todayYmd = () => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || ''
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+export const previousYmd = (date: string) => {
+  const [year, month, day] = String(date || '').split('-').map(Number)
+  const value = new Date(Date.UTC(year, month - 1, day))
+  value.setUTCDate(value.getUTCDate() - 1)
+  return value.toISOString().slice(0, 10)
+}
+
 export async function fetchTurnoCollaboratorIds(params: AvailableCollaboratorsParams) {
   const { data, error } = await params.supabaseAdmin
     .from('pr_collaborator_daily_status')
@@ -60,6 +78,25 @@ export async function fetchTurnoCollaboratorIds(params: AvailableCollaboratorsPa
       .filter((row: any) => isTurnoDailyStatus(row))
       .map((row: any) => String(row?.collaborator_id || ''))
   )
+}
+
+export async function resolveTurnoSourceDate(params: AvailableCollaboratorsParams) {
+  const workDate = String(params.workDate || '').slice(0, 10)
+  const currentDate = todayYmd()
+
+  if (workDate !== currentDate) return null
+
+  const fallbackDate = previousYmd(workDate)
+  const availableDates = await fetchTurnoAvailableDates({
+    supabaseAdmin: params.supabaseAdmin,
+    companyId: params.companyId,
+    startDate: fallbackDate,
+    endDate: workDate,
+  })
+
+  if (availableDates.includes(workDate)) return workDate
+  if (availableDates.includes(fallbackDate)) return fallbackDate
+  return null
 }
 
 export async function fetchTurnoAvailableDates(params: AvailableDatesParams) {
