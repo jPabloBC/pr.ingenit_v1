@@ -10,7 +10,7 @@ import {
   isValidYmdDate,
   type ValidatedStaffingPayload,
 } from '@/lib/staffing/validateStaffingPayload'
-import { validateCollaboratorsInTurno } from '@/lib/staffing/availableCollaborators'
+import { resolveTurnoSourceDate, todayYmd, validateCollaboratorsInTurno } from '@/lib/staffing/availableCollaborators'
 
 export const dynamic = 'force-dynamic'
 
@@ -275,6 +275,11 @@ export async function POST(req: NextRequest) {
       return jsonError(String(validationError?.message || validationError), 400)
     }
 
+    const today = todayYmd()
+    if (payload.work_date !== today) {
+      return jsonError('La dotación solo se puede crear para la fecha actual.', 400)
+    }
+
     const { projectId, error: projectScopeError } = resolveProjectId({
       requestedProjectId: payload.project_id,
       actorProjectId: actor?.projectId,
@@ -302,10 +307,19 @@ export async function POST(req: NextRequest) {
       payload.field_boss_id,
     ])
 
-    const validation = await validateCollaboratorsInTurno({
+    const attendanceSourceDate = await resolveTurnoSourceDate({
       supabaseAdmin,
       companyId,
       workDate: payload.work_date,
+    })
+    if (!attendanceSourceDate) {
+      return jsonError('No existe asistencia de hoy ni del día anterior para usar como base de dotación.', 400)
+    }
+
+    const validation = await validateCollaboratorsInTurno({
+      supabaseAdmin,
+      companyId,
+      workDate: attendanceSourceDate,
       collaboratorIds: collaboratorIdsToValidate,
     })
 
@@ -383,7 +397,10 @@ export async function POST(req: NextRequest) {
         status: 'draft',
         created_by: actorUserId,
         updated_by: actorUserId,
-        metadata: payload.metadata,
+        metadata: {
+          ...payload.metadata,
+          attendance_source_date: attendanceSourceDate,
+        },
       })
       .select('*')
       .single()
@@ -444,6 +461,7 @@ export async function POST(req: NextRequest) {
         company_id: companyId,
         project_id: projectId,
         work_date: payload.work_date,
+        attendance_source_date: attendanceSourceDate,
         affected_collaborator_ids: collaboratorIdsToValidate,
         activities_ignored: payload.activities.length,
       },

@@ -125,9 +125,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       work_date: workDate,
       program_activity_id: activity.program_activity_id,
       activity: activity.activity,
+      activity_description: activity.activity_description,
       activity_start_time: activity.activity_start_time,
       activity_end_time: activity.activity_end_time,
-      activity_observations: activity.activity_observations,
+      observations: activity.observations,
       restrictions: activity.restrictions,
       area: activity.area,
       unit: activity.unit,
@@ -253,7 +254,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const activity = payload.activities[0]
-    if (!activity) return jsonError('Actividad requerida', 400)
+    if (!activity) return jsonError('Descripción de actividad requerida', 400)
 
     const metadata = {
       ...existingMetadata,
@@ -265,9 +266,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .update({
         program_activity_id: activity.program_activity_id,
         activity: activity.activity,
+        activity_description: activity.activity_description,
         activity_start_time: activity.activity_start_time,
         activity_end_time: activity.activity_end_time,
-        activity_observations: activity.activity_observations,
+        observations: activity.observations,
         restrictions: activity.restrictions,
         area: activity.area,
         unit: activity.unit,
@@ -310,6 +312,107 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ activity: updatedActivity })
   } catch (err) {
     console.error('Error PATCH /api/staffing-activities/[id]/activities', err)
+    return jsonError('Unexpected server error', 500)
+  }
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const session = (await getServerSession(authOptions as any)) as any
+    if (!session?.user) return jsonError('Unauthorized', 401)
+
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET }) as any
+    const actor = await resolveCurrentActor(session)
+    const companyId = clean(actor?.companyId || session?.user?.companyId)
+    if (!companyId) return jsonError('Missing company_id', 400)
+
+    const role = clean(actor?.role || session?.user?.role).toLowerCase()
+    if (role === 'viewer') return jsonError('Forbidden', 403)
+
+    const sessionId = clean(params?.id)
+    if (!sessionId) return jsonError('id requerido', 400)
+
+    const body = await req.json().catch(() => ({}))
+    const activityId = clean(body?.activity_id ?? body?.activityId ?? body?.id)
+    if (!activityId) return jsonError('activity_id requerido', 400)
+
+    const { data: staffingSession, error: sessionError } = await supabaseAdmin
+      .from('pr_field_staffing_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (sessionError) return jsonError(sessionError.message, 500)
+    if (!staffingSession?.id) return jsonError('Cuadrilla no encontrada', 404)
+
+    const scopedProjectId = clean(actor?.projectId || sessionProjectId(session) || tokenProjectId(token))
+    const staffingProjectId = clean(staffingSession?.project_id)
+    if (scopedProjectId && staffingProjectId && scopedProjectId !== staffingProjectId) {
+      return jsonError('project_id no coincide con el proyecto de la sesión', 403)
+    }
+
+    const status = clean(staffingSession?.status).toLowerCase()
+    if (!['draft', 'reopened'].includes(status)) {
+      return jsonError('La cuadrilla no está abierta para eliminar actividades', 409)
+    }
+
+    const actorUserId = clean(actor?.userId || session?.user?.id) || null
+    if (!actorUserId || clean(staffingSession?.created_by) !== actorUserId) {
+      return jsonError('Forbidden', 403)
+    }
+
+    const { data: existingActivity, error: activityError } = await supabaseAdmin
+      .from('pr_field_activity_logs')
+      .select('*')
+      .eq('id', activityId)
+      .eq('session_id', sessionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (activityError) return jsonError(activityError.message, 500)
+    if (!existingActivity?.id) return jsonError('Actividad no encontrada', 404)
+
+    const existingMetadata =
+      existingActivity.metadata && typeof existingActivity.metadata === 'object' && !Array.isArray(existingActivity.metadata)
+        ? existingActivity.metadata
+        : {}
+    if (clean(existingMetadata.status).toLowerCase() === 'closed') {
+      return jsonError('No se puede eliminar una actividad cerrada', 409)
+    }
+
+    const { error: deleteError } = await supabaseAdmin
+      .from('pr_field_activity_logs')
+      .delete()
+      .eq('id', activityId)
+      .eq('session_id', sessionId)
+      .eq('company_id', companyId)
+
+    if (deleteError) return jsonError(deleteError.message, 500)
+
+    await writeAuditLog({
+      supabaseAdmin,
+      companyId,
+      projectId: staffingProjectId || null,
+      actorUserId,
+      actorEmail: actor?.email || session?.user?.email || null,
+      actorRole: actor?.role || session?.user?.role || null,
+      action: 'delete' as any,
+      resourceType: 'staffing_activity_log',
+      resourceId: activityId,
+      beforeData: existingActivity,
+      metadata: {
+        event: 'staffing.activities.delete',
+        company_id: companyId,
+        project_id: staffingProjectId || null,
+        work_date: staffingSession.work_date || null,
+        session_id: sessionId,
+      },
+    })
+
+    return NextResponse.json({ ok: true })
+  } catch (err) {
+    console.error('Error DELETE /api/staffing-activities/[id]/activities', err)
     return jsonError('Unexpected server error', 500)
   }
 }

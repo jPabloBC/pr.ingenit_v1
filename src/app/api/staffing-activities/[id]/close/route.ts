@@ -25,7 +25,22 @@ const activityMetadata = (activity: any) =>
     ? activity.metadata
     : {}
 
-const activityStatus = (activity: any) => clean(activityMetadata(activity).status).toLowerCase()
+const activityReadyToSubmit = (activity: any) => {
+  const metadata = activityMetadata(activity)
+  const activityType = clean(metadata.activity_type).toLowerCase()
+  const images = Array.isArray(metadata.images) ? metadata.images : []
+
+  if (!clean(activity?.activity)) return false
+  if (!clean(activity?.activity_description)) return false
+  if (!activityType) return false
+  if (!clean(activity?.activity_start_time)) return false
+  if (!clean(activity?.activity_end_time)) return false
+  if (activityType === 'operational') {
+    if (!clean(activity?.quantity) || !clean(activity?.unit)) return false
+    if (images.length === 0) return false
+  }
+  return true
+}
 
 const auditCloseAttempt = async (params: {
   companyId: string
@@ -124,7 +139,7 @@ export async function PATCH(
 
     const { data: activities, error: activitiesError } = await supabaseAdmin
       .from('pr_field_activity_logs')
-      .select('id, metadata')
+      .select('id, activity, activity_description, activity_start_time, activity_end_time, quantity, unit, metadata')
       .eq('session_id', id)
       .eq('company_id', companyId)
 
@@ -136,18 +151,18 @@ export async function PATCH(
       return jsonError('No se puede cerrar una jornada sin actividades', 400)
     }
 
-    const openActivities = activityRows.filter((activity) => activityStatus(activity) !== 'closed')
-    if (openActivities.length > 0) {
+    const incompleteActivities = activityRows.filter((activity) => !activityReadyToSubmit(activity))
+    if (incompleteActivities.length > 0) {
       await auditCloseAttempt({
         ...auditBase,
         allowed: false,
-        reason: 'activities_not_closed',
+        reason: 'activities_incomplete',
         metadata: {
           ...auditBase.metadata,
-          open_activity_count: openActivities.length,
+          incomplete_activity_count: incompleteActivities.length,
         },
       })
-      return jsonError('No se puede cerrar la jornada: hay actividades abiertas o sin cerrar', 400)
+      return jsonError('No se puede enviar la jornada: hay actividades con datos requeridos incompletos', 400)
     }
 
     const metadata = {
