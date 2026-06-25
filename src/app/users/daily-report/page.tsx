@@ -47,6 +47,49 @@ const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_DATE = "2026-05-09"
 const DAILY_REPORT_BASE_SEQUENCE_ANCHOR_NO = 32
 const PROJECT_WEEK_ANCHOR_START = "2026-06-15"
 const PROJECT_WEEK_ANCHOR_NUMBER = 11
+const DAILY_REPORT_INITIAL_CACHE_TTL_MS = 30000
+
+type ClientFetchCacheEntry = {
+  expiresAt: number
+  promise?: Promise<any>
+  value?: any
+}
+
+const dailyReportClientFetchCache = new Map<string, ClientFetchCacheEntry>()
+
+const fetchJsonCached = async (url: string, options?: RequestInit, ttlMs = DAILY_REPORT_INITIAL_CACHE_TTL_MS, force = false) => {
+  const method = String(options?.method || "GET").toUpperCase()
+  const cacheKey = `${method}:${url}`
+  const now = Date.now()
+  const current = dailyReportClientFetchCache.get(cacheKey)
+  if (!force && current) {
+    if (current.value !== undefined && current.expiresAt > now) return current.value
+    if (current.promise) return current.promise
+  }
+
+  const promise = fetch(url, options).then(async (res) => {
+    const json = await res.json().catch(() => null)
+    if (!res.ok) {
+      const error = new Error(String((json as any)?.error || `Error ${res.status}`))
+      ;(error as any).payload = json
+      throw error
+    }
+    dailyReportClientFetchCache.set(cacheKey, {
+      value: json,
+      expiresAt: Date.now() + ttlMs
+    })
+    return json
+  }).catch((error) => {
+    dailyReportClientFetchCache.delete(cacheKey)
+    throw error
+  })
+
+  dailyReportClientFetchCache.set(cacheKey, {
+    promise,
+    expiresAt: now + ttlMs
+  })
+  return promise
+}
 
 type WeekRange = { start: string; end: string }
 
@@ -5822,14 +5865,12 @@ export default function DailyReportPage() {
     if (!canAccess) router.push("/users/dashboard")
   }, [status, canAccess, router])
 
-  const loadRecords = async () => {
-    const [resReports, resBaselines, resFrontHistory] = await Promise.all([
-      fetch("/api/daily-reports"),
-      fetch("/api/daily-reports?baselines=1"),
-      fetch("/api/daily-reports?front_history=1")
+  const loadRecords = async (force = false) => {
+    const [reportsJson, baselineJson, historyJson] = await Promise.all([
+      fetchJsonCached("/api/daily-reports", undefined, DAILY_REPORT_INITIAL_CACHE_TTL_MS, force),
+      fetchJsonCached("/api/daily-reports?baselines=1", undefined, DAILY_REPORT_INITIAL_CACHE_TTL_MS, force),
+      fetchJsonCached("/api/daily-reports?front_history=1", undefined, DAILY_REPORT_INITIAL_CACHE_TTL_MS, force)
     ])
-    const reportsJson = await resReports.json()
-    if (!resReports.ok) throw new Error(String(reportsJson?.error || "Error cargando informes"))
     const sortedRecords = (Array.isArray(reportsJson) ? [...reportsJson] : []).sort((a: DailyReportRecord, b: DailyReportRecord) => {
       const reportNoDiff = Number(b?.report_no || 0) - Number(a?.report_no || 0)
       if (reportNoDiff !== 0) return reportNoDiff
@@ -5846,8 +5887,7 @@ export default function DailyReportPage() {
     })
     setRecords(sortedRecords)
 
-    const baselineJson = await resBaselines.json()
-    if (resBaselines.ok && Array.isArray(baselineJson)) {
+    if (Array.isArray(baselineJson)) {
       const map: Partial<Record<"CANALETAS" | "PISCINAS", FrontBaseline>> = {}
       baselineJson.forEach((b: any) => {
         const front = String(b?.work_front || "").toUpperCase() === "PISCINAS" ? "PISCINAS" : "CANALETAS"
@@ -5872,8 +5912,7 @@ export default function DailyReportPage() {
       setFrontBaselines(map)
     }
 
-    const historyJson = await resFrontHistory.json().catch(() => [])
-    if (resFrontHistory.ok && Array.isArray(historyJson)) {
+    if (Array.isArray(historyJson)) {
       const rows: FrontHistoryRow[] = historyJson
         .map((r: any): FrontHistoryRow => ({
           work_front: (String(r?.work_front || "").toUpperCase() === "PISCINAS" ? "PISCINAS" : "CANALETAS") as "CANALETAS" | "PISCINAS",
@@ -5894,9 +5933,7 @@ export default function DailyReportPage() {
   }
 
   const loadFieldReportDates = async () => {
-    const res = await fetch("/api/field-reports?dates=1", { cache: "no-store" })
-    const json = await res.json().catch(() => null)
-    if (!res.ok) throw new Error(String((json as any)?.error || "Error cargando fechas de reportes de terreno"))
+    const json = await fetchJsonCached("/api/field-reports?dates=1", { cache: "no-store" })
     const rows: string[] = Array.isArray((json as any)?.dates) ? (json as any).dates : []
     const dates = Array.from(new Set<string>(
       rows
@@ -5907,9 +5944,8 @@ export default function DailyReportPage() {
   }
 
   const loadReportFrontNames = async () => {
-    const res = await fetch("/api/report-fronts", { cache: "no-store" })
-    const json = await res.json().catch(() => null)
-    if (!res.ok) return
+    const json = await fetchJsonCached("/api/report-fronts", { cache: "no-store" }).catch(() => null)
+    if (!json) return
     const fronts = Array.isArray((json as any)?.fronts) ? (json as any).fronts : []
     const names = fronts
       .map((front: any) => String(front?.name || "").replace(/\s+/g, " ").trim())
@@ -5952,9 +5988,7 @@ export default function DailyReportPage() {
   const bootstrapForDate = async (date: string) => {
     setBootstrapping(true)
     try {
-      const res = await fetch(`/api/daily-reports?bootstrap=1&date=${encodeURIComponent(date)}`)
-      const json = await res.json()
-      if (!res.ok) throw new Error(String(json?.error || "Error cargando base"))
+      const json = await fetchJsonCached(`/api/daily-reports?bootstrap=1&date=${encodeURIComponent(date)}`, undefined, DAILY_REPORT_INITIAL_CACHE_TTL_MS)
       const defaults = json?.defaults || {}
       setForm((prev) => {
         const normalized = normalizeRecordToForm(defaults)
@@ -11968,7 +12002,7 @@ export default function DailyReportPage() {
         }
       })
 
-      await loadRecords()
+      await loadRecords(true)
       const savedFrontId = String(resultVisible?.body?.id || visiblePayload?.id || "")
       setFrontSavedStatus((prev) => ({ ...prev, [currentFront]: true }))
       setFrontRecordIds((prev) => ({
@@ -12113,7 +12147,7 @@ export default function DailyReportPage() {
       setHistoryOpen(false)
       setViewOpen(false)
       setHistoryViewMeta(null)
-      await loadRecords()
+      await loadRecords(true)
     } catch (err: any) {
       showToast(err?.message || "No se pudo restaurar la versión", "error")
     } finally {
@@ -12589,7 +12623,7 @@ export default function DailyReportPage() {
       const res = await fetch(`/api/daily-reports?${params.toString()}`, { method: "DELETE" })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(String((json as any)?.error || "No se pudieron eliminar los reportes de la fecha"))
-      await loadRecords()
+      await loadRecords(true)
       showToast(`Se eliminaron ${Number((json as any)?.deleted_count || linkedRecords.length)} reportes de ${formatDateDisplay(dateKey)} con respaldo de auditoría.`, "success")
     } catch (err: any) {
       showToast(err?.message || "No se pudieron eliminar los reportes.", "error")
@@ -12625,7 +12659,7 @@ export default function DailyReportPage() {
             const json = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(String((json as any)?.error || `No se pudo restaurar el frente ${id}`))
           }
-          await loadRecords()
+          await loadRecords(true)
           showToast("Se restauró la versión anterior del reporte editado.", "success")
         } catch (err: any) {
           showToast(err?.message || "No se pudo restaurar la versión anterior.", "error")
@@ -12671,7 +12705,7 @@ export default function DailyReportPage() {
           throw new Error(String((json as any)?.error || `No se pudo eliminar el reporte ${id}`))
         }
       }
-      await loadRecords()
+      await loadRecords(true)
       showToast("Se eliminó lo guardado del reporte diario.", "success")
       setFormOpen(false)
     } catch (err: any) {
@@ -12708,7 +12742,7 @@ export default function DailyReportPage() {
           <Tooltip title="Actualizar lista">
             <IconButton
               color="primary"
-              onClick={loadRecords}
+              onClick={() => void loadRecords(true)}
               sx={{
                 width: 52,
                 height: 52,

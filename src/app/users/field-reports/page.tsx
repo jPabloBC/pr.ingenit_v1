@@ -390,6 +390,11 @@ const formatDateKeyCl = (dateKey: string) => {
   return year && month && day ? `${day}/${month}/${year}` : dateKey
 }
 
+const formatDateKeyForFileName = (dateKey: any) => {
+  const [year, month, day] = String(dateKey || '').slice(0, 10).split('-')
+  return year && month && day ? `${day}-${month}-${year}` : ''
+}
+
 const buildAvailableWeekRanges = (dates: string[]) => {
   const byStart = new Map<string, FieldReportWeekRange>()
   dates.filter(isDateKey).forEach((date) => {
@@ -433,6 +438,33 @@ const buildFieldReportTitle = (front: any, sequenceNo?: number | null) => {
         : `REPORTE ${raw.toUpperCase()}`
   const sequence = Number(sequenceNo || 0)
   return sequence > 0 ? `${baseTitle} N°${String(sequence).padStart(3, '0')}` : baseTitle
+}
+
+const isNoc006ElectricalReport = (...values: any[]) => {
+  const normalized = normalizeFrontLabel(values.filter(Boolean).join(' '))
+  return normalized.includes('NOC') && normalized.includes('006') && normalized.includes('ELECTRIC')
+}
+
+const isNoc001CalaminasReport = (...values: any[]) => {
+  const normalized = normalizeFrontLabel(values.filter(Boolean).join(' '))
+  return normalized.includes('NOC') && normalized.includes('001') && normalized.includes('CALAMIN')
+}
+
+const buildFieldReportExportFileBaseName = (params: {
+  rawTitle: any
+  workFront: any
+  reportNo: any
+  date: any
+}) => {
+  const reportNo = Number(params.reportNo || 0)
+  const dateLabel = formatDateKeyForFileName(params.date)
+  if (reportNo > 0 && isNoc006ElectricalReport(params.rawTitle, params.workFront)) {
+    return `${reportNo}.- Uso Recursos Trabajos Electricos${dateLabel ? ` ${dateLabel}` : ''}_Rev.0`
+  }
+  if (reportNo > 0 && isNoc001CalaminasReport(params.rawTitle, params.workFront)) {
+    return `${reportNo}.- Uso de recursos calaminas${dateLabel ? ` ${dateLabel}` : ''}_Rev.0`
+  }
+  return String(params.rawTitle || 'REPORTE DE TERRENO').trim()
 }
 
 const resolveFieldReportSequenceNo = (params: {
@@ -485,6 +517,15 @@ type EvidenceFile = {
   uploaded_at?: string
 }
 
+type CompanyAsset = {
+  id: string
+  asset_type: string
+  usage_context?: string | null
+  name?: string | null
+  r2_key: string
+  is_default?: boolean
+}
+
 type PendingEvidencePreview = {
   file: File
   previewUrl: string
@@ -529,6 +570,26 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][evidence] parseEvidenc
     })
   }
   return normalized
+}
+
+const pickFieldReportHeaderLogo = (assets: CompanyAsset[]) => {
+  const active = (assets || []).filter((asset) => String(asset?.r2_key || '').trim())
+  const score = (asset: CompanyAsset) => {
+    const type = String(asset.asset_type || '').trim()
+    const context = String(asset.usage_context || 'general').trim()
+    let value = 0
+    if (type === 'field_report_logo') value += 100
+    else if (type === 'report_logo') value += 50
+    else return -1
+    if (context === 'excel_v2') value += 20
+    else if (context === 'general') value += 10
+    if (asset.is_default) value += 5
+    return value
+  }
+  return active
+    .map((asset) => ({ asset, score: score(asset) }))
+    .filter((item) => item.score >= 0)
+    .sort((a, b) => b.score - a.score)[0]?.asset || null
 }
 
 const detectFieldReportFront = (report: any): 'CANALETAS' | 'PISCINAS' | null => {
@@ -596,6 +657,33 @@ export default function FieldReportsPage() {
   const heavySectionsRafRef = useRef<number | null>(null)
   const openSessionRef = useRef(0)
   const reportModalSessionRef = useRef(0)
+  const [fieldReportHeaderLogoKey, setFieldReportHeaderLogoKey] = useState('')
+  const fieldReportHeaderLogoUrl = fieldReportHeaderLogoKey
+    ? `/api/company-assets/file?key=${encodeURIComponent(fieldReportHeaderLogoKey)}`
+    : ''
+
+  useEffect(() => {
+    let mounted = true
+    const loadFieldReportHeaderLogo = async () => {
+      if (!session?.user?.companyId) {
+        if (mounted) setFieldReportHeaderLogoKey('')
+        return
+      }
+      try {
+        const res = await fetch('/api/company-assets', { cache: 'no-store' })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json?.error || 'No se pudo cargar logo de reporte terreno')
+        const selected = pickFieldReportHeaderLogo(Array.isArray(json?.assets) ? json.assets : [])
+        if (mounted) setFieldReportHeaderLogoKey(String(selected?.r2_key || ''))
+      } catch {
+        if (mounted) setFieldReportHeaderLogoKey('')
+      }
+    }
+    void loadFieldReportHeaderLogo()
+    return () => {
+      mounted = false
+    }
+  }, [session?.user?.companyId])
   const openReportFallbackRef = useRef<any>(null)
   const [uploadedEvidencePreviewByKey, setUploadedEvidencePreviewByKey] = useState<Record<string, string>>({})
 
@@ -6452,7 +6540,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
       ])
 
       const maquinariaHeaderTopRow = rows.length
-      rows.push(['N°', 'PATENTE', 'MAQUINARIA DE APOYO', '', 'HORAS TRABAJADAS POR ACTIVIDAD', ...new Array(v2ActivityCols - 1).fill(''), 'HM', 'HORAS EXTRA (UNIDAD)', 'AREA TRABAJO'])
+      rows.push(['N°', 'PATENTE', 'MAQUINARIA DE APOYO', '', 'HORAS TRABAJADAS POR ACTIVIDAD', ...new Array(v2ActivityCols - 1).fill(''), 'HM', 'HORAS EXTRA', 'AREA TRABAJO'])
       const maquinariaRows = Math.max(equipmentEntriesData.length || 0, 1)
       for (let i = 0; i < maquinariaRows; i++) {
         const entry = equipmentEntriesData[i] || {}
@@ -6812,7 +6900,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
 
     const equipmentTitleRow = rows.length
     rows.push(['EQUIPOS'])
-    const equipHeader = ['N°', 'Código equipo', 'Descripción equipos', 'Descripción Actividad', 'HORAS EXTRA (UNIDAD)']
+    const equipHeader = ['N°', 'Código equipo', 'Descripción equipos', 'Descripción Actividad', 'HORAS EXTRA']
     for (let i = 0; i < activitiesLen; i++) equipHeader.push(`Act. ${i + 1} [HH]`)
     equipHeader.push('Total [HH]')
     rows.push(equipHeader)
@@ -6894,7 +6982,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
     }
 
     const rowHeights = rows.map((_r, idx) => {
-      if (idx === titleRow) return { hpx: 28 }
+      if (idx === titleRow) return { hpx: 78 }
       if (idx === tasksTitleRow || idx === personalTitleRow || idx === equipmentTitleRow || idx === observationsTitleRow) return { hpx: 24 }
       return { hpx: 20 }
     })
@@ -6992,7 +7080,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] exportWithExcelJs sta
       // V2 grows horizontally with the number of activities; style every generated column.
       const DETAIL_COL_END = 500
       const V2_EXPORT_FONT_SIZE = 13
-      const V2_EXPORT_TITLE_FONT_SIZE = 15
+      const V2_EXPORT_TITLE_FONT_SIZE = 17
       const DEBUG_COLS = new Set([2, 3, 4, 5, 18, 20]) // B,C,D,E,R,T
       const thinBlackBorder = {
         top: { style: 'thin', color: { argb: 'FF000000' } },
@@ -7219,6 +7307,22 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] final helper cell', {
           height: Math.max(1, Math.round(safeHeight * scale))
         }
       }
+      const loadHeaderLogoImage = async () => {
+        const key = String(fieldReportHeaderLogoKey || '').trim()
+        if (!key) return null
+        try {
+          const res = await fetch(`/api/company-assets/file?key=${encodeURIComponent(key)}`, { cache: 'no-store' })
+          if (!res.ok) return null
+          const blob = await res.blob()
+          const dataUrl = await readBlobAsDataUrl(blob)
+          if (!dataUrl.startsWith('data:image/')) return null
+          const size = await getImageSize(dataUrl)
+          const extension: 'png' | 'jpeg' = dataUrl.startsWith('data:image/png') ? 'png' : 'jpeg'
+          return { dataUrl, extension, width: size.width, height: size.height }
+        } catch {
+          return null
+        }
+      }
       const columnWidthToPx = (columnWidth: number) => Math.max(1, Math.round(columnWidth * 7.2))
       const rowHeightToPx = (rowHeight: number) => Math.max(1, Math.round(rowHeight * 96 / 72))
       const getColumnSpanPx = (worksheet: any, fromCol: number, toCol: number) => {
@@ -7259,6 +7363,17 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] final helper cell', {
         const height = rowHeightToPx(Number(worksheet.getRow(row).height || 15))
         return (row - 1) + Math.min(0.98, remaining / Math.max(1, height))
       }
+      const columnNumberToName = (columnNumber: number) => {
+        let n = Math.max(1, Math.floor(columnNumber))
+        let name = ''
+        while (n > 0) {
+          const remainder = (n - 1) % 26
+          name = String.fromCharCode(65 + remainder) + name
+          n = Math.floor((n - 1) / 26)
+        }
+        return name
+      }
+      const headerLogoImage = await loadHeaderLogoImage()
 
       for (const s of sheets) {
         const ws = workbook.addWorksheet(s.name)
@@ -7284,6 +7399,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] final helper cell', {
 
         const rowCount = s.built.rows.length
         const colCount = s.built.rows.reduce((mx, r) => Math.max(mx, Array.isArray(r) ? r.length : 0), 0)
+        let printAreaLastRow = rowCount
         const firstRowValues = Array.isArray(s.built.rows[0]) ? s.built.rows[0] : []
         const secondRowValues = Array.isArray(s.built.rows[1]) ? s.built.rows[1] : []
         const isV2HeaderOnly = !String(JSON.stringify(s.built.rows)).includes('TAREAS REALIZADAS') &&
@@ -7301,6 +7417,23 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] final helper cell', {
         const activitiesRowsRange = isV2Detailed ? detectActivitiesExecutedRowsRange(ws, rowCount, colCount) : null
         const generalQuestionsRowsRange = isV2Detailed ? detectGeneralQuestionsRowsRange(ws, rowCount, colCount) : null
         const observationsValueRowsRange = isV2Detailed ? detectObservationsValueRowsRange(ws, rowCount, colCount) : null
+        if (isV2Detailed && headerLogoImage) {
+          const titleRowNumber = 2
+          const logoSize = fitImage(headerLogoImage.width, headerLogoImage.height, 390, 66)
+          const titleRowHeight = Math.max(Number(ws.getRow(titleRowNumber).height || 0), 62)
+          ws.getRow(titleRowNumber).height = titleRowHeight
+          const titleRowHeightPx = rowHeightToPx(titleRowHeight)
+          const logoVerticalOffsetPx = Math.max(0, (titleRowHeightPx - logoSize.height) / 2)
+          const imageId = workbook.addImage({
+            base64: headerLogoImage.dataUrl,
+            extension: headerLogoImage.extension
+          })
+          ws.addImage(imageId, {
+            tl: { col: 1.15, row: 1 + Math.min(0.95, logoVerticalOffsetPx / Math.max(1, titleRowHeightPx)) },
+            ext: logoSize,
+            editAs: 'oneCell'
+          })
+        }
 if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] sheet context', { isV2Detailed, isV2HeaderOnly, rowCount, colCount, sheetName: s.name })
 if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] detailRowsRange', {
           startRow: detailRowsRange?.startRow,
@@ -7638,6 +7771,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] collaborator cell aft
                   text === 'MAQUINARIA DE APOYO' ||
                   text === 'HORAS TRABAJADAS POR ACTIVIDAD' ||
                   text === 'HM' ||
+                  text === 'HORAS EXTRA' ||
                   text === 'UNIDAD' ||
                   text === 'AREA TRABAJO' ||
                   text === 'MATERIALES' ||
@@ -8113,6 +8247,16 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] pre-writeBuffer cell'
             }
           }
         }
+        if (isV2Detailed) {
+          const printAreaLastCol = Math.max(2, Math.min(DETAIL_COL_END, colCount || 20))
+          ws.pageSetup = {
+            ...ws.pageSetup,
+            fitToPage: true,
+            fitToWidth: 1,
+            fitToHeight: 1,
+            printArea: `B2:${columnNumberToName(printAreaLastCol)}${Math.max(2, printAreaLastRow)}`
+          }
+        }
       }
 if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer', { filename })
       const buffer = await workbook.xlsx.writeBuffer()
@@ -8170,7 +8314,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         reportTitle ||
         'REPORTE DE TERRENO'
       ).trim()
-      const safeExportTitle = rawExportTitle
+      const exportBaseTitle = buildFieldReportExportFileBaseName({
+        rawTitle: rawExportTitle,
+        workFront: selectedReport?.work_front || workFront || area,
+        reportNo: selectedReport?.report_sequence_no || reportSequenceNo,
+        date: selectedReport?.date || safeDate,
+      })
+      const safeExportTitle = exportBaseTitle
         .replace(/[\\/:*?"<>|]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim() || 'REPORTE DE TERRENO'
@@ -11335,8 +11485,19 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       </colgroup>
                       <tbody>
                         <tr>
-                          <td colSpan={totalCols} style={{ border: '1px solid #111827', textAlign: 'center', fontWeight: 700, padding: '6px 8px' }}>
-                            {reportTitle}
+                          <td colSpan={totalCols} style={{ border: '1px solid #111827', textAlign: 'center', fontWeight: 700, padding: '5px 8px' }}>
+                            <div style={{ position: 'relative', minHeight: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>
+                              {fieldReportHeaderLogoUrl ? (
+                                <img
+                                  src={fieldReportHeaderLogoUrl}
+                                  alt="Logo reporte terreno"
+                                  style={{ position: 'absolute', left: 4, maxWidth: 150, maxHeight: 32, objectFit: 'contain' }}
+                                />
+                              ) : null}
+                              <span style={{ display: 'block', paddingLeft: fieldReportHeaderLogoUrl ? 160 : 0, paddingRight: fieldReportHeaderLogoUrl ? 160 : 0 }}>
+                                {reportTitle}
+                              </span>
+                            </div>
                           </td>
                         </tr>
                         <tr>

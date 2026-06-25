@@ -71,6 +71,7 @@ const MANAGEMENT_FETCH_CACHE_TTL_MS = 30_000;
 const fieldReportsPromiseCache = new Map<string, { promise: Promise<FieldReportRecord[]>; expiresAt: number }>();
 let collaboratorSummaryPromiseCache: { promise: Promise<any[]>; expiresAt: number } | null = null;
 const hhSummaryPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
+let hhHistoryPromiseCache: { promise: Promise<any[]>; expiresAt: number } | null = null;
 const photoReportConfigPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
 let fieldReportDatesPromiseCache: { promise: Promise<string[]>; expiresAt: number } | null = null;
 
@@ -169,6 +170,31 @@ const fetchManagementHhSummary = (queryString: string): Promise<any> => {
     promise,
     expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
   });
+
+  return promise;
+};
+
+const fetchManagementHhHistory = (): Promise<any[]> => {
+  const now = Date.now();
+  if (hhHistoryPromiseCache && hhHistoryPromiseCache.expiresAt > now) {
+    return hhHistoryPromiseCache.promise;
+  }
+
+  const promise = fetch('/api/management/hh-history')
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      return Array.isArray(payload) ? payload : [];
+    })
+    .catch((err) => {
+      hhHistoryPromiseCache = null;
+      throw err;
+    });
+
+  hhHistoryPromiseCache = {
+    promise,
+    expiresAt: now + MANAGEMENT_FETCH_CACHE_TTL_MS,
+  };
 
   return promise;
 };
@@ -278,6 +304,7 @@ type GroupSummary = {
   label: string;
   hh: number;
   hhExtras: number;
+  dailyReportDirectHh?: number;
   peopleRows: number;
   reports: number;
 };
@@ -3004,6 +3031,12 @@ export default function ManagementPage() {
       setLoading(true);
       return;
     }
+    if (activeTab === 'photo-report' && (!photoPeriodStartDate || !photoPeriodEndDate)) {
+      setReports([]);
+      setLoading(false);
+      setError('');
+      return;
+    }
 
     let mounted = true;
     setLoading(true);
@@ -3178,10 +3211,8 @@ export default function ManagementPage() {
     setHistoricalHhLoading(true);
     setHistoricalHhError('');
     try {
-      const response = await fetch('/api/management/hh-history');
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
-      setHistoricalHhRows(Array.isArray(payload) ? payload : []);
+      const payload = await fetchManagementHhHistory();
+      setHistoricalHhRows(payload);
     } catch (err: any) {
       setHistoricalHhRows([]);
       setHistoricalHhError(err?.message || 'No se pudo cargar el histórico de HH.');
@@ -5145,6 +5176,7 @@ export default function ManagementPage() {
                                     <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Directos</TableCell>
                                     <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
                                     <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Extras</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Rep. Diario</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
@@ -5157,6 +5189,9 @@ export default function ManagementPage() {
                                           <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
                                           <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
                                           <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1, background: '#fffde7' }}>
+                                            {Number(item.dailyReportDirectHh || 0) > 0 ? formatNumber(item.dailyReportDirectHh || 0) : '-'}
+                                          </TableCell>
                                         </TableRow>
                                         {specialtyGroups.map((specialty) => (
                                           <React.Fragment key={`${item.label}-${specialty.label}`}>
@@ -5172,6 +5207,9 @@ export default function ManagementPage() {
                                               </TableCell>
                                               <TableCell align="right" sx={{ py: 0.4, px: 1, color: '#475569' }}>
                                                 {formatNumber(specialty.hhExtras)}
+                                              </TableCell>
+                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: '#475569', background: '#fffde7' }}>
+                                                {Number(specialty.dailyReportDirectHh || 0) > 0 ? formatNumber(specialty.dailyReportDirectHh || 0) : '-'}
                                               </TableCell>
                                             </TableRow>
                                           </React.Fragment>

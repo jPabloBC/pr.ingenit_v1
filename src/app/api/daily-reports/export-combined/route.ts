@@ -1530,7 +1530,7 @@ const applyAutoPrintSetup = (worksheet: ExcelJS.Worksheet) => {
 
   worksheet.pageSetup = {
     ...worksheet.pageSetup,
-    orientation: 'landscape',
+    orientation: worksheet.pageSetup?.orientation || 'landscape',
     fitToPage: true,
     fitToWidth: 1,
     fitToHeight: 1,
@@ -1549,6 +1549,143 @@ const applyAutoPrintSetup = (worksheet: ExcelJS.Worksheet) => {
 
   worksheet.pageSetup.printArea = `A1:${lastColLetter}${lastRow}`
 }
+
+const setRowFontSize = (worksheet: ExcelJS.Worksheet, rowNumber: number, size: number) => {
+  worksheet.getRow(rowNumber).eachCell({ includeEmpty: false }, (cell) => {
+    cell.font = {
+      ...(cell.font || {}),
+      size,
+    }
+  })
+}
+
+const applyDailyReportSheetHeaderFontSizes = (worksheet: ExcelJS.Worksheet) => {
+  setRowFontSize(worksheet, 1, 18)
+  setRowFontSize(worksheet, 2, 16)
+  setRowFontSize(worksheet, 3, 15)
+}
+
+const setDailyReportSheetBodyFontSize = (worksheet: ExcelJS.Worksheet) => {
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber <= 3) return
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      cell.font = {
+        ...(cell.font || {}),
+        size: 13,
+      }
+    })
+  })
+}
+
+const measureCellText = (cell: ExcelJS.Cell) => {
+  const value = cell.value as any
+  if (value == null) return 0
+  if (typeof value === 'object') {
+    if (Array.isArray(value.richText)) {
+      return value.richText
+        .map((part: any) => String(part?.text || ''))
+        .join('')
+        .split(/\r?\n/)
+        .reduce((max: number, line: string) => Math.max(max, line.length), 0)
+    }
+    if ('formula' in value) return String(value.result ?? '').length
+    if ('text' in value) return String(value.text || '').length
+  }
+  return String(value).split(/\r?\n/).reduce((max, line) => Math.max(max, line.length), 0)
+}
+
+const findExactTextColumns = (worksheet: ExcelJS.Worksheet, labels: string[]) => {
+  const targets = new Set(labels.map((label) => normalizeSectionText(label)))
+  const columns = new Set<number>()
+
+  worksheet.eachRow((row) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (targets.has(normalizeSectionText(cell.value as any))) columns.add(colNumber)
+    })
+  })
+
+  return Array.from(columns).sort((a, b) => a - b)
+}
+
+const autoFitColumns = (worksheet: ExcelJS.Worksheet, columns: number[]) => {
+  columns.forEach((colNumber) => {
+    let maxTextLength = 0
+    worksheet.getColumn(colNumber).eachCell({ includeEmpty: false }, (cell) => {
+      maxTextLength = Math.max(maxTextLength, measureCellText(cell))
+    })
+    if (maxTextLength <= 0) return
+
+    const currentWidth = Number(worksheet.getColumn(colNumber).width || 0)
+    worksheet.getColumn(colNumber).width = Math.min(70, Math.max(currentWidth, maxTextLength + 3))
+  })
+}
+
+const findCellsByExactText = (worksheet: ExcelJS.Worksheet, labels: string[]) => {
+  const targets = new Set(labels.map((label) => normalizeSectionText(label)))
+  const matches: Array<{ row: number; col: number; cell: ExcelJS.Cell }> = []
+
+  worksheet.eachRow((row, rowNumber) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (targets.has(normalizeSectionText(cell.value as any))) {
+        matches.push({ row: rowNumber, col: colNumber, cell })
+      }
+    })
+  })
+
+  return matches
+}
+
+const applyDailyReportSheetColumnWidths = (worksheet: ExcelJS.Worksheet) => {
+  autoFitColumns(worksheet, findExactTextColumns(worksheet, ['PERSONAL', 'EQUIPOS']))
+}
+
+const applyDailyReportSheetFineTuning = (worksheet: ExcelJS.Worksheet) => {
+  findCellsByExactText(worksheet, ['DOTACIÓN POR FRENTE']).forEach((match) => {
+    const row = worksheet.getRow(match.row)
+    row.height = Math.max(Number(row.height || 0) + 4, 30)
+  })
+
+  const equipmentColumns = new Set(findCellsByExactText(worksheet, ['EQUIPOS']).map((match) => match.col))
+  worksheet.eachRow((row) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (cell.alignment?.textRotation === 90 && !equipmentColumns.has(colNumber)) {
+        const column = worksheet.getColumn(colNumber)
+        const currentWidth = Number(column.width || 0)
+        column.width = Math.max(5, currentWidth - 0.15)
+      }
+    })
+  })
+
+  Array.from(equipmentColumns).forEach((colNumber) => {
+    const column = worksheet.getColumn(colNumber)
+    const currentWidth = Number(column.width || 0)
+    if (currentWidth > 6) column.width = Math.max(6, currentWidth - 7)
+  })
+}
+
+const applyDailyReportSheetPrintSetup = (worksheet: ExcelJS.Worksheet) => {
+  worksheet.pageSetup = {
+    ...worksheet.pageSetup,
+    orientation: 'portrait',
+    margins: {
+      ...(worksheet.pageSetup?.margins || {}),
+      left: 0.25,
+      right: 0.25,
+      top: 0.35,
+      bottom: 0.35,
+      header: 0.1,
+      footer: 0.1,
+    },
+  }
+}
+
+const applyPortraitPrintSetup = (worksheet: ExcelJS.Worksheet) => {
+  worksheet.pageSetup = {
+    ...worksheet.pageSetup,
+    orientation: 'portrait',
+  }
+}
+
 async function buildCombinedWorkbook(req: NextRequest, method: 'GET' | 'POST') {
   const body = method === 'POST' ? await req.clone().json().catch(() => ({})) : {}
   const dailyResponse = method === 'POST'
@@ -1563,6 +1700,11 @@ async function buildCombinedWorkbook(req: NextRequest, method: 'GET' | 'POST') {
   if (workbook.worksheets[0]) {
     workbook.worksheets[0].name = 'Reporte diario'
     uppercaseDailyEquipmentSections(workbook.worksheets[0])
+    setDailyReportSheetBodyFontSize(workbook.worksheets[0])
+    applyDailyReportSheetHeaderFontSizes(workbook.worksheets[0])
+    applyDailyReportSheetColumnWidths(workbook.worksheets[0])
+    applyDailyReportSheetFineTuning(workbook.worksheets[0])
+    applyDailyReportSheetPrintSetup(workbook.worksheets[0])
   }
 
   await addActivitiesSheet(workbook, context)
@@ -1570,6 +1712,11 @@ async function buildCombinedWorkbook(req: NextRequest, method: 'GET' | 'POST') {
     .filter((row) => normalizeFront(row.work_front) === context.workFront)
   addHistoricalHhSheet(workbook, hhRows)
   await addAttendanceSheet(workbook, context.companyId, context.reportDate)
+
+  ;['Actividades', 'HH historico', 'Asistencia'].forEach((sheetName) => {
+    const worksheet = workbook.getWorksheet(sheetName)
+    if (worksheet) applyPortraitPrintSetup(worksheet)
+  })
 
   workbook.worksheets.forEach((worksheet) => {
     applyAutoPrintSetup(worksheet)
