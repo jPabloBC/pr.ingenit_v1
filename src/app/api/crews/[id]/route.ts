@@ -34,6 +34,35 @@ const normalizeCrewMemberRole = (role: any, position: any) => {
   return inferCrewRoleFromPosition(position)
 }
 
+const normalizeIdentityText = (value: any) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const isCrewCreatedBySessionUser = (crew: any, session: any) => {
+  const userId = String(session?.user?.id || '').trim()
+  const userEmail = normalizeIdentityText(session?.user?.email)
+  const creatorCandidates = [
+    crew?.created_by_user_id,
+    crew?.created_by,
+    crew?.created_by_id,
+    crew?.creator_user_id,
+    crew?.user_id,
+    crew?.owner_user_id,
+    crew?.auth_id,
+  ].map((value: any) => String(value || '').trim()).filter(Boolean)
+  if (userId && creatorCandidates.some((value) => value === userId)) return true
+  const creatorEmailCandidates = [
+    crew?.created_by_email,
+    crew?.owner_email,
+    crew?.email,
+  ].map((value: any) => normalizeIdentityText(value)).filter(Boolean)
+  return Boolean(userEmail && creatorEmailCandidates.some((value) => value === userEmail))
+}
+
 const CREW_SCREEN_RESOURCE_TYPE = 'crew_screen'
 const CREW_SCREEN_RESOURCE_ID = 'users_crews'
 const CREW_AUDIT_TIME_ZONE = 'America/Santiago'
@@ -461,9 +490,6 @@ export async function DELETE(req: NextRequest, ctx: any) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (role !== 'admin' && role !== 'dev') {
-      return NextResponse.json({ error: 'Forbidden: solo admin/dev puede eliminar cuadrillas' }, { status: 403 })
-    }
 
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
@@ -491,6 +517,12 @@ export async function DELETE(req: NextRequest, ctx: any) {
     } catch {
       beforeCrew = null
       beforeMembers = []
+    }
+
+    if (!beforeCrew) return NextResponse.json({ error: 'Cuadrilla no encontrada' }, { status: 404 })
+    const canDeleteCrew = role === 'admin' || role === 'dev' || (role === 'user' && isCrewCreatedBySessionUser(beforeCrew, session))
+    if (!canDeleteCrew) {
+      return NextResponse.json({ error: 'Forbidden: solo admin/dev o el usuario creador puede eliminar esta cuadrilla' }, { status: 403 })
     }
 
     const { error: delMembersErr } = await supabaseAdmin.from('pr_crew_members').delete().eq('crew_id', id)

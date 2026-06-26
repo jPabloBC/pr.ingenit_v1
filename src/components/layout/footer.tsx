@@ -19,11 +19,12 @@ export default function Footer() {
     <Box
       component="footer"
       sx={{
-        background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue2} 50%, ${colors.blue3} 100%)`,
+        background: colors.blue1,
         color: colors.white,
-        pt: { xs: 4, md: 6 },
-        pb: { xs: 2, md: 3 },
+        pt: { xs: 2.5, md: 3 },
+        pb: { xs: 1.5, md: 2 },
         mt: 'auto',
+        borderTop: `1px solid ${colors.blue12}20`,
         '@media (max-height: 760px), (max-width: 1366px)': {
           pt: { md: 2.25 },
           pb: { md: 1.1 },
@@ -31,21 +32,21 @@ export default function Footer() {
       }}
     >
       <Container maxWidth="xl" sx={{ px: { xs: 1.5, sm: 2.5, md: 3 } }}>
-        <Grid container spacing={{ xs: 2, md: 3 }}>
+        <Grid container spacing={{ xs: 2, md: 3 }} alignItems="flex-start">
           {/* Información de la empresa */}
           <Grid size={{ xs: 12, md: 4 }}>
-            <Box display="flex" alignItems="center" gap={1.5} mb={{ xs: 1.25, md: 2 }}>
+            <Box display="flex" alignItems="center" gap={1.5} mb={{ xs: 1, md: 1.4 }}>
               <Image
                 src="/assets/logo_transparent_ingenIT_white.png"
                 alt="IngenIT Logo"
-                width={102}
-                height={32}
+                width={118}
+                height={37}
                 unoptimized
                 priority
                 style={{
                   maxWidth: '100%',
                   height: 'auto',
-                  opacity: 0.3,
+                  opacity: 0.72,
                 }}
               />
             </Box>
@@ -78,10 +79,10 @@ export default function Footer() {
             <Typography 
               variant="h6" 
               sx={{ 
-                color: colors.blue6,
-                fontWeight: 400,
-                mb: { xs: 1, md: 2 },
-                fontSize: { xs: '1rem', md: '1.25rem' }
+                color: colors.gold4,
+                fontWeight: 700,
+                mb: { xs: 1, md: 1.25 },
+                fontSize: { xs: '0.95rem', md: '1rem' }
               }}
             >
               Plataforma
@@ -93,7 +94,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: { xs: '0.82rem', md: '0.875rem' },
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -107,7 +108,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -121,7 +122,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -135,7 +136,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -152,10 +153,10 @@ export default function Footer() {
             <Typography 
               variant="h6" 
               sx={{ 
-                color: colors.blue6,
-                fontWeight: 400,
-                mb: { xs: 1, md: 2 },
-                fontSize: { xs: '1rem', md: '1.25rem' }
+                color: colors.gold4,
+                fontWeight: 700,
+                mb: { xs: 1, md: 1.25 },
+                fontSize: { xs: '0.95rem', md: '1rem' }
               }}
             >
               Soporte
@@ -167,7 +168,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: { xs: '0.82rem', md: '0.875rem' },
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -181,7 +182,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -195,7 +196,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -209,7 +210,7 @@ export default function Footer() {
                 sx={{ 
                   color: colors.blue13,
                   textDecoration: 'none',
-                  fontSize: '0.875rem',
+                  fontSize: { xs: '0.82rem', md: '0.86rem' },
                   '&:hover': { 
                     color: colors.gold4,
                     textDecoration: 'underline'
@@ -226,16 +227,16 @@ export default function Footer() {
             <Typography 
               variant="h6" 
               sx={{ 
-                color: colors.blue6,
-                fontWeight: 400,
-                mb: { xs: 1, md: 2 },
-                fontSize: { xs: '1rem', md: '1.25rem' }
+                color: colors.gold4,
+                fontWeight: 700,
+                mb: { xs: 1, md: 1.25 },
+                fontSize: { xs: '0.95rem', md: '1rem' }
               }}
             >
               Contacto
             </Typography>
             
-            <Box display="flex" flexDirection="column" gap={{ xs: 1, md: 2 }}>
+            <Box display="flex" flexDirection="column" gap={{ xs: 0.9, md: 1.1 }}>
               <Box display="flex" alignItems="center" gap={1}>
                 <Email sx={{ color: colors.gold4, fontSize: { xs: 16, md: 18 } }} />
                 <Typography 
@@ -267,7 +268,7 @@ export default function Footer() {
           </Grid>
         </Grid>
 
-        <Divider sx={{ my: { xs: 1.25, md: 2.2 }, borderColor: colors.blue6 + '30' }} />
+        <Divider sx={{ my: { xs: 1.25, md: 1.7 }, borderColor: colors.blue12 + '20' }} />
 
         {/* Copyright */}
         <Box 

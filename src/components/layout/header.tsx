@@ -17,8 +17,8 @@ export default function Header({ showNavigation = false }: HeaderProps) {
       position="sticky" 
       elevation={0}
       sx={{
-        background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue3} 100%)`,
-        borderBottom: `1px solid ${colors.blue6}20`,
+        background: `${colors.blue1}f2`,
+        borderBottom: `1px solid ${colors.blue12}24`,
         backdropFilter: 'blur(10px)',
         '@media (max-height: 760px), (max-width: 1366px)': {
           borderBottom: `1px solid ${colors.blue6}18`,
@@ -34,8 +34,8 @@ export default function Header({ showNavigation = false }: HeaderProps) {
         <Toolbar 
           sx={{ 
             justifyContent: 'space-between',
-            py: { xs: 0.75, sm: 1, md: 1.2 },
-            minHeight: { xs: 56, md: 70 },
+            py: { xs: 0.75, sm: 1, md: 1 },
+            minHeight: { xs: 56, md: 68 },
             '@media (max-height: 760px), (max-width: 1366px)': {
               py: { md: 0.5 },
               minHeight: { md: 52 },
@@ -47,10 +47,10 @@ export default function Header({ showNavigation = false }: HeaderProps) {
             <Link href="/" style={{ textDecoration: 'none' }}>
               <Box display="flex" alignItems="center" gap={2}>
                 <Image
-                  src="/assets/icon_ingenIT_wt.png"
+                  src="/assets/logo_transparent_ingenIT_white.png"
                   alt="IngenIT Logo"
-                  width={44}
-                  height={44}
+                  width={126}
+                  height={40}
                   unoptimized
                   priority
                   style={{
@@ -106,12 +106,21 @@ export default function Header({ showNavigation = false }: HeaderProps) {
 
           {/* Espacio para futuros elementos */}
           {!showNavigation && (
-            <Box>
+            <Box
+              sx={{
+                px: 1.2,
+                py: 0.45,
+                border: `1px solid ${colors.blue12}25`,
+                borderRadius: 1,
+                bgcolor: `${colors.white}08`,
+              }}
+            >
               <Typography 
                 variant="body2" 
                 sx={{ 
-                  color: colors.blue13,
-                  fontSize: { xs: '0.75rem', md: '0.875rem' },
+                  color: colors.blue15,
+                  fontSize: { xs: '0.72rem', md: '0.8rem' },
+                  fontWeight: 600,
                   '@media (max-height: 760px), (max-width: 1366px)': {
                     fontSize: { md: '0.78rem' },
                   },

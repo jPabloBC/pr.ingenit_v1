@@ -808,8 +808,7 @@ async function loadActivityReports(context: Awaited<ReturnType<typeof resolveRep
       .eq('company_id', context.companyId)
       .in('id', context.sourceFieldReportIds)
     if (error) throw new Error(error.message)
-    return (Array.isArray(data) ? data : [])
-      .filter((report: any) => normalizeFront(report?.work_front || report?.front || '') === context.workFront)
+    return Array.isArray(data) ? data : []
   }
 
   const { data, error } = await supabaseAdmin
@@ -923,7 +922,7 @@ async function addActivitiesSheet(
     rows.forEach((activity: any, activityIdx: number) => {
       const description = getActivityDescription(activity)
       const front = normalizeFront(activity?.work_front || activity?.activity_front || activity?.front || report?.work_front)
-      if (front !== context.workFront) return
+      if (context.sourceFieldReportIds.length <= 0 && front !== context.workFront) return
       const hasPositiveQuantity = hasPositiveActivityQuantity(activity)
       const { quantity, unit } = hasPositiveQuantity
         ? getActivityQuantityUnit(activity)

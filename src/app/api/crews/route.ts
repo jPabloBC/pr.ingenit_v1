@@ -46,6 +46,30 @@ const isMissingColumnError = (error: any) =>
 
 const normalizeYmd = (value: any) => String(value || '').trim().slice(0, 10)
 
+const toChileDateKey = (value: any) => {
+  const date = value instanceof Date ? value : new Date(String(value || ''))
+  if (Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const map: Record<string, string> = {}
+  parts.forEach((part) => {
+    if (part.type !== 'literal') map[part.type] = part.value
+  })
+  return map.year && map.month && map.day ? `${map.year}-${map.month}-${map.day}` : ''
+}
+
+const addDaysToYmd = (value: string, days: number) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return ''
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 const chunkArray = <T,>(items: T[], size: number) => {
   const chunks: T[][] = []
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
@@ -143,6 +167,9 @@ export async function GET(req: NextRequest) {
     if (!session?.user?.companyId) return NextResponse.json([], { status: 200 })
     const role = String(session?.user?.role || '').toLowerCase()
     const summary = req.nextUrl.searchParams.get('summary') === '1'
+    const datesOnly = req.nextUrl.searchParams.get('dates') === '1' || req.nextUrl.searchParams.get('dates') === 'true'
+    const dateFrom = normalizeYmd(req.nextUrl.searchParams.get('date_from'))
+    const dateTo = normalizeYmd(req.nextUrl.searchParams.get('date_to'))
 
     // Fetch logged-in collaborator to get their specialty
     const authId = session.user.id
@@ -194,14 +221,36 @@ export async function GET(req: NextRequest) {
 
     const supabaseAdminClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
 
-    const { data, error } = await supabaseAdminClient
+    let crewsQuery = supabaseAdminClient
       .from('pr_crews')
-      .select(summary ? 'id, company_id, name, description, specialty, work_date, field_boss_id, created_at' : '*')
+      .select(datesOnly ? 'work_date, created_at' : '*')
       .eq('company_id', session.user.companyId)
       .order('created_at', { ascending: false })
 
+    if (dateFrom || dateTo) {
+      const from = dateFrom || dateTo
+      const to = dateTo || dateFrom
+      if (from && to) {
+        const toExclusive = addDaysToYmd(to, 1) || to
+        crewsQuery = crewsQuery.or(
+          `and(work_date.gte.${from},work_date.lte.${to}),and(work_date.is.null,created_at.gte.${from}T00:00:00.000Z,created_at.lt.${toExclusive}T00:00:00.000Z)`
+        )
+      }
+    }
+
+    const { data, error } = await crewsQuery
+
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     const rows: any[] = data || []
+
+    if (datesOnly) {
+      const dates = Array.from(new Set(
+        rows
+          .map((row: any) => String(row?.work_date || '').trim().slice(0, 10) || toChileDateKey(row?.created_at))
+          .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+      )).sort((a, b) => b.localeCompare(a))
+      return NextResponse.json({ dates })
+    }
 
     // Enrich crews with supervisors/foremen/members from pr_crew_members so UI can
     // reliably detect occupied collaborators by date.
@@ -238,56 +287,69 @@ export async function GET(req: NextRequest) {
             else slot.members.push(collaboratorId)
           })
 
-          rows.forEach((r: any) => {
-            const crewId = String(r?.id || '')
-            const slot = byCrew.get(crewId)
-            r.supervisors = Array.from(new Set(slot?.supervisors || []))
-            r.foremen = Array.from(new Set(slot?.foremen || []))
-            r.members = Array.from(new Set(slot?.members || []))
-            r.activities_count = 0
-            r.has_activities = false
-          })
+        rows.forEach((r: any) => {
+          const crewId = String(r?.id || '')
+          const slot = byCrew.get(crewId)
+          r.supervisors = Array.from(new Set(slot?.supervisors || []))
+          r.foremen = Array.from(new Set(slot?.foremen || []))
+          r.members = Array.from(new Set(slot?.members || []))
+          r.activities_count = 0
+          r.has_activities = false
+        })
 
-          try {
-            const uniqueWorkDates = Array.from(new Set(
-              rows
-                .map((r: any) => String(r?.work_date || '').trim().slice(0, 10))
-                .filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
-            ))
-            let activityQuery = supabaseAdminClient
-              .from('pr_crew_activities')
-              .select('crew_id, work_date')
-              .eq('company_id', session.user.companyId)
-              .in('crew_id', crewIds)
+        const sessionUserId = String(session?.user?.id || '').trim()
+        const sessionUserEmail = normalizeText(String(session?.user?.email || ''))
+        rows.forEach((r: any) => {
+          const creatorCandidates = [
+            r?.created_by_user_id,
+            r?.created_by,
+            r?.created_by_id,
+            r?.creator_user_id,
+            r?.user_id,
+            r?.owner_user_id,
+            r?.auth_id,
+          ].map((value: any) => String(value || '').trim()).filter(Boolean)
+          const creatorEmailCandidates = [
+            r?.created_by_email,
+            r?.owner_email,
+            r?.email,
+          ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+          r.created_by_current_user = Boolean(
+            (sessionUserId && creatorCandidates.some((value) => value === sessionUserId)) ||
+            (sessionUserEmail && creatorEmailCandidates.some((value) => value === sessionUserEmail))
+          )
+        })
 
-            if (uniqueWorkDates.length > 0) {
-              activityQuery = activityQuery.in('work_date', uniqueWorkDates)
+        try {
+            const activityCountsByCrew = new Map<string, number>()
+            for (const chunk of chunkArray(crewIds, 75)) {
+              let from = 0
+              const pageSize = 1000
+              while (true) {
+                const { data: activityRows, error: activityErr } = await supabaseAdminClient
+                  .from('pr_crew_activities')
+                  .select('crew_id')
+                  .eq('company_id', session.user.companyId)
+                  .in('crew_id', chunk)
+                  .range(from, from + pageSize - 1)
+                if (activityErr) throw activityErr
+                const pageRows = activityRows || []
+                pageRows.forEach((activity: any) => {
+                  const crewId = String(activity?.crew_id || '')
+                  if (!crewId) return
+                  activityCountsByCrew.set(crewId, (activityCountsByCrew.get(crewId) || 0) + 1)
+                })
+                if (pageRows.length < pageSize) break
+                from += pageSize
+              }
             }
 
-            const { data: activityRows, error: activityErr } = await activityQuery
-
-            if (!activityErr) {
-              const byActivityCrew = new Map<string, any[]>()
-              ;(activityRows || []).forEach((activity: any) => {
-                const crewId = String(activity?.crew_id || '')
-                if (!crewId) return
-                const list = byActivityCrew.get(crewId) || []
-                list.push(activity)
-                byActivityCrew.set(crewId, list)
-              })
-
-              rows.forEach((r: any) => {
-                const crewId = String(r?.id || '')
-                const crewWorkDate = String(r?.work_date || '').trim()
-                const allRows = byActivityCrew.get(crewId) || []
-                const sameDateRows = crewWorkDate
-                  ? allRows.filter((activity: any) => String(activity?.work_date || '').slice(0, 10) === crewWorkDate)
-                  : allRows
-                const count = crewWorkDate ? sameDateRows.length : allRows.length
-                r.activities_count = count
-                r.has_activities = count > 0
-              })
-            }
+            rows.forEach((r: any) => {
+              const crewId = String(r?.id || '')
+              const count = activityCountsByCrew.get(crewId) || 0
+              r.activities_count = count
+              r.has_activities = count > 0
+            })
           } catch {}
 
           return NextResponse.json(rows)
@@ -415,12 +477,16 @@ export async function GET(req: NextRequest) {
 
         rows.forEach((r: any) => {
           const cid = String(r?.id || '')
-          const crewWorkDate = String(r?.work_date || '').trim()
+          const crewWorkDate = String(r?.work_date || '').trim().slice(0, 10) || toChileDateKey(r?.created_at)
           const allRows = assignedByCrew.get(cid) || []
           const sameDateRows = crewWorkDate
-            ? allRows.filter((a: any) => String(a?.work_date || '').slice(0, 10) === crewWorkDate)
+            ? allRows.filter((a: any) => {
+              const activityWorkDate = String(a?.work_date || '').slice(0, 10)
+              if (activityWorkDate) return activityWorkDate === crewWorkDate
+              return toChileDateKey(a?.created_at) === crewWorkDate
+            })
             : allRows
-          const sourceRows = sameDateRows.length > 0 ? sameDateRows : allRows
+          const sourceRows = sameDateRows
 
           const orderedRows = sourceRows
             .slice()

@@ -31,6 +31,56 @@ const parseYmdToDate = (value: string) => {
   return `${y}-${m}-${d}`
 }
 
+const addDaysToYmd = (value: string, days: number) => {
+  const date = parseYmdToDate(value)
+  if (!date) return ''
+  date.setDate(date.getDate() + days)
+  return dateToYmd(date)
+}
+
+const getWeekRangeFromYmd = (value: string) => {
+  const date = parseYmdToDate(value)
+  if (!date) return { start: '', end: '' }
+  const day = date.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  date.setDate(date.getDate() + mondayOffset)
+  const start = dateToYmd(date)
+  return { start, end: addDaysToYmd(start, 6) }
+}
+
+const buildWeekRangesFromDates = (dates: string[]) => {
+  const byStart = new Map<string, { start: string; end: string }>()
+  dates
+    .map((date) => String(date || '').slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .forEach((date) => {
+      const range = getWeekRangeFromYmd(date)
+      if (range.start) byStart.set(range.start, range)
+    })
+  return Array.from(byStart.values()).sort((a, b) => b.start.localeCompare(a.start))
+}
+
+const PROJECT_WEEK_ANCHOR_START = '2026-06-15'
+const PROJECT_WEEK_ANCHOR_NUMBER = 11
+const getDateKeyDayNumber = (value: string) => {
+  const match = String(value || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  return Math.floor(new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime() / 86400000)
+}
+const getProjectWeekNumber = (value: string) => {
+  const weekStart = getWeekRangeFromYmd(value).start
+  const target = getDateKeyDayNumber(weekStart)
+  const anchor = getDateKeyDayNumber(PROJECT_WEEK_ANCHOR_START)
+  if (target == null || anchor == null) return PROJECT_WEEK_ANCHOR_NUMBER
+  return PROJECT_WEEK_ANCHOR_NUMBER + Math.floor((target - anchor) / 7)
+}
+
+const formatYmdDisplay = (ymd: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return ymd
+  const [y, m, d] = String(ymd).split('-')
+  return `${d}-${m}-${y}`
+}
+
 export default function CrewsPage() {
   const latePolicyFeatureEnabled = false
   const { data: session } = useSession()
@@ -42,7 +92,7 @@ export default function CrewsPage() {
   const isUserRole = role === 'user'
   const canEditCrews = role === 'admin' || role === 'dev' || role === 'user'
   const canManageCrewActivities = role === 'admin' || role === 'dev' || role === 'user'
-  const canDeleteCrews = role === 'admin' || role === 'dev'
+  const canDeleteAnyCrew = role === 'admin' || role === 'dev'
   const canManageCrews = !isAdminReadOnly && !isViewerReadOnly
   const canViewDateNotes = canManageCrews || isAdminReadOnly || isViewerReadOnly
   const [latePolicy, setLatePolicy] = useState<{ allowByUser: boolean }>({
@@ -246,6 +296,10 @@ export default function CrewsPage() {
   const [userSpecialty, setUserSpecialty] = useState<string | null>(null)
   const [showAllProgramDisciplines, setShowAllProgramDisciplines] = useState(false)
   const [crews, setCrews] = useState<any[]>([])
+  const currentCrewWeek = useMemo(() => getWeekRangeFromYmd(getChileToday()), [getChileToday])
+  const [crewAvailableDates, setCrewAvailableDates] = useState<string[]>([])
+  const [crewAvailableDatesLoading, setCrewAvailableDatesLoading] = useState(false)
+  const [crewWeekRange, setCrewWeekRange] = useState<{ start: string; end: string }>(currentCrewWeek)
   const [loading, setLoading] = useState(true)
   const [isCreatingCrew, setIsCreatingCrew] = useState(false)
   const [isSavingCrew, setIsSavingCrew] = useState(false)
@@ -471,6 +525,34 @@ export default function CrewsPage() {
       .map((id) => String(id || '').trim())
       .filter(Boolean)
     return Array.from(new Set(ids))
+  }
+
+  function isCrewCreatedByLoggedUser(crew: any): boolean {
+    if (crew?.created_by_current_user === true) return true
+    const userId = String((session?.user as any)?.id || '').trim()
+    const userEmail = normalizeText(String((session?.user as any)?.email || ''))
+    const creatorCandidates = [
+      crew?.created_by_user_id,
+      crew?.created_by,
+      crew?.created_by_id,
+      crew?.creator_user_id,
+      crew?.user_id,
+      crew?.owner_user_id,
+      crew?.auth_id,
+    ].map((value: any) => String(value || '').trim()).filter(Boolean)
+    if (userId && creatorCandidates.some((value) => value === userId)) return true
+    const creatorEmailCandidates = [
+      crew?.created_by_email,
+      crew?.owner_email,
+      crew?.email,
+    ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+    return Boolean(userEmail && creatorEmailCandidates.some((value) => value === userEmail))
+  }
+
+  function canDeleteCrew(crew: any): boolean {
+    if (canDeleteAnyCrew) return true
+    if (role !== 'user') return false
+    return isCrewCreatedByLoggedUser(crew)
   }
 
   function crewHasAssignedActivities(crew: any): boolean {
@@ -911,10 +993,53 @@ export default function CrewsPage() {
     }
   }, [exportDate, getChileToday])
 
+  const crewAvailableWeeks = useMemo(() => {
+    const weeks = buildWeekRangesFromDates(crewAvailableDates)
+    return weeks.length > 0 ? weeks : [currentCrewWeek]
+  }, [crewAvailableDates, currentCrewWeek])
+
+  const latestCrewWeek = crewAvailableWeeks.find((range) => range.start <= currentCrewWeek.start) || crewAvailableWeeks[0] || currentCrewWeek
+  const selectedCrewWeekIndex = crewAvailableWeeks.findIndex((range) => range.start === crewWeekRange.start)
+  const previousCrewWeek = selectedCrewWeekIndex >= 0
+    ? crewAvailableWeeks[selectedCrewWeekIndex + 1] || null
+    : getWeekRangeFromYmd(addDaysToYmd(crewWeekRange.start, -7) || crewWeekRange.start)
+  const nextCrewWeek = selectedCrewWeekIndex > 0
+    ? crewAvailableWeeks[selectedCrewWeekIndex - 1] || null
+    : selectedCrewWeekIndex === 0
+      ? null
+      : getWeekRangeFromYmd(addDaysToYmd(crewWeekRange.start, 7) || crewWeekRange.start)
+  const isViewingLatestCrewWeek = Boolean(crewWeekRange.start && latestCrewWeek.start && crewWeekRange.start === latestCrewWeek.start)
+  const crewWeekLabel = crewWeekRange.start && crewWeekRange.end
+    ? `Semana ${getProjectWeekNumber(crewWeekRange.start)}: ${formatYmdDisplay(crewWeekRange.start)} al ${formatYmdDisplay(crewWeekRange.end)}`
+    : 'Semana de cuadrillas'
+
+  const loadCrewAvailableDates = useCallback(async () => {
+    setCrewAvailableDatesLoading(true)
+    try {
+      const res = await fetch('/api/crews?dates=1', { cache: 'no-store' })
+      if (!res.ok) {
+        setCrewAvailableDates([])
+        return
+      }
+      const json = await res.json()
+      const dates = Array.isArray(json?.dates)
+        ? json.dates.map((date: any) => String(date || '').slice(0, 10)).filter((date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        : []
+      setCrewAvailableDates(dates)
+      const weeks = buildWeekRangesFromDates(dates)
+      const latest = weeks.find((range) => range.start <= currentCrewWeek.start) || weeks[0] || currentCrewWeek
+      setCrewWeekRange((prev) => (
+        prev.start === currentCrewWeek.start && prev.end === currentCrewWeek.end ? latest : prev
+      ))
+    } catch {
+      setCrewAvailableDates([])
+    } finally {
+      setCrewAvailableDatesLoading(false)
+    }
+  }, [currentCrewWeek])
+
   const formatDateLabel = (ymd: string) => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return ymd
-    const [y, m, d] = String(ymd).split('-')
-    return `${d}-${m}-${y}`
+    return formatYmdDisplay(ymd)
   }
 
   const handleExportToday = async (selectedDate?: string) => {
@@ -1109,11 +1234,6 @@ export default function CrewsPage() {
   }, [groupedCrews])
 
   useEffect(() => {
-    const defaultExpandedKey = (crewsGroupedByDate || [])
-      .map((g: any) => String(g?.key || '').trim())
-      .find((key) => key && key !== '__sin_fecha__')
-      || String((crewsGroupedByDate || [])[0]?.key || '').trim()
-
     const unseenKeys = (crewsGroupedByDate || [])
       .map((g: any) => String(g?.key || '').trim())
       .filter((key) => key && !knownDateGroupKeysRef.current.has(key))
@@ -1124,7 +1244,7 @@ export default function CrewsPage() {
       const next = new Set(Array.from(prev))
       unseenKeys.forEach((key) => {
         knownDateGroupKeysRef.current.add(key)
-        if (key !== defaultExpandedKey) next.add(key)
+        next.add(key)
       })
       return next
     })
@@ -2857,8 +2977,9 @@ export default function CrewsPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!canDeleteCrews) return
     const targetId = String(id || '')
+    const targetCrew = (crews || []).find((crew: any) => String(crew?.id || '') === targetId)
+    if (!targetCrew || !canDeleteCrew(targetCrew)) return
     if (!targetId || deletingCrewId) return
     if (!confirm("Esta acción eliminará la cuadrilla y actualizará sus integrantes. ¿Desea continuar?")) return
     setDeletingCrewId(targetId)
@@ -2891,7 +3012,11 @@ export default function CrewsPage() {
       if (opts?.force) crewsInFlightRef.current = null
       if (!crewsInFlightRef.current) {
         crewsInFlightRef.current = (async () => {
-          const res = await fetch("/api/crews?summary=1", { cache: 'no-store' })
+          const params = new URLSearchParams()
+          params.set('summary', '1')
+          if (crewWeekRange.start) params.set('date_from', crewWeekRange.start)
+          if (crewWeekRange.end) params.set('date_to', crewWeekRange.end)
+          const res = await fetch(`/api/crews?${params.toString()}`, { cache: 'no-store' })
           if (!res.ok) return []
           const data = await res.json()
           return data || []
@@ -2905,7 +3030,7 @@ export default function CrewsPage() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [deriveAssignedIds])
+  }, [deriveAssignedIds, crewWeekRange.end, crewWeekRange.start])
 
   useEffect(() => {
     const companyId = String(session?.user?.companyId || '').trim()
@@ -2940,13 +3065,19 @@ export default function CrewsPage() {
       }
     }
     const init = async () => {
-      await loadCrews()
+      await loadCrewAvailableDates()
       await fetchData()
       await loadExportDates()
     }
 
     init()
-  }, [session?.user?.companyId])
+  }, [session?.user?.companyId, loadCrewAvailableDates, loadExportDates])
+
+  useEffect(() => {
+    const companyId = String(session?.user?.companyId || '').trim()
+    if (!companyId) return
+    void loadCrews({ force: true })
+  }, [session?.user?.companyId, crewWeekRange.end, crewWeekRange.start, loadCrews])
 
   const refreshAssignedIds = useCallback(async () => {
     deriveAssignedIds(crews || [])
@@ -3365,6 +3496,102 @@ export default function CrewsPage() {
               </Box>
             ) : null}
             {/* <Typography variant="h4" gutterBottom sx={{ color: colors.blue1 }}>Cuadrillas</Typography> */}
+            <Paper
+              variant="outlined"
+              sx={{
+                mb: 1,
+                mx: 'auto',
+                p: { xs: 0.75, md: 1 },
+                width: { xs: '100%', lg: '70%' },
+                maxWidth: 1400,
+                borderColor: colors.blue15,
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: 'auto minmax(240px, 1fr) auto' },
+                alignItems: { xs: 'stretch', md: 'center' },
+                gap: 0.75,
+                bgcolor: colors.white,
+              }}
+            >
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={crewAvailableDatesLoading || !previousCrewWeek}
+                onClick={() => previousCrewWeek && setCrewWeekRange(previousCrewWeek)}
+                startIcon={<ChevronLeft size={16} />}
+                sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
+              >
+                Semana anterior
+              </Button>
+              <Typography
+                sx={{
+                  color: colors.gray1,
+                  fontWeight: 800,
+                  textAlign: 'center',
+                  minWidth: 0,
+                  whiteSpace: { md: 'nowrap' },
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {crewWeekLabel}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 0.75, justifyContent: { xs: 'stretch', md: 'flex-end' }, flexWrap: { xs: 'wrap', md: 'nowrap' } }}>
+                <TextField
+                  select
+                  size="small"
+                  value={crewWeekRange.start || ''}
+                  disabled={crewAvailableDatesLoading}
+                  SelectProps={{
+                    renderValue: (value) => {
+                      const selected = crewAvailableWeeks.find((range) => range.start === value)
+                      return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
+                    },
+                  }}
+                  onChange={(event) => {
+                    const selected = crewAvailableWeeks.find((range) => range.start === event.target.value)
+                    if (selected) setCrewWeekRange(selected)
+                  }}
+                  sx={{
+                    width: { xs: '100%', sm: 142, md: 142 },
+                    minWidth: { xs: '100%', sm: 142, md: 142 },
+                    flex: { xs: '1 1 100%', sm: '0 0 142px' },
+                    '& .MuiInputBase-root': { height: 32 },
+                    '& .MuiSelect-select': {
+                      py: 0.55,
+                      fontWeight: 700,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    },
+                  }}
+                >
+                  {crewAvailableWeeks.map((range) => (
+                    <MenuItem key={`crew-week-${range.start}`} value={range.start}>
+                      {`Semana ${getProjectWeekNumber(range.start)} (${formatYmdDisplay(range.start)} - ${formatYmdDisplay(range.end)})`}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <Button
+                  variant="contained"
+                  size="small"
+                  disabled={crewAvailableDatesLoading || isViewingLatestCrewWeek}
+                  onClick={() => setCrewWeekRange(latestCrewWeek)}
+                  sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
+                >
+                  Última semana
+                </Button>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  disabled={crewAvailableDatesLoading || !nextCrewWeek}
+                  onClick={() => nextCrewWeek && setCrewWeekRange(nextCrewWeek)}
+                  endIcon={<ChevronRight size={16} />}
+                  sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
+                >
+                  Semana siguiente
+                </Button>
+              </Box>
+            </Paper>
             <Paper elevation={0} sx={{ p: 0, m: 0, minWidth: 0, overflow: 'visible', bgcolor: 'transparent', boxShadow: 'none' }}>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2, gap: 1, flexWrap: 'wrap' }}>
                 {latePolicyFeatureEnabled && (role === 'dev' || role === 'admin') && (
@@ -3760,13 +3987,13 @@ export default function CrewsPage() {
                                                 const hasActivities = crewHasAssignedActivities(c)
                                                 return {
                                                   border: '1px solid',
-                                                  borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
+                                                  borderColor: hasActivities ? colors.blue6 : colors.gray8,
                                                   borderRadius: 1.5,
-                                                  color: hasActivities ? '#ffffff' : '#ca6807',
-                                                  bgcolor: hasActivities ? '#2563eb' : '#fff',
+                                                  color: hasActivities ? colors.white : colors.gold2,
+                                                  bgcolor: hasActivities ? colors.blue6 : colors.white,
                                                   width: { xs: 30, sm: 34 },
                                                   height: { xs: 30, sm: 34 },
-                                                  '&:hover': { bgcolor: hasActivities ? '#1d4ed8' : '#f8fafc' }
+                                                  '&:hover': { bgcolor: hasActivities ? colors.blue4 : colors.gray10 }
                                                 }
                                               }}>
                                                 <AssignmentTurnedInOutlinedIcon fontSize="small" />
@@ -3774,7 +4001,7 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
-                                        {canDeleteCrews ? (
+                                        {canDeleteCrew(c) ? (
                                           <Tooltip title="Eliminar" arrow>
                                             <span>
                                               <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
@@ -3809,13 +4036,13 @@ export default function CrewsPage() {
                                                 const hasActivities = crewHasAssignedActivities(c)
                                                 return {
                                                   border: '1px solid',
-                                                  borderColor: hasActivities ? '#2563eb' : '#d7e2f0',
+                                                  borderColor: hasActivities ? colors.blue6 : colors.gray8,
                                                   borderRadius: 1.5,
-                                                  color: hasActivities ? '#ffffff' : '#ca6807',
-                                                  bgcolor: hasActivities ? '#2563eb' : '#fff',
+                                                  color: hasActivities ? colors.white : colors.gold2,
+                                                  bgcolor: hasActivities ? colors.blue6 : colors.white,
                                                   width: { xs: 30, sm: 34 },
                                                   height: { xs: 30, sm: 34 },
-                                                  '&:hover': { bgcolor: hasActivities ? '#1d4ed8' : '#f8fafc' }
+                                                  '&:hover': { bgcolor: hasActivities ? colors.blue4 : colors.gray10 }
                                                 }
                                               }}>
                                                 <AssignmentTurnedInOutlinedIcon fontSize="small" />
@@ -3823,7 +4050,7 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
-                                        {canDeleteCrews ? (
+                                        {canDeleteCrew(c) ? (
                                           <Tooltip title="Eliminar" arrow>
                                             <span>
                                               <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>

@@ -1119,6 +1119,9 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const normalizeDetailRowSnapshot = (item: any, fallbackSpecialty = '') => {
         const rawFrente = toNum(item?.frente)
         const rawNocFront = toNum(item?.nocFront)
+        const dynamicFrontValues = Array.isArray(item?.dynamicFrontValues)
+          ? item.dynamicFrontValues.map((value: any) => toNum(value))
+          : []
         const rawDotacionTotalObra = toNum(item?.dotacionTotalObra)
         const rawInstalacionFaena = toNum(item?.instalacionFaena ?? item?.front1)
         const rawHhTotalObra = toNum(item?.hhTotalObra)
@@ -1209,6 +1212,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         instalacionFaena,
         frente,
         nocFront: rawNocFront,
+        dynamicFrontValues,
         dotacionTotalObra,
         hhTotalObra
         }
@@ -1217,6 +1221,9 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         const instalacionFaena = toNum(item?.instalacionFaena ?? item?.front1)
         const frente = toNum(item?.frente ?? item?.front2)
         const nocFront = toNum(item?.nocFront)
+        const dynamicFrontValues = Array.isArray(item?.dynamicFrontValues)
+          ? item.dynamicFrontValues.map((value: any) => toNum(value))
+          : []
         const dotacionTotalObra = toNum(item?.dotacionTotalObra ?? (instalacionFaena + frente))
         const hhTotalObra = toNum(item?.hhTotalObra ?? (dotacionTotalObra * personWorkdayHours))
         return {
@@ -1239,6 +1246,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           instalacionFaena,
           frente,
           nocFront,
+          dynamicFrontValues,
           dotacionTotalObra,
           hhTotalObra
         }
@@ -1248,7 +1256,13 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         const instalacionFaena = toNum(item?.instalacionFaena ?? item?.front1)
         const mainFront = toNum(item?.mainFront ?? item?.front2)
         const nocFront = toNum(item?.nocFront)
-        const totalEqMaq = toNum(item?.totalEqMaq ?? item?.totalEqObra ?? (instalacionFaena + mainFront + nocFront))
+        const dynamicFrontValues = Array.isArray(item?.dynamicFrontValues)
+          ? item.dynamicFrontValues.map((value: any) => toNum(value))
+          : []
+        const dynamicFrontTotal = dynamicFrontValues.length > 0
+          ? dynamicFrontValues.reduce((acc: number, value: number) => acc + toNum(value), 0)
+          : nocFront
+        const totalEqMaq = toNum(item?.totalEqMaq ?? item?.totalEqObra ?? (instalacionFaena + mainFront + dynamicFrontTotal))
         return {
           name: String(item?.name || item?.equipment || '').trim(),
           hmTurnoDia,
@@ -1261,6 +1275,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           instalacionFaena,
           mainFront,
           nocFront,
+          dynamicFrontValues,
           totalEqMaq,
           hmTotal: toNum(item?.hmTotal ?? (totalEqMaq * hmTurnoDia))
         }
@@ -1277,6 +1292,57 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         const n = Number(String(value ?? '').replace(',', '.'))
         return Number.isFinite(n) && n > 0
       }
+      const parseDynamicFrontColumns = (value: any): Array<{ key: string; label: string }> => {
+        const raw = (() => {
+          if (Array.isArray(value)) return value
+          if (typeof value === 'string') {
+            try {
+              const parsed = JSON.parse(value)
+              return Array.isArray(parsed) ? parsed : []
+            } catch {
+              return []
+            }
+          }
+          return []
+        })()
+        return raw
+          .map((column: any) => ({
+            key: String(column?.key || column?.label || '').trim(),
+            label: String(column?.label || '').replace(/\s+/g, ' ').trim()
+          }))
+          .filter((column) => column.key && column.label)
+      }
+      const parseDynamicFrontColumnsByBlock = (value: any): Record<'CANALETAS' | 'PISCINAS', Array<{ key: string; label: string }>> | null => {
+        const raw = (() => {
+          if (value && typeof value === 'object' && !Array.isArray(value)) return value
+          if (typeof value === 'string') {
+            try {
+              const parsed = JSON.parse(value)
+              return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+            } catch {
+              return null
+            }
+          }
+          return null
+        })()
+        if (!raw) return null
+        return {
+          CANALETAS: parseDynamicFrontColumns(raw.CANALETAS),
+          PISCINAS: parseDynamicFrontColumns(raw.PISCINAS)
+        }
+      }
+      const persistedDynamicFrontColumns = parseDynamicFrontColumns(runtime?.v2_dynamic_front_columns ?? snap?.v2_dynamic_front_columns ?? notes?.v2_dynamic_front_columns)
+      const persistedDynamicFrontColumnsByBlock = parseDynamicFrontColumnsByBlock(runtime?.v2_dynamic_front_columns_by_block ?? snap?.v2_dynamic_front_columns_by_block ?? notes?.v2_dynamic_front_columns_by_block)
+      const splitPersistedDynamicColumns = (columns: Array<{ key: string; label: string }>) => {
+        const firstCount = Math.ceil(columns.length / 2)
+        return {
+          CANALETAS: columns.slice(0, firstCount),
+          PISCINAS: columns.slice(firstCount)
+        }
+      }
+      const dynamicFrontColumnsForExport = persistedDynamicFrontColumnsByBlock
+        ? persistedDynamicFrontColumnsByBlock[reportFront]
+        : splitPersistedDynamicColumns(persistedDynamicFrontColumns)[reportFront]
       const strictVisibleRowsHaveNocFront = (() => {
         if (!strictVisibleMode) return false
         const indirect = pickArray('v2_detail_indirect_rows', 'detail_indirect_rows')
@@ -1286,8 +1352,8 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         return [...indirect, ...direct, ...major, ...minor].some((row: any) => hasPositiveNocFront(row?.nocFront))
       })()
       const hasDynamicNocColumn = strictVisibleMode
-        ? (hasDynamicNocColumnFlag || strictVisibleRowsHaveNocFront)
-        : hasDynamicNocColumnFlag
+        ? (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag || strictVisibleRowsHaveNocFront)
+        : (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag)
       const rawNocFrontLabel = String(runtime?.v2_noc_front_column_label ?? snap?.v2_noc_front_column_label ?? notes?.v2_noc_front_column_label ?? '').trim()
       const extractNocLabelForFrontHeader = (value: any) => {
         const raw = String(value || '').trim()
@@ -1375,19 +1441,39 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         return rawNocFrontLabel || 'UDR NOC'
       }
       const nocFrontLabel = resolveNocFrontLabel()
+      const dynamicFrontLabels = dynamicFrontColumnsForExport.length > 0
+        ? dynamicFrontColumnsForExport.map((column) => column.label)
+        : (hasDynamicNocColumn ? [nocFrontLabel] : [])
+      const dynamicFrontCount = dynamicFrontLabels.length
+      const getDynamicFrontValuesForExport = (item: any, count: number) => {
+        const values = Array.isArray(item?.dynamicFrontValues)
+          ? item.dynamicFrontValues.map((value: any) => toNum(value))
+          : []
+        if (values.length > 0) {
+          return Array.from({ length: count }).map((_, idx) => toNum(values[idx]))
+        }
+        return Array.from({ length: count }).map((_, idx) => idx === 0 ? toNum(item?.nocFront) : 0)
+      }
+      const addDynamicFrontValuesForExport = (target: any, source: any) => {
+        const current = Array.isArray(target.dynamicFrontValues)
+          ? target.dynamicFrontValues.map((value: any) => toNum(value))
+          : Array.from({ length: dynamicFrontCount }).map(() => 0)
+        const incoming = getDynamicFrontValuesForExport(source, dynamicFrontCount)
+        target.dynamicFrontValues = Array.from({ length: dynamicFrontCount }).map((_, idx) => toNum(current[idx]) + toNum(incoming[idx]))
+      }
       const wb = new ExcelJS.Workbook()
       wb.calcProperties.fullCalcOnLoad = true
       const ws = wb.addWorksheet('Reporte diario V2')
-      const totalCols = hasDynamicNocColumn ? 32 : 30
-      const EQUIP_START_COL = hasDynamicNocColumn ? 20 : 19
+      const totalCols = 30 + dynamicFrontCount * 2
+      const EQUIP_START_COL = 19 + dynamicFrontCount
       const EQUIP_HEADERS_START_COL = EQUIP_START_COL + 1
       const MAQ_START_COL = EQUIP_HEADERS_START_COL + 7
-      const MAQ_FRONT_COLS = hasDynamicNocColumn ? 3 : 2
+      const MAQ_FRONT_COLS = 2 + dynamicFrontCount
       const MAQ_TOTAL_EQ_COL = MAQ_START_COL + MAQ_FRONT_COLS
       const MAQ_HM_TOTAL_COL = MAQ_TOTAL_EQ_COL + 1
-      const PERSONAL_FRONT_GROUP_END_COL = hasDynamicNocColumn ? 17 : 16
-      const PERSONAL_DOT_TOTAL_COL = hasDynamicNocColumn ? 18 : 17
-      const PERSONAL_HH_TOTAL_COL = hasDynamicNocColumn ? 19 : 18
+      const PERSONAL_FRONT_GROUP_END_COL = 16 + dynamicFrontCount
+      const PERSONAL_DOT_TOTAL_COL = 17 + dynamicFrontCount
+      const PERSONAL_HH_TOTAL_COL = 18 + dynamicFrontCount
       ws.views = [{ showGridLines: false }]
       ws.columns = Array.from({ length: totalCols }).map((_, idx) => {
         const col = idx + 1
@@ -1676,7 +1762,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       })
       setVertical(15, 'INSTALACIÓN FAENA', yellowFill)
       setVertical(16, reportFront === 'PISCINAS' ? 'PISCINAS' : 'CANALETAS', yellowFill)
-      if (hasDynamicNocColumn) setVertical(17, nocFrontLabel, nocHeaderFill)
+      dynamicFrontLabels.forEach((label, idx) => setVertical(17 + idx, label, nocHeaderFill))
       setVertical(PERSONAL_DOT_TOTAL_COL, 'DOTACIÓN TOTAL OBRA', yellowFill, hTop, hBot)
       setVertical(PERSONAL_HH_TOTAL_COL, 'HH TOTAL OBRA', yellowFill, hTop, hBot)
       for (let col = EQUIP_START_COL; col <= EQUIP_HEADERS_START_COL + 6; col += 1) setCell(hTop, col, '', { fill: greenFill })
@@ -1705,9 +1791,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       })
       setVertical(MAQ_START_COL, 'INSTALACIÓN FAENA', yellowFill)
       setVertical(MAQ_START_COL + 1, reportFront === 'PISCINAS' ? 'PISCINAS' : 'CANALETAS', yellowFill)
-      if (hasDynamicNocColumn) {
-        setVertical(MAQ_START_COL + 2, nocFrontLabel, nocHeaderFill)
-      }
+      dynamicFrontLabels.forEach((label, idx) => setVertical(MAQ_START_COL + 2 + idx, label, nocHeaderFill))
       setVertical(MAQ_TOTAL_EQ_COL, 'TOTAL EQUIPOS Y MAQUINARIA OBRA', yellowFill, hTop, hBot)
       setVertical(MAQ_HM_TOTAL_COL, 'HM TOTAL OBRA', yellowFill, hTop, hBot)
       ws.getRow(hTop).height = 26
@@ -1824,6 +1908,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           ] as const).forEach((key) => {
             indirectTotals[key] += Number(p[key] || 0)
           })
+          addDynamicFrontValuesForExport(indirectTotals, p)
         }
         if (e) {
           ;([
@@ -1842,6 +1927,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           ] as const).forEach((key) => {
             majorTotals[key] += Number(e[key] || 0)
           })
+          addDynamicFrontValuesForExport(majorTotals, e)
         }
 
         const personalValues = p
@@ -1862,11 +1948,11 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
               p.ofertaComercial,
               displayExcelNumber(p.instalacionFaena),
               displayExcelNumber(p.frente),
-              ...(hasDynamicNocColumn ? [displayExcelNumber(p.nocFront)] : []),
+              ...getDynamicFrontValuesForExport(p, dynamicFrontCount).map(displayExcelNumber),
               displayExcelNumber(p.dotacionTotalObra),
               displayExcelNumber(p.hhTotalObra)
             ]
-          : Array(hasDynamicNocColumn ? 19 : 18).fill('')
+          : Array(18 + dynamicFrontCount).fill('')
         if (p && i < 5) {
           const rawOriginal = savedIndirectDetailRows[i] || null
           const normalizedInst = Number(p.instalacionFaena || 0)
@@ -1895,15 +1981,15 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
               e.ofCentral,
               e.instalacionFaena,
               e.mainFront,
-              ...(hasDynamicNocColumn ? [e.nocFront] : []),
+              ...getDynamicFrontValuesForExport(e, dynamicFrontCount),
               e.totalEqMaq,
               e.hmTotal
             ]
-          : Array(hasDynamicNocColumn ? 13 : 12).fill('')
+          : Array(12 + dynamicFrontCount).fill('')
 
         personalValues.forEach((value, idx) => {
           const excelCol = 1 + idx
-          const isNocDynamicCell = hasDynamicNocColumn && excelCol === 17
+          const isNocDynamicCell = dynamicFrontCount > 0 && excelCol >= 17 && excelCol < 17 + dynamicFrontCount
           setCell(row, 1 + idx, idx === 0 ? value : formatNumber(value), {
             alignment: { horizontal: idx === 0 ? 'left' : 'center', vertical: 'middle' },
             font: { size: 10 },
@@ -1912,7 +1998,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         })
         equipmentValues.forEach((value, idx) => {
           const excelCol = EQUIP_START_COL + idx
-          const isNocDynamicCell = hasDynamicNocColumn && excelCol === (MAQ_START_COL + 2)
+          const isNocDynamicCell = dynamicFrontCount > 0 && excelCol >= (MAQ_START_COL + 2) && excelCol < (MAQ_START_COL + 2 + dynamicFrontCount)
           setCell(row, EQUIP_START_COL + idx, idx === 0 ? value : formatNumber(value), {
             alignment: { horizontal: idx === 0 ? 'left' : 'center', vertical: 'middle' },
             font: { size: 10 },
@@ -1943,7 +2029,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         indirectTotals.ofertaComercial,
         indirectTotals.instalacionFaena,
         indirectTotals.frente,
-        ...(hasDynamicNocColumn ? [indirectTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(indirectTotals, dynamicFrontCount),
         indirectTotals.dotacionTotalObra,
         indirectTotals.hhTotalObra
       ]
@@ -1958,7 +2044,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         majorTotals.ofCentral,
         majorTotals.instalacionFaena,
         majorTotals.mainFront,
-        ...(hasDynamicNocColumn ? [majorTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(majorTotals, dynamicFrontCount),
         majorTotals.totalEqMaq,
         majorTotals.hmTotal
       ]
@@ -2121,6 +2207,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         ] as const).forEach((key) => {
           directTotals[key] += Number(p[key] || 0)
         })
+        addDynamicFrontValuesForExport(directTotals, p)
       })
       minorEquipmentDisplayRows.forEach((e) => {
         ;([
@@ -2139,6 +2226,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         ] as const).forEach((key) => {
           minorTotals[key] += Number(e[key] || 0)
         })
+        addDynamicFrontValuesForExport(minorTotals, e)
       })
 
       const maxDirectMinorRows = Math.max(directDisplayRows.length, minorEquipmentDisplayRows.length)
@@ -2171,13 +2259,13 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
             p.ofertaComercial,
             displayExcelNumber(p.instalacionFaena),
             displayExcelNumber(p.frente),
-            ...(hasDynamicNocColumn ? [displayExcelNumber((p as any).nocFront)] : []),
+            ...getDynamicFrontValuesForExport(p, dynamicFrontCount).map(displayExcelNumber),
             displayExcelNumber(p.dotacionTotalObra),
             displayExcelNumber(p.hhTotalObra)
           ]
           personalValues.forEach((value, idx) => {
             const excelCol = 1 + idx
-            const isNocDynamicCell = hasDynamicNocColumn && excelCol === 17
+            const isNocDynamicCell = dynamicFrontCount > 0 && excelCol >= 17 && excelCol < 17 + dynamicFrontCount
             setCell(row, 1 + idx, idx === 0 ? value : formatNumber(value), {
               alignment: { horizontal: idx === 0 ? 'left' : 'center', vertical: 'middle' },
               font: { size: 10 },
@@ -2200,13 +2288,13 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
             e.ofCentral,
             e.instalacionFaena,
             e.mainFront,
-            ...(hasDynamicNocColumn ? [e.nocFront] : []),
+            ...getDynamicFrontValuesForExport(e, dynamicFrontCount),
             e.totalEqMaq,
             e.hmTotal
           ]
           equipmentValues.forEach((value, idx) => {
             const excelCol = EQUIP_START_COL + idx
-            const isNocDynamicCell = hasDynamicNocColumn && excelCol === (MAQ_START_COL + 2)
+            const isNocDynamicCell = dynamicFrontCount > 0 && excelCol >= (MAQ_START_COL + 2) && excelCol < (MAQ_START_COL + 2 + dynamicFrontCount)
             setCell(row, EQUIP_START_COL + idx, idx === 0 ? value : formatNumber(value), {
               alignment: { horizontal: idx === 0 ? 'left' : 'center', vertical: 'middle' },
               font: { size: 10 },
@@ -2238,7 +2326,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         directTotals.ofertaComercial,
         directTotals.instalacionFaena,
         directTotals.frente,
-        ...(hasDynamicNocColumn ? [directTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(directTotals, dynamicFrontCount),
         directTotals.dotacionTotalObra,
         directTotals.hhTotalObra
       ]
@@ -2253,7 +2341,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         minorTotals.ofCentral,
         minorTotals.instalacionFaena,
         minorTotals.mainFront,
-        ...(hasDynamicNocColumn ? [minorTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(minorTotals, dynamicFrontCount),
         minorTotals.totalEqMaq,
         minorTotals.hmTotal
       ]
@@ -2323,6 +2411,9 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         instalacionFaena: Number(indirectTotals.instalacionFaena || 0) + Number(directTotals.instalacionFaena || 0),
         frente: Number(indirectTotals.frente || 0) + Number(directTotals.frente || 0),
         nocFront: Number(indirectTotals.nocFront || 0) + Number(directTotals.nocFront || 0),
+        dynamicFrontValues: Array.from({ length: dynamicFrontCount }).map((_, idx) =>
+          toNum((indirectTotals as any).dynamicFrontValues?.[idx]) + toNum((directTotals as any).dynamicFrontValues?.[idx])
+        ),
         dotacionTotalObra: Number(indirectTotals.dotacionTotalObra || 0) + Number(directTotals.dotacionTotalObra || 0),
         hhTotalObra: Number(indirectTotals.hhTotalObra || 0) + Number(directTotals.hhTotalObra || 0)
       }
@@ -2337,6 +2428,9 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         instalacionFaena: Number(majorTotals.instalacionFaena || 0) + Number(minorTotals.instalacionFaena || 0),
         mainFront: Number(majorTotals.mainFront || 0) + Number(minorTotals.mainFront || 0),
         nocFront: Number(majorTotals.nocFront || 0) + Number(minorTotals.nocFront || 0),
+        dynamicFrontValues: Array.from({ length: dynamicFrontCount }).map((_, idx) =>
+          toNum((majorTotals as any).dynamicFrontValues?.[idx]) + toNum((minorTotals as any).dynamicFrontValues?.[idx])
+        ),
         totalEqMaq: Number(majorTotals.totalEqMaq || 0) + Number(minorTotals.totalEqMaq || 0),
         hmTotal: Number(majorTotals.hmTotal || 0) + Number(minorTotals.hmTotal || 0)
       }
@@ -2357,7 +2451,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         overallPersonalTotals.ofertaComercial,
         overallPersonalTotals.instalacionFaena,
         overallPersonalTotals.frente,
-        ...(hasDynamicNocColumn ? [overallPersonalTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(overallPersonalTotals, dynamicFrontCount),
         overallPersonalTotals.dotacionTotalObra,
         overallPersonalTotals.hhTotalObra
       ]
@@ -2372,7 +2466,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         overallEquipmentTotals.ofCentral,
         overallEquipmentTotals.instalacionFaena,
         overallEquipmentTotals.mainFront,
-        ...(hasDynamicNocColumn ? [overallEquipmentTotals.nocFront] : []),
+        ...getDynamicFrontValuesForExport(overallEquipmentTotals, dynamicFrontCount),
         overallEquipmentTotals.totalEqMaq,
         overallEquipmentTotals.hmTotal
       ]

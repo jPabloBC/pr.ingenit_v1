@@ -579,6 +579,170 @@ const mergeFieldReportActivityRowsForFrontCalc = (assignments: any[], activities
   }).filter(Boolean)
 }
 
+type DynamicFrontColumn = {
+  key: string
+  label: string
+  sourceReportIds: string[]
+}
+
+type DynamicFrontColumnsByBlock = {
+  CANALETAS: DynamicFrontColumn[]
+  PISCINAS: DynamicFrontColumn[]
+}
+
+const normalizeDynamicFrontKey = (value: any) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s+/g, " ")
+    .trim()
+
+const BASE_DYNAMIC_FRONT_KEYS = new Set([
+  "INSTALACION FAENA",
+  "PISCINAS",
+  "CANALETAS",
+  "CONTRATO BASE PISCINAS",
+  "CONTRATO BASE CANALETAS"
+])
+
+const isBaseDynamicFrontLabel = (value: any) => {
+  const key = normalizeDynamicFrontKey(value)
+  return !key || BASE_DYNAMIC_FRONT_KEYS.has(key)
+}
+
+const cleanDynamicFrontLabel = (value: any) =>
+  String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+const hasDynamicFrontSignal = (value: any) => {
+  const normalized = normalizeDynamicFrontKey(value)
+  if (!normalized || BASE_DYNAMIC_FRONT_KEYS.has(normalized)) return false
+  return (
+    normalized.includes("USO DE RECURSOS") ||
+    normalized.includes("UDR") ||
+    /(?:^|\s)NOC\s+N?[º°]?\s*\d+/i.test(normalized)
+  )
+}
+
+const buildKnownDynamicFrontMap = (reportFrontNames: any[] = []) => {
+  const out = new Map<string, string>()
+  ;(reportFrontNames || []).forEach((name: any) => {
+    const label = cleanDynamicFrontLabel(name)
+    const key = normalizeDynamicFrontKey(label)
+    if (!label || isBaseDynamicFrontLabel(label)) return
+    if (!out.has(key)) out.set(key, label)
+  })
+  return out
+}
+
+const resolveDynamicFrontLabel = (value: any, knownFronts: Map<string, string>) => {
+  const label = cleanDynamicFrontLabel(value)
+  const key = normalizeDynamicFrontKey(label)
+  if (!label || isBaseDynamicFrontLabel(label)) return ""
+  const exact = knownFronts.get(key)
+  if (exact) return exact
+  return hasDynamicFrontSignal(label) ? label : ""
+}
+
+const collectDynamicFrontColumns = (
+  fieldReports: any[] = [],
+  reportFrontNames: any[] = []
+): DynamicFrontColumn[] => {
+  const knownFronts = buildKnownDynamicFrontMap(reportFrontNames)
+  const columns = new Map<string, DynamicFrontColumn>()
+
+  ;(fieldReports || []).forEach((report: any) => {
+    const reportId = String(report?.id || "").trim()
+    const workFront = cleanDynamicFrontLabel(report?.work_front)
+    const workFrontId = String(report?.work_front_id || "").trim()
+    let label = resolveDynamicFrontLabel(workFront, knownFronts)
+    let key = label ? `name:${normalizeDynamicFrontKey(label)}` : ""
+
+    if (!label) {
+      const fallbackValues = [
+        report?.report_title,
+        report?.crew_name,
+        report?.area,
+        report?.work_area
+      ]
+      for (const fallback of fallbackValues) {
+        const candidate = resolveDynamicFrontLabel(fallback, knownFronts)
+        if (!candidate) continue
+        label = candidate
+        key = `name:${normalizeDynamicFrontKey(label)}`
+        break
+      }
+    }
+
+    if (!label && workFrontId && workFront && !isBaseDynamicFrontLabel(workFront)) {
+      label = workFront
+      key = `id:${workFrontId}`
+    }
+
+    if (!label || !key) return
+    const current = columns.get(key) || { key, label, sourceReportIds: [] }
+    if (reportId && !current.sourceReportIds.includes(reportId)) current.sourceReportIds.push(reportId)
+    columns.set(key, current)
+  })
+
+  return Array.from(columns.values())
+}
+
+const splitDynamicFrontColumnsByBlock = (columns: DynamicFrontColumn[]): DynamicFrontColumnsByBlock => {
+  const firstCount = Math.ceil((columns || []).length / 2)
+  return {
+    CANALETAS: (columns || []).slice(0, firstCount),
+    PISCINAS: (columns || []).slice(firstCount)
+  }
+}
+
+const parseDynamicFrontColumns = (value: any): DynamicFrontColumn[] => {
+  const raw = (() => {
+    if (Array.isArray(value)) return value
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    }
+    return []
+  })()
+  return raw
+    .map((column: any) => {
+      const label = cleanDynamicFrontLabel(column?.label)
+      const key = cleanDynamicFrontLabel(column?.key) || `name:${normalizeDynamicFrontKey(label)}`
+      const sourceReportIds = Array.isArray(column?.sourceReportIds)
+        ? column.sourceReportIds.map((id: any) => String(id || "").trim()).filter(Boolean)
+        : []
+      return label && key ? { key, label, sourceReportIds } : null
+    })
+    .filter(Boolean) as DynamicFrontColumn[]
+}
+
+const parseDynamicFrontColumnsByBlock = (value: any): DynamicFrontColumnsByBlock | null => {
+  const raw = (() => {
+    if (value && typeof value === "object" && !Array.isArray(value)) return value
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value)
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null
+      } catch {
+        return null
+      }
+    }
+    return null
+  })()
+  if (!raw) return null
+  return {
+    CANALETAS: parseDynamicFrontColumns(raw.CANALETAS),
+    PISCINAS: parseDynamicFrontColumns(raw.PISCINAS)
+  }
+}
+
 const emptyForm = (date = todayKey()): DailyForm => ({
   report_no: "",
   revision: "0",
@@ -1299,6 +1463,7 @@ type MinorEquipmentRow = {
   front1: number
   front2: number
   nocFront?: number
+  dynamicFrontValues?: number[]
   totalEqObra: number
   hmTotal: number
 }
@@ -1315,6 +1480,7 @@ type MajorEquipmentRow = {
   instalacionFaena: number
   mainFront: number
   nocFront?: number
+  dynamicFrontValues?: number[]
 }
 
 const normalizeFrontSplit = (
@@ -2194,33 +2360,64 @@ function DetailPersonnelEquipmentV2({
     if (!sourceFieldReportIdsForDetail.size) return []
     return (fieldReportsForDate || []).filter((report: any) => sourceFieldReportIdsForDetail.has(String(report?.id || "").trim()))
   }, [fieldReportsForDate, sourceFieldReportIdsForDetail])
-  const dynamicFrontColumnLabels = useMemo(() => {
-    const labels = new Map<string, string>()
-    const add = (value: any) => {
-      const label = resolveKnownDynamicReportFrontLabel(value)
-      const key = normalizeDynamicReportFrontLabel(label)
-      if (!label || !key || labels.has(key)) return
-      labels.set(key, label)
-    }
+  const fieldReportsForDynamicColumns = useMemo(() => {
+    return Array.isArray(fieldReportsForDate) ? fieldReportsForDate : []
+  }, [fieldReportsForDate])
+  const persistedDynamicFrontColumns = useMemo(() => {
+    const notes: any = (form as any)?.notes && typeof (form as any).notes === "object" ? (form as any).notes : {}
+    const formSnap: any = (form as any)?.v2_form_snapshot && typeof (form as any).v2_form_snapshot === "object" ? (form as any).v2_form_snapshot : {}
+    const runtime: any = (form as any)?.v2_runtime_snapshot && typeof (form as any).v2_runtime_snapshot === "object" ? (form as any).v2_runtime_snapshot : {}
+    return parseDynamicFrontColumns(
+      (form as any)?.v2_dynamic_front_columns ??
+      runtime?.v2_dynamic_front_columns ??
+      formSnap?.v2_dynamic_front_columns ??
+      notes?.v2_dynamic_front_columns
+    )
+  }, [form])
+  const persistedDynamicFrontColumnsByBlock = useMemo(() => {
+    const notes: any = (form as any)?.notes && typeof (form as any).notes === "object" ? (form as any).notes : {}
+    const formSnap: any = (form as any)?.v2_form_snapshot && typeof (form as any).v2_form_snapshot === "object" ? (form as any).v2_form_snapshot : {}
+    const runtime: any = (form as any)?.v2_runtime_snapshot && typeof (form as any).v2_runtime_snapshot === "object" ? (form as any).v2_runtime_snapshot : {}
+    return parseDynamicFrontColumnsByBlock(
+      (form as any)?.v2_dynamic_front_columns_by_block ??
+      runtime?.v2_dynamic_front_columns_by_block ??
+      formSnap?.v2_dynamic_front_columns_by_block ??
+      notes?.v2_dynamic_front_columns_by_block
+    )
+  }, [form])
+  const dynamicFrontColumns = useMemo(() => {
     const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
-    const activeBaseFront = activeFront === "PISCINAS" ? "CONTRATO BASE PISCINAS" : "CONTRATO BASE CANALETAS"
-    ;(fieldReportsForDetail || []).forEach((report: any) => {
-      const workFront = report?.work_front
-      const normalizedWorkFront = normalizeDynamicReportFrontLabel(workFront)
-      const isActiveBaseReport = normalizedWorkFront === activeFront || normalizedWorkFront === activeBaseFront
-      const dynamicWorkFront = resolveKnownDynamicReportFrontLabel(workFront)
-      const isDynamicReportForActiveFront = Boolean(dynamicWorkFront)
-
-      if (!isActiveBaseReport && !isDynamicReportForActiveFront) return
-
-      if (dynamicWorkFront) {
-        add(workFront)
-      } else if (isActiveBaseReport) {
-        add(stripDynamicReportCrewPrefix(report?.crew_name))
-      }
-    })
-    return Array.from(labels.values())
-  }, [fieldReportsForDate, form.work_front, nocFrontAssignment, reportFrontLabelByNormalized])
+    const liveColumns = collectDynamicFrontColumns(fieldReportsForDynamicColumns || [], reportFrontNames || [])
+    const columnsByBlock = liveColumns.length > 0
+      ? splitDynamicFrontColumnsByBlock(liveColumns)
+      : persistedDynamicFrontColumnsByBlock || splitDynamicFrontColumnsByBlock(persistedDynamicFrontColumns)
+    return columnsByBlock[activeFront] || []
+  }, [fieldReportsForDynamicColumns, form.work_front, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, reportFrontNames])
+  const allDynamicFrontColumns = useMemo(() => {
+    const liveColumns = collectDynamicFrontColumns(fieldReportsForDynamicColumns || [], reportFrontNames || [])
+    if (liveColumns.length > 0) return liveColumns
+    if (persistedDynamicFrontColumns.length > 0) return persistedDynamicFrontColumns
+    if (persistedDynamicFrontColumnsByBlock) {
+      return [
+        ...(persistedDynamicFrontColumnsByBlock.CANALETAS || []),
+        ...(persistedDynamicFrontColumnsByBlock.PISCINAS || [])
+      ]
+    }
+    return []
+  }, [fieldReportsForDynamicColumns, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, reportFrontNames])
+  const dynamicFrontColumnLabels = dynamicFrontColumns.map((column) => column.label)
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+      console.debug("[daily-report][dynamic-front-columns]", {
+        total: allDynamicFrontColumns.length,
+        labels: allDynamicFrontColumns.map((column) => column.label),
+        activeFront,
+        activeBlockLabels: dynamicFrontColumns.map((column) => column.label),
+        fieldReportsUsed: fieldReportsForDynamicColumns.length
+      })
+    }
+  }, [allDynamicFrontColumns, dynamicFrontColumns, fieldReportsForDynamicColumns.length, form.work_front])
   const dynamicDotacionFrontLabels = dynamicFrontColumnLabels.length > 0
     ? dynamicFrontColumnLabels
     : (hasNocFrontColumn ? [String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"] : [])
@@ -2242,7 +2439,7 @@ function DetailPersonnelEquipmentV2({
   const maquinariaFrenteColumns = [
     "INSTALACIÓN FAENA",
     mainFrontLabel,
-    ...(hasNocFrontColumn ? [resolvedNocFrontColumnLabel] : [])
+    ...dynamicDotacionFrontLabels
   ]
   const isUdrDynamicColumn = (label: string) => {
     const normalized = String(label || "").toUpperCase()
@@ -2259,6 +2456,8 @@ function DetailPersonnelEquipmentV2({
   const nocMaquinariaIndexes = maquinariaFrenteColumns
     .map((label, idx) => (isUdrDynamicColumn(label) ? idx : -1))
     .filter((idx) => idx >= 0)
+  // TEMP: tooltip disabled for performance diagnostics
+  const frontCellTooltipDisabled = true
   const udrHeaderBg = "#fb923c"
   const nocSoftCellBg = "#fff3e6"
   const leftSectionCols = personalColumns.length + dotacionFrenteColumns.length + 3
@@ -2458,7 +2657,7 @@ function DetailPersonnelEquipmentV2({
     { name: "Tracto Pluma TVFX-62", hmTurnoDia: machineWorkdayHours, totalEquipos: 1, operacion: 0, disponibles: 1, acredMant: 0, panne: 0, ofCentral: 0, instalacionFaena: 0.5, mainFront: 0 }
   ]
   const fieldReportEquipmentFrontUsageByKey = useMemo(() => {
-    type Usage = { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number }
+    type Usage = { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number; dynamicByColumn: Record<string, number> }
     const normalizeForKey = (value: any) =>
       String(value || "")
         .normalize("NFD")
@@ -2508,13 +2707,24 @@ function DetailPersonnelEquipmentV2({
       const txt = normalizeForKey(value)
       return txt.includes("USO DE RECURSOS NOC") || txt.includes("UDR NOC") || /(?:^|\s)NOC\s+N[º°]?\s*\d+/i.test(txt)
     }
+    const columnBySourceReportId = new Map<string, DynamicFrontColumn>()
+    ;(dynamicFrontColumns || []).forEach((column) => {
+      ;(column.sourceReportIds || []).forEach((id) => {
+        const reportId = String(id || "").trim()
+        if (reportId) columnBySourceReportId.set(reportId, column)
+      })
+    })
     const addUsage = (key: string, front: string | null, share: number) => {
       if (!key || !front || !(share > 0)) return
-      const current = usageByKey.get(key) || { canaletas: 0, piscinas: 0, nocCanaletas: 0, nocPiscinas: 0 }
+      const current = usageByKey.get(key) || { canaletas: 0, piscinas: 0, nocCanaletas: 0, nocPiscinas: 0, dynamicByColumn: {} }
       if (front === "CANALETAS") current.canaletas += share
       if (front === "PISCINAS") current.piscinas += share
       if (front === "NOC_CANALETAS") current.nocCanaletas += share
       if (front === "NOC_PISCINAS") current.nocPiscinas += share
+      if (front.startsWith("DYNAMIC::")) {
+        const columnKey = front.slice("DYNAMIC::".length)
+        if (columnKey) current.dynamicByColumn[columnKey] = Number((current.dynamicByColumn[columnKey] || 0) + share)
+      }
       usageByKey.set(key, current)
     }
     const usageByKey = new Map<string, Usage>()
@@ -2522,6 +2732,7 @@ function DetailPersonnelEquipmentV2({
       const reportPersonWorkdayHours = resolvePersonWorkdayHours(getFieldReportWorkdaySource(report))
       const reportId = String(report?.id || "").trim()
       const reportFrontRaw = String(report?.work_front || report?.front || report?.frente || "").trim()
+      const dynamicColumn = reportId ? columnBySourceReportId.get(reportId) : null
       const reportBaseFront = resolveBaseFront(reportFrontRaw)
       const reportNocFront = nocFrontAssignment?.byReportId?.has(reportId) || isNocFrontText(reportFrontRaw) || isNocFrontText(report?.report_title)
         ? (nocFrontAssignment?.byReportId?.get(reportId) || "CANALETAS")
@@ -2548,11 +2759,11 @@ function DetailPersonnelEquipmentV2({
         const entryFallbackFront = entryNocFront
           ? (entryNocFront === "PISCINAS" ? "NOC_PISCINAS" : "NOC_CANALETAS")
           : (entryBaseFront || reportFallbackFront)
-        addUsage(key, entryFallbackFront, 1)
+        addUsage(key, dynamicColumn ? `DYNAMIC::${dynamicColumn.key}` : entryFallbackFront, 1)
       })
     })
     return usageByKey
-  }, [fieldReportsForDate, nocFrontAssignment])
+  }, [fieldReportsForDate, nocFrontAssignment, dynamicFrontColumns])
 
   const applyFieldReportEquipmentUsage = React.useCallback((params: {
     equipmentKey: string
@@ -2567,21 +2778,28 @@ function DetailPersonnelEquipmentV2({
     let piscinas = Math.max(declared.frontB, Number(usage?.piscinas || 0))
     let nocCanaletas = Number(usage?.nocCanaletas || 0)
     let nocPiscinas = Number(usage?.nocPiscinas || 0)
-    const usedTotal = canaletas + piscinas + nocCanaletas + nocPiscinas
+    const dynamicValues = (dynamicFrontColumns || []).map((column) => Number(usage?.dynamicByColumn?.[column.key] || 0))
+    const dynamicTotal = dynamicValues.reduce((acc, value) => acc + Math.max(0, Number(value || 0)), 0)
+    const usedTotal = canaletas + piscinas + nocCanaletas + nocPiscinas + dynamicTotal
     if (totalPhysical > 0 && usedTotal > totalPhysical) {
       const ratio = totalPhysical / usedTotal
       canaletas *= ratio
       piscinas *= ratio
       nocCanaletas *= ratio
       nocPiscinas *= ratio
+      dynamicValues.forEach((value, idx) => {
+        dynamicValues[idx] = value * ratio
+      })
     }
-    const remainingIfa = Math.max(0, totalPhysical - canaletas - piscinas - nocCanaletas - nocPiscinas)
+    const scaledDynamicTotal = dynamicValues.reduce((acc, value) => acc + Math.max(0, Number(value || 0)), 0)
+    const remainingIfa = Math.max(0, totalPhysical - canaletas - piscinas - nocCanaletas - nocPiscinas - scaledDynamicTotal)
     return {
       instalacionFaena: remainingIfa / 2,
       mainFront: form.work_front === "PISCINAS" ? piscinas : canaletas,
-      nocFront: form.work_front === "PISCINAS" ? nocPiscinas : nocCanaletas
+      nocFront: form.work_front === "PISCINAS" ? nocPiscinas : nocCanaletas,
+      dynamicFrontValues: dynamicValues.map((value) => roundEquipmentFrontValue(value))
     }
-  }, [fieldReportEquipmentFrontUsageByKey, form.work_front])
+  }, [fieldReportEquipmentFrontUsageByKey, form.work_front, dynamicFrontColumns])
 
   type EquipmentFrontSection = "major" | "minor"
   const parseEquipmentFrontOverrides = (value: any): Record<string, number[]> => {
@@ -2616,14 +2834,18 @@ function DetailPersonnelEquipmentV2({
   }
   const getBaseEquipmentFrontValues = (row: any, section: EquipmentFrontSection) =>
     maquinariaFrenteColumns.map((_, idx) => {
+      if (idx >= 2) {
+        const dynamicValues = Array.isArray(row?.dynamicFrontValues) ? row.dynamicFrontValues : null
+        if (dynamicValues && idx - 2 < dynamicValues.length) return Number(dynamicValues[idx - 2] || 0)
+        return dynamicFrontColumnLabels.length <= 1 ? Number(row?.nocFront || 0) : 0
+      }
       if (section === "major") {
         if (idx === 0) return Number(row?.instalacionFaena || 0)
         if (idx === 1) return Number(row?.mainFront || 0)
-        return Number(row?.nocFront || 0)
       }
       if (idx === 0) return Number(row?.front1 || row?.instalacionFaena || 0)
       if (idx === 1) return Number(row?.front2 || row?.mainFront || 0)
-      return Number(row?.nocFront || 0)
+      return 0
     })
   const rebalanceEquipmentFrontValues = (values: number[], limit: number, changedIdx: number) => {
     const safe = maquinariaFrenteColumns.map((_, idx) => roundEquipmentFrontValue(Number(values[idx] || 0)))
@@ -2663,12 +2885,15 @@ function DetailPersonnelEquipmentV2({
     const values = getVisibleEquipmentFrontValues(row, section)
     const total = values.reduce((acc, value) => acc + Number(value || 0), 0)
     const hmTotal = total * Number(row?.hmTurnoDia || 0)
+    const dynamicFrontValues = values.slice(2)
+    const nocFront = dynamicFrontValues.reduce((acc, value) => acc + Number(value || 0), 0)
     if (section === "major") {
       return {
         ...row,
         instalacionFaena: values[0] || 0,
         mainFront: values[1] || 0,
-        nocFront: values[2] || 0,
+        nocFront,
+        dynamicFrontValues,
         totalEqMaq: total,
         hmTotal
       }
@@ -2677,7 +2902,8 @@ function DetailPersonnelEquipmentV2({
       ...row,
       front1: values[0] || 0,
       front2: values[1] || 0,
-      nocFront: values[2] || 0,
+      nocFront,
+      dynamicFrontValues,
       totalEqObra: total,
       hmTotal
     }
@@ -2753,6 +2979,9 @@ function DetailPersonnelEquipmentV2({
     instalacionFaena: Number(row?.instalacionFaena || 0),
     mainFront: Number(row?.mainFront || 0),
     nocFront: Number(row?.nocFront || 0),
+    dynamicFrontValues: Array.isArray(row?.dynamicFrontValues)
+      ? row.dynamicFrontValues.map((value: any) => Number(value || 0))
+      : [],
     totalEqMaq: Number(row?.totalEqMaq || 0),
     hmTotal: Number(row?.hmTotal || 0)
   }))
@@ -2790,14 +3019,19 @@ function DetailPersonnelEquipmentV2({
         ofCentral: 0,
         instalacionFaena: split.instalacionFaena,
         mainFront: split.mainFront,
-        nocFront: split.nocFront
+        nocFront: split.nocFront,
+        dynamicFrontValues: split.dynamicFrontValues
       }
     })
   const majorEquipmentRows = strictSnapshotView && persistedMajorEquipmentRows.length > 0
     ? persistedMajorEquipmentRows
     : mappedMajorEquipmentRows
   const majorEquipmentRowsWithTotals = majorEquipmentRows.map((row) => {
-    const distributedByFront = Number(row.instalacionFaena || 0) + Number(row.mainFront || 0) + Number(row.nocFront || 0)
+    const rowDynamicFrontTotal = Array.isArray(row.dynamicFrontValues)
+      ? row.dynamicFrontValues.reduce((acc, value) => acc + Number(value || 0), 0)
+      : Number(row.nocFront || 0)
+    const effectiveRowDynamicFrontTotal = rowDynamicFrontTotal > 0 ? rowDynamicFrontTotal : Number(row.nocFront || 0)
+    const distributedByFront = Number(row.instalacionFaena || 0) + Number(row.mainFront || 0) + effectiveRowDynamicFrontTotal
     const declaredEquipmentQty = Math.max(0, Number(row.totalEquipos || 0))
     const totalEqMaqRaw = distributedByFront > 0 ? distributedByFront : declaredEquipmentQty
     const totalEqMaq = declaredEquipmentQty > 0 ? Math.min(totalEqMaqRaw, declaredEquipmentQty) : totalEqMaqRaw
@@ -2816,6 +3050,9 @@ function DetailPersonnelEquipmentV2({
       instalacionFaena: acc.instalacionFaena + Number(row.instalacionFaena || 0),
       mainFront: acc.mainFront + Number(row.mainFront || 0),
       nocFront: Number((acc as any).nocFront || 0) + Number(row.nocFront || 0),
+      dynamicFrontValues: maquinariaFrenteColumns.slice(2).map((_label, idx) =>
+        Number((acc as any).dynamicFrontValues?.[idx] || 0) + Number(row.dynamicFrontValues?.[idx] || 0)
+      ),
       totalEqMaq: acc.totalEqMaq + Number(row.totalEqMaq || 0),
       hmTotal: acc.hmTotal + Number(row.hmTotal || 0)
     }),
@@ -2830,6 +3067,7 @@ function DetailPersonnelEquipmentV2({
       instalacionFaena: 0,
       mainFront: 0,
       nocFront: 0,
+      dynamicFrontValues: [] as number[],
       totalEqMaq: 0,
       hmTotal: 0
     }
@@ -2910,6 +3148,10 @@ function DetailPersonnelEquipmentV2({
     oficinaFuera: Number((row?.oficinaFuera ?? row?.ofCentral) || 0),
     front1: Number((row?.front1 ?? row?.instalacionFaena) || 0),
     front2: Number((row?.front2 ?? row?.mainFront) || 0),
+    nocFront: Number(row?.nocFront || 0),
+    dynamicFrontValues: Array.isArray(row?.dynamicFrontValues)
+      ? row.dynamicFrontValues.map((value: any) => Number(value || 0))
+      : [],
     totalEqObra: Number((row?.totalEqObra ?? row?.totalEqMaq) || 0),
     hmTotal: Number(row?.hmTotal || 0)
   }))
@@ -2937,7 +3179,9 @@ function DetailPersonnelEquipmentV2({
         canaletasQty,
         piscinasQty
       })
-      const totalEqObra = split.instalacionFaena + split.mainFront + split.nocFront
+      const dynamicFrontTotal = (split.dynamicFrontValues || []).reduce((acc, value) => acc + Number(value || 0), 0)
+      const effectiveDynamicFrontTotal = dynamicFrontTotal > 0 ? dynamicFrontTotal : split.nocFront
+      const totalEqObra = split.instalacionFaena + split.mainFront + effectiveDynamicFrontTotal
       return {
         name: [String(row.equipment_name || "").trim(), String(row.patent || "").trim()].filter(Boolean).join(" ").trim() || String(row.equipment_name || "").trim(),
         hmTurnoDia,
@@ -2950,6 +3194,7 @@ function DetailPersonnelEquipmentV2({
         front1: split.instalacionFaena,
         front2: split.mainFront,
         nocFront: split.nocFront,
+        dynamicFrontValues: split.dynamicFrontValues,
         totalEqObra,
         hmTotal: totalEqObra * hmTurnoDia,
       }
@@ -2970,6 +3215,9 @@ function DetailPersonnelEquipmentV2({
       front1: acc.front1 + Number(row.front1 || 0),
       front2: acc.front2 + Number(row.front2 || 0),
       nocFront: Number((acc as any).nocFront || 0) + Number(row.nocFront || 0),
+      dynamicFrontValues: maquinariaFrenteColumns.slice(2).map((_label, idx) =>
+        Number((acc as any).dynamicFrontValues?.[idx] || 0) + Number(row.dynamicFrontValues?.[idx] || 0)
+      ),
       totalEqObra: acc.totalEqObra + Number(row.totalEqObra || 0),
       hmTotal: acc.hmTotal + Number(row.hmTotal || 0)
     }),
@@ -2984,6 +3232,7 @@ function DetailPersonnelEquipmentV2({
       front1: 0,
       front2: 0,
       nocFront: 0,
+      dynamicFrontValues: [] as number[],
       totalEqObra: 0,
       hmTotal: 0
     }
@@ -3018,12 +3267,12 @@ function DetailPersonnelEquipmentV2({
       ? Number(majorTotals.instalacionFaena || 0)
       : idx === 1
         ? Number(majorTotals.mainFront || 0)
-        : Number((majorTotals as any).nocFront || 0)
+        : Number((majorTotals as any).dynamicFrontValues?.[idx - 2] || 0)
     const minor = idx === 0
       ? Number(minorTotals.front1 || 0)
       : idx === 1
         ? Number(minorTotals.front2 || 0)
-        : Number((minorTotals as any).nocFront || 0)
+        : Number((minorTotals as any).dynamicFrontValues?.[idx - 2] || 0)
     return major + minor
   })
 
@@ -3515,55 +3764,20 @@ function DetailPersonnelEquipmentV2({
       : "indirect"
   const directDynamicFrontDotationByRowKey = useMemo(() => {
     const out: Record<string, Record<string, number>> = {}
-    const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
-    const activeBaseFront = activeFront === "PISCINAS" ? "CONTRATO BASE PISCINAS" : "CONTRATO BASE CANALETAS"
+    const unresolved: Array<{ reportId: string; columnKey: string; participantId: string; reason: string }> = []
+    const columnBySourceReportId = new Map<string, DynamicFrontColumn>()
+    ;(dynamicFrontColumns || []).forEach((column) => {
+      ;(column.sourceReportIds || []).forEach((id) => {
+        const reportId = String(id || "").trim()
+        if (reportId) columnBySourceReportId.set(reportId, column)
+      })
+    })
 
     const normalizeLabel = (value: any) =>
       String(value || "")
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .toUpperCase()
-        .replace(/\s+/g, " ")
-        .trim()
-    const excludedLabels = new Set([
-      "INSTALACION FAENA",
-      "PISCINAS",
-      "CANALETAS",
-      "CONTRATO BASE PISCINAS",
-      "CONTRATO BASE CANALETAS"
-    ])
-    const reportFrontByKey = new Map<string, string>()
-    ;(reportFrontNames || []).forEach((name: any) => {
-      const label = String(name || "").replace(/\s+/g, " ").trim()
-      const key = normalizeLabel(label)
-      if (!label || !key || excludedLabels.has(key)) return
-      if (!reportFrontByKey.has(key)) reportFrontByKey.set(key, label)
-    })
-    const getNocKeys = (value: any) =>
-      Array.from(normalizeLabel(value).matchAll(/NOC\s+N?[º°]?\s*0*(\d+)/g))
-        .map((match) => match[1])
-        .filter(Boolean)
-        .map((num) => num.replace(/^0+/, "") || "0")
-    const resolveKnownFrontLabel = (value: any) => {
-      const label = String(value || "").replace(/\s+/g, " ").trim()
-      const key = normalizeLabel(label)
-      if (!label || !key || excludedLabels.has(key)) return ""
-      const exact = reportFrontByKey.get(key)
-      if (exact) return exact
-      const nocs = getNocKeys(label)
-      if (!nocs.length) return ""
-      const matches = (reportFrontNames || [])
-        .map((name: any) => String(name || "").replace(/\s+/g, " ").trim())
-        .filter((name: string) => {
-          if (!name || excludedLabels.has(normalizeLabel(name))) return false
-          const nameNocs = getNocKeys(name)
-          return nocs.some((noc) => nameNocs.includes(noc))
-        })
-      return matches.length === 1 ? matches[0] : ""
-    }
-    const stripCrewPrefix = (value: any) =>
-      String(value || "")
-        .replace(/^\s*CUADRILLA\s+\d+\s+/i, "")
         .replace(/\s+/g, " ")
         .trim()
     const parseArray = (value: any): any[] => {
@@ -3610,32 +3824,51 @@ function DetailPersonnelEquipmentV2({
     }
     const getPersonName = (person: any) =>
       `${String(person?.first_name || person?.name || "").trim()} ${String(person?.last_name || "").trim()}`.trim()
+    const inferDirectDisciplineLocal = (discipline: any, specialty: any, position: any) => {
+      const normalize = (value: any) =>
+        String(value || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim()
+      const specialtyText = normalize(specialty)
+      const positionText = normalize(position)
+      const joined = normalize(`${discipline || ""} ${specialty || ""} ${position || ""}`)
+      if (specialtyText.includes("rigger") || positionText.includes("rigger")) return "RIGGER"
+      if (joined.includes("civil") || joined.includes("obras civiles")) return "OBRA CIVILES"
+      if (joined.includes("electric")) return "ELECTRICO"
+      if (joined.includes("mecanic")) return "MECANICO"
+      if (joined.includes("caner") || joined.includes("caner") || joined.includes("hdpe")) return "CAÑERIA"
+      if (joined.includes("andam")) return "ANDAMIOS"
+      if (joined.includes("estruct")) return "ESTRUCTURA"
+      if (joined.includes("topogra")) return "TOPOGRAFIA"
+      return normalizeDirectKeyToken(discipline || specialty || position || "GENERAL") || "GENERAL"
+    }
     const getDirectRowKey = (person: any, collaborator: any) => {
       const position = String(person?.position || person?.role || collaborator?.position || "").trim()
       if (!position) return ""
-      const roleText = normalizeLabel(`${position} ${person?.specialty || ""} ${collaborator?.specialty || ""}`)
+      const personSpecialty = person?.specialty || person?.especialidad
+      const personDiscipline = person?.discipline || person?.disciplina
+      const collaboratorSpecialty = collaborator?.specialty || collaborator?.especialidad
+      const collaboratorDiscipline = collaborator?.discipline || collaborator?.disciplina
+      const roleText = normalizeLabel(`${position} ${personSpecialty || ""} ${collaboratorSpecialty || ""}`)
       const workerType = normalizeLabel(collaborator?.worker_type || person?.worker_type)
-      const isDirect = workerType.includes("DIRECTO") || roleText.includes("CAPATAZ") || Boolean(person?.discipline || person?.specialty || collaborator?.discipline || collaborator?.specialty)
+      const isDirect = workerType.includes("DIRECTO") || roleText.includes("CAPATAZ") || Boolean(personDiscipline || personSpecialty || collaboratorDiscipline || collaboratorSpecialty)
       if (!isDirect) return ""
-      const specialty = normalizeSpecialtyLabel(person?.specialty || collaborator?.specialty, person?.discipline || collaborator?.discipline, position) || "GENERAL"
-      const discipline = normalizeDirectKeyToken(person?.discipline || collaborator?.discipline || specialty || "GENERAL") || "GENERAL"
+      const specialty = normalizeSpecialtyLabel(personSpecialty || collaboratorSpecialty, personDiscipline || collaboratorDiscipline, position) || "GENERAL"
+      const discipline = inferDirectDisciplineLocal(personDiscipline || collaboratorDiscipline, specialty, position)
       return getFrontOverrideRowKey({ discipline, specialty, position }, "direct")
     }
-    const addHours = (rowKey: string, label: string, hours: number, source?: any) => {
-      const labelKey = normalizeLabel(label)
-      if (!rowKey || !labelKey || !(hours > 0)) return
+    const addHours = (rowKey: string, columnKey: string, hours: number, source?: any) => {
+      if (!rowKey || !columnKey || !(hours > 0)) return
       out[rowKey] = out[rowKey] || {}
-      out[rowKey][labelKey] = Number(((out[rowKey][labelKey] || 0) + personDotationFromHours(hours, source)).toFixed(2))
+      out[rowKey][columnKey] = Number(((out[rowKey][columnKey] || 0) + personDotationFromHours(hours, source)).toFixed(2))
     }
 
-    ;(fieldReportsForDetail || []).forEach((report: any) => {
-      const reportCrewLabel = resolveKnownFrontLabel(stripCrewPrefix(report?.crew_name))
-      const reportWorkFrontLabel = resolveKnownFrontLabel(report?.work_front)
-      const reportDynamicLabel = reportWorkFrontLabel || reportCrewLabel
-      const normalizedWorkFront = normalizeLabel(report?.work_front)
-      const isActiveBaseReport = normalizedWorkFront === activeFront || normalizedWorkFront === activeBaseFront
-      const isDynamicReportForActiveFront = Boolean(reportDynamicLabel)
-      if (!isActiveBaseReport && !isDynamicReportForActiveFront) return
+    ;(fieldReportsForDynamicColumns || []).forEach((report: any) => {
+      const reportId = String(report?.id || "").trim()
+      const dynamicColumn = reportId ? columnBySourceReportId.get(reportId) : null
+      if (!dynamicColumn) return
       const personnel = parseArray(report?.personnel)
       const personnelById = new Map<string, any>()
       personnel.forEach((person: any, idx: number) => {
@@ -3657,7 +3890,6 @@ function DetailPersonnelEquipmentV2({
         const id = resolveParticipantId(rawId)
         if (id) extraHoursById[id] = hours
       })
-      const activityRows = mergeFieldReportActivityRowsForFrontCalc(parseArray(report?.assignments), parseArray(report?.activities))
       const ids = new Set<string>()
       Object.keys(personHours || {}).forEach((rawId) => {
         if (!rawId || rawId === "__extras") return
@@ -3678,22 +3910,292 @@ function DetailPersonnelEquipmentV2({
         const person = personnelById.get(id) || {}
         const collaborator = collaboratorById.get(id) || {}
         const rowKey = getDirectRowKey(person, collaborator)
-        if (!rowKey || !reportDynamicLabel) return
         const hours = Array.isArray(personHoursById[id]) ? personHoursById[id] : []
-        hours.forEach((rawHours: any, idx: number) => {
+        const extra = Number((extraHoursById as any)?.[id] || 0)
+        const hasHours = hours.some((rawHours: any) => Number(rawHours || 0) > 0) || extra > 0
+        if (!rowKey) {
+          if (hasHours) unresolved.push({ reportId, columnKey: dynamicColumn.key, participantId: id, reason: "direct-row-key-not-resolved" })
+          return
+        }
+        hours.forEach((rawHours: any) => {
           const hh = Number(rawHours || 0)
           if (!(hh > 0)) return
-          addHours(rowKey, reportDynamicLabel, hh, report)
+          addHours(rowKey, dynamicColumn.key, hh, report)
         })
-        const extra = Number((extraHoursById as any)?.[id] || 0)
         if (extra > 0) {
-          addHours(rowKey, reportDynamicLabel, extra, report)
+          addHours(rowKey, dynamicColumn.key, extra, report)
         }
       })
     })
 
+    if (process.env.NODE_ENV !== "production" && unresolved.length > 0) {
+      console.warn("[daily-report][dynamic-front-direct-unresolved]", unresolved.slice(0, 20))
+    }
     return out
-  }, [fieldReportsForDetail, reportFrontNames, collaboratorsForTooltip, form.work_front, nocFrontAssignment])
+  }, [fieldReportsForDynamicColumns, dynamicFrontColumns, collaboratorsForTooltip])
+  const indirectDynamicFrontDotationByRowKey = useMemo(() => {
+    const out: Record<string, Record<string, number>> = {}
+    const unresolved: Array<{ reportId: string; columnKey: string; participantId: string; reason: string }> = []
+    const supervisorDebug: Array<{ reportId: string; workFront: string; columnKey: string; detected: string; rowKey: string; value: number; skipped?: string }> = []
+    const columnBySourceReportId = new Map<string, DynamicFrontColumn>()
+    ;(dynamicFrontColumns || []).forEach((column) => {
+      ;(column.sourceReportIds || []).forEach((id) => {
+        const reportId = String(id || "").trim()
+        if (reportId) columnBySourceReportId.set(reportId, column)
+      })
+    })
+    const normalizeLabel = (value: any) =>
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase()
+        .replace(/\s+/g, " ")
+        .trim()
+    const parseArray = (value: any): any[] => {
+      if (Array.isArray(value)) return value
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value)
+          if (Array.isArray(parsed)) return parsed
+          if (parsed && typeof parsed === "object") return Object.values(parsed)
+        } catch {}
+      }
+      if (value && typeof value === "object") return Object.values(value)
+      return []
+    }
+    const parseObject = (value: any): Record<string, any> => {
+      if (!value) return {}
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value)
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+        } catch {
+          return {}
+        }
+      }
+      return typeof value === "object" && !Array.isArray(value) ? value : {}
+    }
+    const collaboratorById = new Map<string, any>()
+    ;(collaboratorsForTooltip || []).forEach((collaborator: any) => {
+      const id = String(collaborator?.id || "").trim()
+      if (id) collaboratorById.set(id, collaborator)
+    })
+    const collaboratorIdByName = new Map<string, string>()
+    ;(collaboratorsForTooltip || []).forEach((collaborator: any) => {
+      const id = String(collaborator?.id || "").trim()
+      if (!id) return
+      const fullName = normalizeLabel(`${String(collaborator?.first_name || "").trim()} ${String(collaborator?.last_name || "").trim()}`)
+      if (fullName) collaboratorIdByName.set(fullName, id)
+    })
+    const resolveParticipantId = (value: any) => {
+      const raw = String(value || "").trim()
+      if (!raw) return ""
+      if (collaboratorById.has(raw)) return raw
+      return collaboratorIdByName.get(normalizeLabel(raw)) || raw
+    }
+    const getPersonName = (person: any) =>
+      `${String(person?.first_name || person?.name || "").trim()} ${String(person?.last_name || "").trim()}`.trim()
+    const isSupervisorLike = (value: any) => {
+      const normalized = normalizeLabel(value)
+      return normalized.includes("SUPERVISOR") ||
+        normalized.includes("SUPERVISION") ||
+        normalized.includes("JEFE") ||
+        normalized.includes("COORDINADOR") ||
+        normalized.includes("ENCARGADO") ||
+        normalized.includes("PROFESIONAL DE TERRENO")
+    }
+    const getIndirectRowKey = (person: any, collaborator: any) => {
+      const position = String(person?.position || person?.role || collaborator?.position || "").trim()
+      if (!position) return ""
+      const workerType = normalizeLabel(collaborator?.worker_type || person?.worker_type)
+      if (!workerType.includes("INDIRECTO")) return ""
+      return getFrontOverrideRowKey({ position }, "indirect")
+    }
+    const getSupervisorRowKey = (value: any, fallbackPosition?: any) => {
+      const raw = String(value && typeof value === "object"
+        ? (value?.id || value?.collaborator_id || value?.user_id || value?.personId || getPersonName(value) || value?.name || value?.full_name || value?.label || "")
+        : value || ""
+      ).trim()
+      const normalizedName = normalizeLabel(raw)
+      const collaboratorId = collaboratorById.has(raw) ? raw : String(collaboratorIdByName.get(normalizedName || "") || "")
+      const collaborator = collaboratorId ? collaboratorById.get(collaboratorId) : null
+      const position = String(
+        collaborator?.position ||
+        fallbackPosition ||
+        (isSupervisorLike(raw) ? raw : "") ||
+        "SUPERVISOR"
+      ).trim()
+      if (!position) return ""
+      return getFrontOverrideRowKey({ position }, "indirect")
+    }
+    const supervisorIdentity = (value: any) => {
+      if (value && typeof value === "object") {
+        const id = String(value?.id || value?.collaborator_id || value?.user_id || value?.personId || value?.value || "").trim()
+        if (id) return resolveParticipantId(id)
+        const name = getPersonName(value) || String(value?.name || value?.full_name || value?.label || "").trim()
+        return normalizeLabel(name)
+      }
+      const raw = String(value || "").trim()
+      return resolveParticipantId(raw) || normalizeLabel(raw)
+    }
+    const supervisorDisplay = (value: any) => {
+      if (value && typeof value === "object") {
+        return getPersonName(value) || String(value?.name || value?.full_name || value?.label || value?.value || "").trim()
+      }
+      return String(value || "").trim()
+    }
+    const splitNames = (value: any) =>
+      String(value || "")
+        .split(/[;,]/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+    const toSupervisorItems = (value: any): any[] => {
+      if (Array.isArray(value)) return value
+      if (value == null) return []
+      if (typeof value === "string") {
+        const raw = value.trim()
+        if (!raw) return []
+        try {
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed)) return parsed
+          if (parsed && typeof parsed === "object") return [parsed]
+        } catch {}
+        return splitNames(raw)
+      }
+      if (typeof value === "object") return [value]
+      return [value]
+    }
+    const addHours = (rowKey: string, columnKey: string, hours: number, source?: any) => {
+      if (!rowKey || !columnKey || !(hours > 0)) return
+      out[rowKey] = out[rowKey] || {}
+      out[rowKey][columnKey] = Number(((out[rowKey][columnKey] || 0) + personDotationFromHours(hours, source)).toFixed(2))
+    }
+    const addDotation = (rowKey: string, columnKey: string, value: number) => {
+      if (!rowKey || !columnKey || !(value > 0)) return
+      out[rowKey] = out[rowKey] || {}
+      out[rowKey][columnKey] = Number(((out[rowKey][columnKey] || 0) + value).toFixed(2))
+    }
+
+    ;(fieldReportsForDynamicColumns || []).forEach((report: any) => {
+      const reportId = String(report?.id || "").trim()
+      const dynamicColumn = reportId ? columnBySourceReportId.get(reportId) : null
+      if (!dynamicColumn) return
+      const personnel = parseArray(report?.personnel)
+      const personnelById = new Map<string, any>()
+      personnel.forEach((person: any, idx: number) => {
+        const id = String(person?.id || person?.collaborator_id || person?.user_id || person?.personId || idx).trim()
+        if (id) personnelById.set(resolveParticipantId(id), person)
+        const nameId = resolveParticipantId(getPersonName(person))
+        if (nameId) personnelById.set(nameId, person)
+      })
+      const personHours = parseObject(report?.person_hours)
+      const extraHours = parseObject((personHours as any).__extras)
+      const countedSupervisorIdentities = new Set<string>()
+      const personHoursById: Record<string, any> = {}
+      Object.entries(personHours || {}).forEach(([rawId, hours]) => {
+        if (!rawId || rawId === "__extras") return
+        const id = resolveParticipantId(rawId)
+        if (id) personHoursById[id] = hours
+      })
+      const extraHoursById: Record<string, any> = {}
+      Object.entries(extraHours || {}).forEach(([rawId, hours]) => {
+        const id = resolveParticipantId(rawId)
+        if (id) extraHoursById[id] = hours
+      })
+      const ids = new Set<string>()
+      Object.keys(personHours || {}).forEach((rawId) => {
+        if (!rawId || rawId === "__extras") return
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      Object.keys(extraHours || {}).forEach((rawId) => {
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      parseArray(report?.personnel_ids).forEach((rawId: any) => {
+        const id = resolveParticipantId(rawId)
+        if (id) ids.add(id)
+      })
+      personnelById.forEach((_person, id) => ids.add(id))
+
+      Array.from(ids).forEach((id) => {
+        const person = personnelById.get(id) || {}
+        const collaborator = collaboratorById.get(id) || {}
+        const hours = Array.isArray(personHoursById[id]) ? personHoursById[id] : []
+        const extra = Number((extraHoursById as any)?.[id] || 0)
+        const hasHours = hours.some((rawHours: any) => Number(rawHours || 0) > 0) || extra > 0
+        if (!hasHours) return
+        const rowKey = getIndirectRowKey(person, collaborator)
+        if (!rowKey) {
+          unresolved.push({ reportId, columnKey: dynamicColumn.key, participantId: id, reason: "indirect-row-key-not-resolved" })
+          return
+        }
+        if (isSupervisorLike(`${person?.position || person?.role || ""} ${collaborator?.position || ""} ${person?.specialty || ""} ${collaborator?.specialty || ""}`)) {
+          countedSupervisorIdentities.add(`${reportId}::${dynamicColumn.key}::${id}`)
+        }
+        hours.forEach((rawHours: any) => {
+          const hh = Number(rawHours || 0)
+          if (!(hh > 0)) return
+          addHours(rowKey, dynamicColumn.key, hh, report)
+        })
+        if (extra > 0) addHours(rowKey, dynamicColumn.key, extra, report)
+      })
+
+      const supervisorSources: Array<{ value: any; fallbackPosition?: any; force?: boolean }> = [
+        ...toSupervisorItems(report?.supervisor_id).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.supervisors).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.supervisor).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.supervisor_name).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.field_supervisor).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.fieldSupervisor).map((value) => ({ value, fallbackPosition: "SUPERVISOR", force: true })),
+        ...toSupervisorItems(report?.field_boss).map((value) => ({ value, fallbackPosition: "JEFE DE TERRENO", force: true })),
+        ...toSupervisorItems(report?.fieldBoss).map((value) => ({ value, fallbackPosition: "JEFE DE TERRENO", force: true })),
+        ...toSupervisorItems(report?.field_boss_name).map((value) => ({ value, fallbackPosition: "JEFE DE TERRENO", force: true })),
+        ...toSupervisorItems(report?.jefe_terreno).map((value) => ({ value, fallbackPosition: "JEFE DE TERRENO", force: true })),
+        ...toSupervisorItems(report?.jefeTerreno).map((value) => ({ value, fallbackPosition: "JEFE DE TERRENO", force: true })),
+        ...toSupervisorItems(report?.responsible).map((value) => ({ value, fallbackPosition: "ENCARGADO", force: true })),
+        ...toSupervisorItems(report?.encargado).map((value) => ({ value, fallbackPosition: "ENCARGADO", force: true })),
+        ...toSupervisorItems(report?.crew_boss).map((value) => ({ value, fallbackPosition: "ENCARGADO", force: true })),
+        ...toSupervisorItems(report?.crewBoss).map((value) => ({ value, fallbackPosition: "ENCARGADO", force: true })),
+        ...toSupervisorItems(report?.capataz_id).map((value) => ({ value, fallbackPosition: "CAPATAZ", force: false })),
+        ...toSupervisorItems(report?.capataz).map((value) => ({ value, fallbackPosition: "CAPATAZ", force: false })),
+        ...toSupervisorItems(report?.capataz_name).map((value) => ({ value, fallbackPosition: "CAPATAZ", force: false })),
+        ...toSupervisorItems(report?.foreman).map((value) => ({ value, fallbackPosition: "CAPATAZ", force: false }))
+      ]
+      const addedSupervisorIdentities = new Set<string>()
+      supervisorSources.forEach(({ value, fallbackPosition, force }) => {
+        const display = supervisorDisplay(value)
+        if (!display) return
+        const identity = supervisorIdentity(value)
+        const dedupeKey = `${reportId}::${dynamicColumn.key}::${identity || normalizeLabel(display)}`
+        if (!identity || addedSupervisorIdentities.has(dedupeKey)) return
+        if (countedSupervisorIdentities.has(dedupeKey)) {
+          supervisorDebug.push({ reportId, workFront: String(report?.work_front || ""), columnKey: dynamicColumn.key, detected: display, rowKey: "", value: 0, skipped: "already-counted-from-personnel" })
+          return
+        }
+        const collaborator = collaboratorById.get(identity) || null
+        const roleText = `${display} ${fallbackPosition || ""} ${collaborator?.position || ""} ${collaborator?.specialty || ""}`
+        if (!force && !isSupervisorLike(roleText)) return
+        const rowKey = getSupervisorRowKey(value, fallbackPosition)
+        if (!rowKey) {
+          unresolved.push({ reportId, columnKey: dynamicColumn.key, participantId: identity, reason: "supervisor-row-key-not-resolved" })
+          supervisorDebug.push({ reportId, workFront: String(report?.work_front || ""), columnKey: dynamicColumn.key, detected: display, rowKey: "", value: 0, skipped: "row-key-not-resolved" })
+          return
+        }
+        addDotation(rowKey, dynamicColumn.key, 1)
+        addedSupervisorIdentities.add(dedupeKey)
+        supervisorDebug.push({ reportId, workFront: String(report?.work_front || ""), columnKey: dynamicColumn.key, detected: display, rowKey, value: 1 })
+      })
+    })
+
+    if (process.env.NODE_ENV !== "production" && unresolved.length > 0) {
+      console.warn("[daily-report][dynamic-front-indirect-unresolved]", unresolved.slice(0, 20))
+    }
+    if (process.env.NODE_ENV !== "production" && supervisorDebug.length > 0) {
+      console.debug("[daily-report][dynamic-front-supervisors]", supervisorDebug.slice(0, 30))
+    }
+    return out
+  }, [fieldReportsForDynamicColumns, dynamicFrontColumns, collaboratorsForTooltip])
   const getRowTurnoLimit = (row: any, fallbackValues?: number[], section?: FrontDistributionSection) => {
     const explicitDot = Number(String(row?.dotacionTotalObra ?? "").replace(",", "."))
     const rowSection = section || inferFrontDistributionSection(row)
@@ -3773,20 +4275,36 @@ function DetailPersonnelEquipmentV2({
   const frontDistributionOverrides = parseFrontDistributionOverrides((form as any).v2_front_distribution_overrides)
   const getBaseFrontValues = (row: any) => {
     const values = getDotacionFrenteValues(row as any)
+    const rowDynamicFrontValues = Array.isArray((row as any)?.dynamicFrontValues) ? (row as any).dynamicFrontValues : null
+    const rowSection = inferFrontDistributionSection(row)
+    const canUseLegacyNocFrontValue = dynamicFrontColumnLabels.length <= 1 && !rowDynamicFrontValues
     return dotacionFrenteColumns.map((_, idx) => {
-      if (idx >= 2 && inferFrontDistributionSection(row) === "direct") {
+      if (idx >= 2 && strictSnapshotView && rowDynamicFrontValues && idx - 2 < rowDynamicFrontValues.length) {
+        return Number(rowDynamicFrontValues[idx - 2] || 0)
+      }
+      if (idx >= 2 && rowSection === "direct") {
         const rowKey = getFrontOverrideRowKey(row, "direct")
-        const columnLabel = String(dotacionFrenteColumns[idx] || "")
-        const labels = [columnLabel, ...columnLabel.split(/\s+\/\s+/)]
-          .map((label) => normalizeDynamicReportFrontLabel(label))
-          .filter(Boolean)
-        const directDynamicValue = labels.reduce(
-          (acc, labelKey) => acc + Number(directDynamicFrontDotationByRowKey[rowKey]?.[labelKey] || 0),
-          0
-        )
+        const dynamicColumn = dynamicFrontColumns[idx - 2]
+        const directDynamicValue = dynamicColumn
+          ? Number(directDynamicFrontDotationByRowKey[rowKey]?.[dynamicColumn.key] || 0)
+          : 0
         if (directDynamicValue > 0) return directDynamicValue
       }
-      if (idx >= 2 && isUdrDynamicColumn(dotacionFrenteColumns[idx])) {
+      if (idx >= 2 && rowSection === "indirect") {
+        const rowKey = getFrontOverrideRowKey(row, "indirect")
+        const dynamicColumn = dynamicFrontColumns[idx - 2]
+        const indirectDynamicValue = dynamicColumn
+          ? Number(indirectDynamicFrontDotationByRowKey[rowKey]?.[dynamicColumn.key] || 0)
+          : 0
+        if (indirectDynamicValue > 0) return indirectDynamicValue
+      }
+      if (idx >= 2 && rowDynamicFrontValues && idx - 2 < rowDynamicFrontValues.length && dynamicFrontColumnLabels.length <= 1) {
+        return Number(rowDynamicFrontValues[idx - 2] || 0)
+      }
+      if (idx >= 2 && dynamicFrontColumnLabels.length > 1) {
+        return 0
+      }
+      if (idx >= 2 && canUseLegacyNocFrontValue && isUdrDynamicColumn(dotacionFrenteColumns[idx])) {
         return Number(values[2] || 0)
       }
       return Number(values[idx] || 0)
@@ -3799,6 +4317,44 @@ function DetailPersonnelEquipmentV2({
     const values = dotacionFrenteColumns.map((_, idx) => roundFrontValue(Number(overrideValues[idx] ?? baseValues[idx] ?? 0)))
     return trimFrontValuesToLimit(values, getRowTurnoLimit(row, baseValues, section))
   }
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") {
+      const directSampleRows = (directMatrixRows || []).slice(0, 3).map((row: any) => {
+        const rowKey = getFrontOverrideRowKey(row, "direct")
+        return {
+          rowKey,
+          position: row?.position,
+          valuesByColumn: (dynamicFrontColumns || []).map((column) => ({
+            key: column.key,
+            label: column.label,
+            value: Number(directDynamicFrontDotationByRowKey[rowKey]?.[column.key] || 0)
+          }))
+        }
+      })
+      const indirectSampleRows = (matrixRows || []).slice(0, 3).map((row: any) => {
+        const rowKey = getFrontOverrideRowKey(row, "indirect")
+        return {
+          rowKey,
+          position: row?.position,
+          valuesByColumn: (dynamicFrontColumns || []).map((column) => ({
+            key: column.key,
+            label: column.label,
+            value: Number(indirectDynamicFrontDotationByRowKey[rowKey]?.[column.key] || 0)
+          }))
+        }
+      })
+      console.debug("[daily-report][dynamic-front-values]", {
+        columns: (dynamicFrontColumns || []).map((column) => ({
+          key: column.key,
+          label: column.label,
+          sourceReportIds: column.sourceReportIds
+        })),
+        directSampleRows,
+        indirectSampleRows,
+        legacyFallbackMayApply: dynamicFrontColumnLabels.length <= 1
+      })
+    }
+  }, [directDynamicFrontDotationByRowKey, directMatrixRows, dynamicFrontColumns, dynamicFrontColumnLabels.length, indirectDynamicFrontDotationByRowKey, matrixRows])
   const parseFrontInputValue = (value: string) => {
     const normalized = String(value || "").replace(",", ".").trim()
     if (!normalized) return 0
@@ -3820,15 +4376,6 @@ function DetailPersonnelEquipmentV2({
       [rowKey]: nextValues
     }
     onChange("v2_front_distribution_overrides", nextOverridePatch)
-    if (onSyncOppositeFrontOverrides) {
-      const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
-      const targetFront = activeFront === "PISCINAS" ? "CANALETAS" : "PISCINAS"
-      onSyncOppositeFrontOverrides(targetFront, {
-        v2_front_distribution_overrides: {
-          [rowKey]: buildOppositeFrontValues(nextValues, rowLimit)
-        }
-      })
-    }
   }
   const renderFrontDistributionValue = (row: any, section: FrontDistributionSection, idx: number, value: number) => {
     if (readOnly) return value > 0 ? oneDecimalCell(value) : "-"
@@ -3949,6 +4496,7 @@ function DetailPersonnelEquipmentV2({
       const visibleInstalacionFaena = Number(vals?.[0] || 0)
       const visibleFrente = Number(vals?.[1] || 0)
       const visibleNocFront = Number(vals?.[2] || 0)
+      const visibleDynamicFrontValues = dotacionFrenteColumns.slice(2).map((_label, idx) => Number(vals?.[idx + 2] || 0))
       const visibleDotTotal = shouldUseSavedSnapshotTotal(row) ? snapshotNumber((row as any)?.dotacionTotalObra) : sumBaseFrontValues(vals)
       const visibleHhTotal = strictSnapshotView && Object.prototype.hasOwnProperty.call(row as any, "hhTotalObra")
         ? snapshotNumber((row as any)?.hhTotalObra)
@@ -3958,6 +4506,7 @@ function DetailPersonnelEquipmentV2({
         instalacionFaena: visibleInstalacionFaena,
         frente: visibleFrente,
         nocFront: visibleNocFront,
+        dynamicFrontValues: visibleDynamicFrontValues,
         dotacionTotalObra: visibleDotTotal,
         hhTotalObra: visibleHhTotal
       }
@@ -3967,6 +4516,7 @@ function DetailPersonnelEquipmentV2({
       const visibleInstalacionFaena = Number(vals?.[0] || 0)
       const visibleFrente = Number(vals?.[1] || 0)
       const visibleNocFront = Number(vals?.[2] || 0)
+      const visibleDynamicFrontValues = dotacionFrenteColumns.slice(2).map((_label, idx) => Number(vals?.[idx + 2] || 0))
       const visibleDotTotal = shouldUseSavedSnapshotTotal(row) ? snapshotNumber((row as any)?.dotacionTotalObra) : sumBaseFrontValues(vals)
       const visibleHhTotal = strictSnapshotView && Object.prototype.hasOwnProperty.call(row as any, "hhTotalObra")
         ? snapshotNumber((row as any)?.hhTotalObra)
@@ -3976,6 +4526,7 @@ function DetailPersonnelEquipmentV2({
         instalacionFaena: visibleInstalacionFaena,
         frente: visibleFrente,
         nocFront: visibleNocFront,
+        dynamicFrontValues: visibleDynamicFrontValues,
         dotacionTotalObra: visibleDotTotal,
         hhTotalObra: visibleHhTotal
       }
@@ -4007,7 +4558,10 @@ function DetailPersonnelEquipmentV2({
     maquinariaFrenteColumns.map((_, idx) => {
       if (idx === 0) return Number(row?.instalacionFaena || row?.front1 || 0)
       if (idx === 1) return Number(row?.mainFront || row?.front2 || 0)
-      return Number(row?.nocFront || 0)
+      if (Array.isArray(row?.dynamicFrontValues) && idx - 2 < row.dynamicFrontValues.length) {
+        return Number(row.dynamicFrontValues[idx - 2] || 0)
+      }
+      return dynamicFrontColumnLabels.length <= 1 ? Number(row?.nocFront || 0) : 0
     })
   const collaboratorTooltipByPositionFront = useMemo(() => {
     const normalize = (value: any) =>
@@ -4496,7 +5050,7 @@ function DetailPersonnelEquipmentV2({
                   <Tooltip
                     arrow
                     placement="top"
-                    title={getFrontCellTooltip(row, "indirect", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
+                    title={frontCellTooltipDisabled ? "" : getFrontCellTooltip(row, "indirect", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "indirect"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
                   >
                     <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
                       {renderFrontDistributionValue(row, "indirect", idx, frontValue)}
@@ -4692,7 +5246,7 @@ function DetailPersonnelEquipmentV2({
                         <Tooltip
                           arrow
                           placement="top"
-                          title={getFrontCellTooltip(row, "direct", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "direct"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
+                          title={frontCellTooltipDisabled ? "" : getFrontCellTooltip(row, "direct", idx, getRowTurnoLimit(row, getBaseFrontValues(row), "direct"), frontValues, String(dotacionFrenteColumns[idx] || ""))}
                         >
                           <Box component="span" sx={{ display: "inline-flex", justifyContent: "center", width: "100%" }}>
                             {renderFrontDistributionValue(row, "direct", idx, frontValue)}
@@ -4743,11 +5297,7 @@ function DetailPersonnelEquipmentV2({
             <td style={rightDetachedTotalSx}>{oneDecimalCell(minorTotals.oficinaFuera)}</td>
             {maquinariaFrenteColumns.map((_, idx) => (
               <td key={`tot-minor-maq-${idx}`} style={rightDetachedTotalSx}>
-                {idx === 0
-                  ? oneDecimalCell(Number(minorTotals.front1 || 0))
-                  : idx === 1
-                    ? oneDecimalCell(Number(minorTotals.front2 || 0))
-                    : oneDecimalCell(Number((minorTotals as any).nocFront || 0))}
+                {oneDecimalCell(Number(getVisibleMaqFrontValues(minorTotals)[idx] || 0))}
               </td>
             ))}
             <td style={rightDetachedTotalSx}>{oneDecimalCell(minorTotals.totalEqObra)}</td>
@@ -11287,22 +11837,7 @@ export default function DailyReportPage() {
       })
       return
     }
-    const normalizeLite = (v: any) =>
-      String(v || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toUpperCase()
-        .trim()
-    const inferFieldReportFront = (report: any): "CANALETAS" | "PISCINAS" | null => {
-      const area = normalizeLite(report?.area || "")
-      const crew = normalizeLite(report?.crew_name || "")
-      const joined = `${area} ${crew}`
-      if (joined.includes("PISCIN")) return "PISCINAS"
-      if (joined.includes("CANALET")) return "CANALETAS"
-      return null
-    }
     const sourceIdsForTarget = (fieldReportsForDate || [])
-      .filter((report: any) => inferFieldReportFront(report) === targetFront)
       .map((report: any) => String(report?.id || "").trim())
       .filter(Boolean)
     const base = {
@@ -11444,6 +11979,7 @@ export default function DailyReportPage() {
           instalacionFaena: number
           frente: number
           nocFront: number
+          dynamicFrontValues: number[]
           dotacionTotalObra: number
           hhTotalObra: number
         }>
@@ -11467,6 +12003,9 @@ export default function DailyReportPage() {
         instalacionFaena: toSnapshotNumber(overrides?.instalacionFaena ?? row?.instalacionFaena),
         frente: toSnapshotNumber(overrides?.frente ?? row?.frente),
         nocFront: toSnapshotNumber(overrides?.nocFront ?? row?.nocFront),
+        dynamicFrontValues: Array.isArray(overrides?.dynamicFrontValues ?? row?.dynamicFrontValues)
+          ? (overrides?.dynamicFrontValues ?? row?.dynamicFrontValues).map((value: any) => toSnapshotNumber(value))
+          : [],
         dotacionTotalObra: toSnapshotNumber(overrides?.dotacionTotalObra ?? row?.dotacionTotalObra),
         hhTotalObra: toSnapshotNumber(overrides?.hhTotalObra ?? row?.hhTotalObra)
       })
@@ -11474,7 +12013,13 @@ export default function DailyReportPage() {
       const instalacionFaena = toSnapshotNumber(row?.instalacionFaena ?? row?.front1)
       const mainFront = toSnapshotNumber(row?.mainFront ?? row?.front2)
       const nocFront = toSnapshotNumber(row?.nocFront)
-      const totalEqMaq = toSnapshotNumber(row?.totalEqMaq ?? row?.totalEqObra ?? (instalacionFaena + mainFront + nocFront))
+      const dynamicFrontValues = Array.isArray(row?.dynamicFrontValues)
+        ? row.dynamicFrontValues.map((value: any) => toSnapshotNumber(value))
+        : []
+      const dynamicFrontTotal = dynamicFrontValues.length > 0
+        ? dynamicFrontValues.reduce((acc: number, value: number) => acc + Number(value || 0), 0)
+        : nocFront
+      const totalEqMaq = toSnapshotNumber(row?.totalEqMaq ?? row?.totalEqObra ?? (instalacionFaena + mainFront + dynamicFrontTotal))
         const hmTurnoDia = toSnapshotNumber(row?.hmTurnoDia) || machineWorkdayHoursForSave
         return {
           name: String(row?.name || "").trim(),
@@ -11488,6 +12033,7 @@ export default function DailyReportPage() {
           instalacionFaena,
           mainFront,
           nocFront,
+          dynamicFrontValues,
           totalEqMaq,
           hmTotal: toSnapshotNumber(row?.hmTotal ?? (totalEqMaq * hmTurnoDia))
         }
@@ -11528,6 +12074,7 @@ export default function DailyReportPage() {
                 instalacionFaena: Number((row as any)?.instalacionFaena || 0),
                 frente: Number((row as any)?.frente || 0),
                 nocFront: Number((row as any)?.nocFront || 0),
+                dynamicFrontValues: Array.isArray((row as any)?.dynamicFrontValues) ? (row as any).dynamicFrontValues.map(Number) : [],
                 dotacionTotalObra: Number((row as any)?.dotacionTotalObra || 0),
                 hhTotalObra: Number((row as any)?.hhTotalObra || 0)
               })
@@ -11536,12 +12083,14 @@ export default function DailyReportPage() {
             const visibleInstalacionFaena = Number(frontValues?.[0] || 0)
             const visibleFrente = Number(frontValues?.[1] || 0)
             const visibleNocFront = Number(frontValues?.[2] || 0)
+            const visibleDynamicFrontValues = frontValues.slice(2).map((value: any) => Number(value || 0))
             const visibleDotTotal = visibleInstalacionFaena + visibleFrente
             const visibleHhTotal = visibleDotTotal * personWorkdayHoursForSave
             return buildV2DetailRowSnapshot(row, {
               instalacionFaena: visibleInstalacionFaena,
               frente: visibleFrente,
               nocFront: visibleNocFront,
+              dynamicFrontValues: visibleDynamicFrontValues,
               dotacionTotalObra: visibleDotTotal,
               hhTotalObra: visibleHhTotal
             })
@@ -11552,6 +12101,7 @@ export default function DailyReportPage() {
                 instalacionFaena: Number((row as any)?.instalacionFaena || 0),
                 frente: Number((row as any)?.frente || 0),
                 nocFront: Number((row as any)?.nocFront || 0),
+                dynamicFrontValues: Array.isArray((row as any)?.dynamicFrontValues) ? (row as any).dynamicFrontValues.map(Number) : [],
                 dotacionTotalObra: Number((row as any)?.dotacionTotalObra || 0),
                 hhTotalObra: Number((row as any)?.hhTotalObra || 0)
               })
@@ -11560,12 +12110,14 @@ export default function DailyReportPage() {
             const visibleInstalacionFaena = Number(frontValues?.[0] || 0)
             const visibleFrente = Number(frontValues?.[1] || 0)
             const visibleNocFront = Number(frontValues?.[2] || 0)
+            const visibleDynamicFrontValues = frontValues.slice(2).map((value: any) => Number(value || 0))
             const visibleDotTotal = visibleInstalacionFaena + visibleFrente
             const visibleHhTotal = visibleDotTotal * personWorkdayHoursForSave
             return buildV2DetailRowSnapshot(row, {
               instalacionFaena: visibleInstalacionFaena,
               frente: visibleFrente,
               nocFront: visibleNocFront,
+              dynamicFrontValues: visibleDynamicFrontValues,
               dotacionTotalObra: visibleDotTotal,
               hhTotalObra: visibleHhTotal
             })
@@ -11728,7 +12280,11 @@ export default function DailyReportPage() {
         Array.isArray(form.source_field_report_ids)
           ? Array.from(new Set(form.source_field_report_ids.map((x) => String(x || "").trim()).filter(Boolean)))
           : []
+      const fieldReportsForDynamicColumnsSave = Array.isArray(fieldReportsForDate) ? fieldReportsForDate : []
+      const dynamicFrontColumnsForSave = collectDynamicFrontColumns(fieldReportsForDynamicColumnsSave, reportFrontNames)
+      const dynamicFrontColumnsByBlockForSave = splitDynamicFrontColumnsByBlock(dynamicFrontColumnsForSave)
       const persistedHasNocFrontColumn =
+        dynamicFrontColumnsForSave.length > 0 ||
         Boolean(hasNocFrontColumn) ||
         v2DetailSnapshot.v2_detail_indirect_rows.some((row: any) => Number(row?.nocFront || 0) > 0) ||
         v2DetailSnapshot.v2_detail_direct_rows.some((row: any) => Number(row?.nocFront || 0) > 0)
@@ -11829,6 +12385,8 @@ export default function DailyReportPage() {
           work_front: currentFront,
           report_format_code: currentFormat,
           source_field_report_ids: persistedSourceFieldReportIds,
+          v2_dynamic_front_columns: dynamicFrontColumnsForSave,
+          v2_dynamic_front_columns_by_block: dynamicFrontColumnsByBlockForSave,
           v2_has_noc_front_column: persistedHasNocFrontColumn,
           v2_noc_front_column_label: persistedNocFrontColumnLabel,
           indirect_hours_overrides: indirectHoursOverrides,
@@ -11841,6 +12399,8 @@ export default function DailyReportPage() {
           report_format_code: currentFormat,
           work_front: currentFront,
           source_field_report_ids: persistedSourceFieldReportIds,
+          v2_dynamic_front_columns: dynamicFrontColumnsForSave,
+          v2_dynamic_front_columns_by_block: dynamicFrontColumnsByBlockForSave,
           v2_has_noc_front_column: persistedHasNocFrontColumn,
           v2_noc_front_column_label: persistedNocFrontColumnLabel,
           indirect_hours_overrides: indirectHoursOverrides,
@@ -11867,6 +12427,8 @@ export default function DailyReportPage() {
           equip_total_hm: visibleSummarySnapshot.equip_total_hm,
           comments_v2: form.comments_v2 || "",
           source_field_report_ids: persistedSourceFieldReportIds,
+          v2_dynamic_front_columns: dynamicFrontColumnsForSave,
+          v2_dynamic_front_columns_by_block: dynamicFrontColumnsByBlockForSave,
           v2_has_noc_front_column: persistedHasNocFrontColumn,
           v2_noc_front_column_label: persistedNocFrontColumnLabel,
           indirect_hours_overrides: indirectHoursOverrides,
@@ -12258,7 +12820,13 @@ export default function DailyReportPage() {
           const instalacionFaena = toSnapshotNumber(row?.instalacionFaena)
           const mainFront = toSnapshotNumber(row?.mainFront)
           const nocFront = toSnapshotNumber(row?.nocFront)
-          const totalEqMaq = toSnapshotNumber(row?.totalEqMaq ?? (instalacionFaena + mainFront + nocFront))
+          const dynamicFrontValues = Array.isArray(row?.dynamicFrontValues)
+            ? row.dynamicFrontValues.map((value: any) => toSnapshotNumber(value))
+            : []
+          const dynamicFrontTotal = dynamicFrontValues.length > 0
+            ? dynamicFrontValues.reduce((acc: number, value: number) => acc + Number(value || 0), 0)
+            : nocFront
+          const totalEqMaq = toSnapshotNumber(row?.totalEqMaq ?? (instalacionFaena + mainFront + dynamicFrontTotal))
           return {
             name: String(row?.name || "").trim(),
             hmTurnoDia,
@@ -12271,6 +12839,7 @@ export default function DailyReportPage() {
             instalacionFaena,
             mainFront,
             nocFront,
+            dynamicFrontValues,
             totalEqMaq,
             hmTotal: toSnapshotNumber(row?.hmTotal ?? (totalEqMaq * hmTurnoDia))
           }

@@ -116,6 +116,8 @@ const COLLABORATORS_ATTENDANCE_SELECT = [
   'worker_type',
   'is_active',
   'gender',
+  'phone',
+  'email',
 ].join(', ')
 
 const COLLABORATORS_CREWS_SELECT = [

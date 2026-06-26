@@ -1,13 +1,20 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import {
   Box,
   Button,
   Card,
   CardContent,
+  Checkbox,
+  Chip,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
   IconButton,
   InputAdornment,
@@ -29,8 +36,19 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import { CalendarMonth, Download, Search, Refresh, PushPin } from '@mui/icons-material'
+import { Assessment, CalendarMonth, ChevronLeft, ChevronRight, ContentCopy, Download, Search, Refresh, PushPin, WhatsApp } from '@mui/icons-material'
 import { DateCalendar } from '@mui/x-date-pickers'
+import { PickersDay, PickersDayProps } from '@mui/x-date-pickers/PickersDay'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import UserHeader from '../../../components/layout/UserHeader'
 import { colors } from '../../../theme/theme'
 
@@ -44,6 +62,8 @@ type CollaboratorOption = {
   worker_type?: string
   is_active?: boolean
   gender?: string
+  phone?: string
+  email?: string
 }
 
 type DailyStatusRow = {
@@ -62,9 +82,23 @@ type AttendanceMatrixRow = {
   reasonsByDate: Record<string, string>
 }
 
+type WeekRange = {
+  start: string
+  end: string
+}
+
+type AttendanceSummaryRow = {
+  date: string
+  label: string
+  direct: number
+  indirect: number
+  total: number
+}
+
 type SortDirection = 'asc' | 'desc'
 type DailySortField = 'document' | 'name' | 'position' | 'specialty' | 'worker_type' | 'is_active' | 'status'
 type HistorySortField = 'document' | 'name' | 'position' | 'specialty' | 'worker_type' | 'is_active'
+const HISTORY_SELECT_COL_WIDTH = 48
 
 const STATUS_OPTIONS = [
   'Turno',
@@ -112,6 +146,23 @@ const formatAttendanceStatus = (status?: string, reason?: string | null) => {
   }
   if (s === 'Otro' && (r.includes('fuera de obra') || r.includes('fo'))) return 'Fuera de Obra'
   return s
+}
+
+const attendanceStatusCode = (status?: string, reason?: string | null) => {
+  const display = formatAttendanceStatus(status, reason)
+  return statusToReasonCode(display) || String(reason || status || '').trim().toUpperCase()
+}
+
+const normalizeWorkerTypeForSummary = (value?: string) => {
+  const normalized = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+  if (!normalized) return null
+  if (normalized.includes('indirect')) return 'indirect'
+  if (normalized.includes('direct')) return 'direct'
+  return null
 }
 
 const formatDateLabel = (isoDate?: string) => {
@@ -170,6 +221,99 @@ const formatDocument = (value?: string) => {
   return String(formattedRut || doc).toUpperCase()
 }
 
+const contactRowsForCollaborator = (collab?: CollaboratorOption | null) => [
+  { label: 'Teléfono', value: String(collab?.phone || '').trim() },
+  { label: 'Correo', value: String(collab?.email || '').trim() },
+].filter((item) => item.value)
+
+const copyContactValue = (value: string) => {
+  if (!value || typeof navigator === 'undefined' || !navigator.clipboard) return
+  void navigator.clipboard.writeText(value)
+}
+
+const whatsAppUrlForPhone = (value: string) => {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (!digits) return ''
+  const phone = digits.startsWith('56') ? digits : digits.length === 9 && digits.startsWith('9') ? `56${digits}` : digits
+  return `https://wa.me/${phone}?text=${encodeURIComponent('Hola')}`
+}
+
+const ContactHoverContent = ({ collaborator, rowKey }: { collaborator?: CollaboratorOption | null; rowKey: string }) => {
+  const contactRows = contactRowsForCollaborator(collaborator)
+
+  if (contactRows.length === 0) {
+    return (
+      <Box sx={{ p: 0.25, minWidth: 220 }}>
+        <Typography sx={{ fontSize: 12.5, color: colors.white }}>
+          Sin teléfono/correo registrado
+        </Typography>
+      </Box>
+    )
+  }
+
+  return (
+    <Box sx={{ p: 0.25, minWidth: 240 }}>
+      {contactRows.map((item) => {
+        const whatsappUrl = item.label === 'Teléfono' ? whatsAppUrlForPhone(item.value) : ''
+        return (
+          <Box
+            key={`${rowKey}-${item.label}`}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              py: 0.35,
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ fontSize: 11, color: colors.blue13, lineHeight: 1 }}>
+                {item.label}
+              </Typography>
+              <Typography sx={{ fontSize: 12.5, color: colors.white, fontWeight: 700, wordBreak: 'break-all' }}>
+                {item.value}
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.35, flexShrink: 0 }}>
+              {whatsappUrl && (
+                <IconButton
+                  size="small"
+                  component="a"
+                  href={whatsappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                  sx={{
+                    color: '#25D366',
+                    p: 0.35,
+                    '&:hover': { bgcolor: `${colors.white}22` },
+                  }}
+                >
+                  <WhatsApp sx={{ fontSize: 16 }} />
+                </IconButton>
+              )}
+              <IconButton
+                size="small"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  copyContactValue(item.value)
+                }}
+                sx={{
+                  color: colors.white,
+                  p: 0.35,
+                  '&:hover': { bgcolor: `${colors.white}22` },
+                }}
+              >
+                <ContentCopy sx={{ fontSize: 15 }} />
+              </IconButton>
+            </Box>
+          </Box>
+        )
+      })}
+    </Box>
+  )
+}
+
 const documentSearchVariants = (value?: string) => {
   const formatted = formatDocument(value).toLowerCase()
   const raw = String(value || '').trim().toLowerCase()
@@ -205,6 +349,35 @@ const toDateInput = (date: Date) => {
   return `${y}-${m}-${d}`
 }
 
+const addDaysToDateInput = (value: string, days: number) => {
+  const date = parseYmdToDate(value)
+  if (!date) return ''
+  date.setDate(date.getDate() + days)
+  return toDateInput(date)
+}
+
+const getWeekRangeFromDateInput = (value: string): WeekRange => {
+  const date = parseYmdToDate(value)
+  if (!date) return { start: '', end: '' }
+  const day = date.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  date.setDate(date.getDate() + mondayOffset)
+  const start = toDateInput(date)
+  return { start, end: addDaysToDateInput(start, 6) }
+}
+
+const buildWeekRangesFromDates = (dates: string[]) => {
+  const byStart = new Map<string, WeekRange>()
+  dates
+    .map((date) => String(date || '').slice(0, 10))
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    .forEach((date) => {
+      const range = getWeekRangeFromDateInput(date)
+      if (range.start) byStart.set(range.start, range)
+    })
+  return Array.from(byStart.values()).sort((a, b) => b.start.localeCompare(a.start))
+}
+
 const buildDateRange = (from: string, to: string) => {
   if (!from || !to) return [] as string[]
   let start = new Date(`${from}T00:00:00`)
@@ -237,23 +410,31 @@ const attendanceDailyRowsCache = new Map<string, DailyStatusRow[]>()
 const attendanceDailyRowsInFlight = new Map<string, Promise<DailyStatusRow[]>>()
 let attendanceAvailableDatesCache: string[] | null = null
 let attendanceAvailableDatesInFlight: Promise<string[]> | null = null
+type AttendanceHistoryPayload = {
+  rows: DailyStatusRow[]
+  min_work_date?: string | null
+  max_work_date?: string | null
+}
+const attendanceHistoryRowsCache = new Map<string, AttendanceHistoryPayload>()
+const attendanceHistoryRowsInFlight = new Map<string, Promise<AttendanceHistoryPayload>>()
 
 export default function AttendancePage() {
+  const { data: session } = useSession()
+  const currentRole = String((session?.user as any)?.role || '').trim().toLowerCase()
+  const canEditDailyAttendance = currentRole !== 'user'
+
   const [tab, setTab] = useState<'daily' | 'history'>('daily')
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [savingDaily, setSavingDaily] = useState(false)
+  const [summaryModalOpen, setSummaryModalOpen] = useState(false)
   const [error, setError] = useState('')
 
   const [collaboratorOptions, setCollaboratorOptions] = useState<CollaboratorOption[]>([])
 
   const today = useMemo(() => new Date(), [])
-  const defaultFrom = useMemo(() => {
-    const d = new Date(today)
-    d.setDate(d.getDate() - 13)
-    return toDateInput(d)
-  }, [today])
   const defaultTo = useMemo(() => toDateInput(today), [today])
+  const defaultHistoryWeek = useMemo(() => getWeekRangeFromDateInput(defaultTo), [defaultTo])
 
   const [dailyDate, setDailyDate] = useState(defaultTo)
   const [dailyAvailableDates, setDailyAvailableDates] = useState<string[]>([])
@@ -264,18 +445,24 @@ export default function AttendancePage() {
   const [dailySelectedAttendance, setDailySelectedAttendance] = useState<string>('all')
   const [dailySelectedWorkerType, setDailySelectedWorkerType] = useState<string>('all')
   const [dailySearch, setDailySearch] = useState('')
+  const deferredDailySearch = useDeferredValue(dailySearch)
   const [dailySortField, setDailySortField] = useState<DailySortField>('name')
   const [dailySortDirection, setDailySortDirection] = useState<SortDirection>('asc')
   const [dailyDraftStatusByCollaborator, setDailyDraftStatusByCollaborator] = useState<Record<string, string>>({})
 
   const [historyRowsRaw, setHistoryRowsRaw] = useState<DailyStatusRow[]>([])
-  const [dateFrom, setDateFrom] = useState(defaultFrom)
-  const [dateTo, setDateTo] = useState(defaultTo)
+  const [dateFrom, setDateFrom] = useState(defaultHistoryWeek.start)
+  const [dateTo, setDateTo] = useState(defaultHistoryWeek.end)
   const [historyAutoRange, setHistoryAutoRange] = useState(true)
+  const [historyRangeAnchorEl, setHistoryRangeAnchorEl] = useState<HTMLElement | null>(null)
+  const [historyTempStartDate, setHistoryTempStartDate] = useState<Date | null>(null)
+  const [historyTempEndDate, setHistoryTempEndDate] = useState<Date | null>(null)
   const [historySelectedCollaborator, setHistorySelectedCollaborator] = useState<string>('all')
   const [historySelectedStatus, setHistorySelectedStatus] = useState<string>('all')
   const [historySelectedWorkerType, setHistorySelectedWorkerType] = useState<string>('all')
   const [historySearch, setHistorySearch] = useState('')
+  const deferredHistorySearch = useDeferredValue(historySearch)
+  const [pinnedHistoryCollaboratorIds, setPinnedHistoryCollaboratorIds] = useState<string[]>([])
   const [historySortField, setHistorySortField] = useState<HistorySortField>('name')
   const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('asc')
 
@@ -291,9 +478,7 @@ export default function AttendancePage() {
     'document',
     'name',
     'position',
-    'specialty',
     'worker_type',
-    'is_active',
   ])
 
   const isPinnedHistoryColumn = (key: string) => pinnedHistoryColumns.includes(key)
@@ -304,7 +489,7 @@ export default function AttendancePage() {
   }
 
   const stickyLeftByKey = useMemo(() => {
-    let left = 0
+    let left = HISTORY_SELECT_COL_WIDTH
     const out: Record<string, number> = {}
     historyBaseColumns.forEach((col) => {
       if (!isPinnedHistoryColumn(col.key)) return
@@ -332,6 +517,22 @@ export default function AttendancePage() {
     textOverflow: 'ellipsis',
   })
 
+  const historyPinButtonSx = (active: boolean) => ({
+    width: 28,
+    height: 28,
+    minWidth: 28,
+    p: 0,
+    mr: 0.75,
+    color: active ? colors.blue6 : colors.gray6,
+    flexShrink: 0,
+    overflow: 'visible',
+    '& .MuiSvgIcon-root': {
+      fontSize: 17,
+      transform: 'rotate(-35deg)',
+      transformOrigin: 'center',
+    },
+  })
+
   const workerTypeOptions = useMemo(() => {
     const values = collaboratorOptions
       .map((option) => String(option.worker_type || '').trim())
@@ -354,6 +555,58 @@ export default function AttendancePage() {
   }, [collaboratorOptions])
 
   const dailyAvailableDateSet = useMemo(() => new Set(dailyAvailableDates), [dailyAvailableDates])
+  const historyAvailableWeeks = useMemo(() => buildWeekRangesFromDates(dailyAvailableDates), [dailyAvailableDates])
+  const latestHistoryWeek = historyAvailableWeeks[0] || defaultHistoryWeek
+  const selectedHistoryWeekIndex = historyAvailableWeeks.findIndex((range) => range.start === dateFrom && range.end === dateTo)
+  const previousHistoryWeek = selectedHistoryWeekIndex >= 0
+    ? historyAvailableWeeks[selectedHistoryWeekIndex + 1] || null
+    : getWeekRangeFromDateInput(addDaysToDateInput(dateFrom, -7) || dateFrom)
+  const nextHistoryWeek = selectedHistoryWeekIndex > 0
+    ? historyAvailableWeeks[selectedHistoryWeekIndex - 1] || null
+    : selectedHistoryWeekIndex === 0
+      ? null
+      : getWeekRangeFromDateInput(addDaysToDateInput(dateFrom, 7) || dateFrom)
+  const isViewingLatestHistoryWeek = Boolean(dateFrom && dateTo && dateFrom === latestHistoryWeek.start && dateTo === latestHistoryWeek.end)
+  const historyRangeLabel = dateFrom && dateTo
+    ? `${formatDateLabel(dateFrom)} - ${formatDateLabel(dateTo)}`
+    : 'Seleccionar periodo'
+  const applyHistoryRange = (range: WeekRange, autoRange = false) => {
+    if (!range.start || !range.end) return
+    setDateFrom(range.start)
+    setDateTo(range.end)
+    setHistoryAutoRange(autoRange)
+  }
+
+  const HistoryRangeDay = (props: PickersDayProps) => {
+    const { day, outsideCurrentMonth, ...other } = props
+    const dayValue = toDateInput(day as Date)
+    const tempStart = historyTempStartDate ? toDateInput(historyTempStartDate) : dateFrom
+    const tempEnd = historyTempEndDate ? toDateInput(historyTempEndDate) : historyTempStartDate ? '' : dateTo
+    const start = tempStart && tempEnd && tempStart > tempEnd ? tempEnd : tempStart
+    const end = tempStart && tempEnd && tempStart > tempEnd ? tempStart : tempEnd
+    const isInRange = Boolean(start && end && dayValue >= start && dayValue <= end)
+    const isEdge = Boolean(dayValue && (dayValue === start || dayValue === end))
+
+    return (
+      <PickersDay
+        {...other}
+        day={day}
+        outsideCurrentMonth={outsideCurrentMonth}
+        sx={{
+          ...(isInRange && !outsideCurrentMonth
+            ? {
+                bgcolor: isEdge ? colors.blue6 : colors.blue15,
+                color: isEdge ? colors.white : colors.gray1,
+                borderRadius: isEdge ? '50%' : 0,
+                '&:hover, &:focus': {
+                  bgcolor: isEdge ? colors.blue8 : colors.blue14,
+                },
+              }
+            : {}),
+        }}
+      />
+    )
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -380,6 +633,8 @@ export default function AttendancePage() {
               worker_type: item?.worker_type,
               is_active: item?.is_active,
               gender: item?.gender ?? item?.genero ?? item?.sex ?? item?.sexo,
+              phone: item?.phone,
+              email: item?.email,
             }))
             .filter((item) => item.id)
             .sort((a, b) => formatFullName(a).localeCompare(formatFullName(b), 'es', { sensitivity: 'base' }))
@@ -477,41 +732,33 @@ export default function AttendancePage() {
       const params = new URLSearchParams()
       params.set('date_from', dateFrom)
       params.set('date_to', dateTo)
-      params.set('include_bounds', '1')
       if (historySelectedCollaborator !== 'all') params.set('collaborator_id', historySelectedCollaborator)
       if (historySelectedStatus !== 'all') params.set('status', historySelectedStatus)
 
-      const response = await fetch(`/api/collaborators/daily-status?${params.toString()}`)
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        setHistoryRowsRaw([])
-        setError(String(payload?.error || 'No se pudo cargar asistencia historica'))
-        return
-      }
-      const minDate = String(payload?.min_work_date || '').trim()
-      const maxDate = String(payload?.max_work_date || '').trim()
-      if (historyAutoRange && minDate && maxDate && (dateFrom !== minDate || dateTo !== maxDate)) {
-        setDateFrom(minDate)
-        setDateTo(maxDate)
+      const query = params.toString()
+      if (!attendanceHistoryRowsInFlight.has(query)) {
+        attendanceHistoryRowsInFlight.set(query, (async () => {
+          const cached = attendanceHistoryRowsCache.get(query)
+          if (cached) return cached
 
-        const autoParams = new URLSearchParams()
-        autoParams.set('date_from', minDate)
-        autoParams.set('date_to', maxDate)
-        autoParams.set('include_bounds', '1')
-        if (historySelectedCollaborator !== 'all') autoParams.set('collaborator_id', historySelectedCollaborator)
-        if (historySelectedStatus !== 'all') autoParams.set('status', historySelectedStatus)
-
-        const autoResponse = await fetch(`/api/collaborators/daily-status?${autoParams.toString()}`)
-        const autoPayload = await autoResponse.json().catch(() => ({}))
-        if (!autoResponse.ok) {
-          setHistoryRowsRaw([])
-          setError(String(autoPayload?.error || 'No se pudo cargar asistencia historica'))
-          return
-        }
-        setHistoryRowsRaw(Array.isArray(autoPayload?.rows) ? autoPayload.rows : [])
-        return
+          const response = await fetch(`/api/collaborators/daily-status?${query}`)
+          const payload = await response.json().catch(() => ({}))
+          if (!response.ok) {
+            throw new Error(String(payload?.error || 'No se pudo cargar asistencia historica'))
+          }
+          const result = {
+            rows: Array.isArray(payload?.rows) ? payload.rows : [],
+            min_work_date: payload?.min_work_date,
+            max_work_date: payload?.max_work_date,
+          }
+          attendanceHistoryRowsCache.set(query, result)
+          return result
+        })().finally(() => {
+          attendanceHistoryRowsInFlight.delete(query)
+        }))
       }
 
+      const payload = attendanceHistoryRowsCache.get(query) || await attendanceHistoryRowsInFlight.get(query)
       setHistoryRowsRaw(Array.isArray(payload?.rows) ? payload.rows : [])
     } catch (err) {
       setHistoryRowsRaw([])
@@ -526,6 +773,14 @@ export default function AttendancePage() {
     loadDailyAvailableDates()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!historyAutoRange || dailyDatesLoading) return
+    if (!latestHistoryWeek.start || !latestHistoryWeek.end) return
+    if (dateFrom === latestHistoryWeek.start && dateTo === latestHistoryWeek.end) return
+    setDateFrom(latestHistoryWeek.start)
+    setDateTo(latestHistoryWeek.end)
+  }, [dailyDatesLoading, historyAutoRange, latestHistoryWeek.start, latestHistoryWeek.end, dateFrom, dateTo])
 
   useEffect(() => {
     if (tab !== 'daily') return
@@ -543,7 +798,7 @@ export default function AttendancePage() {
     if (tab !== 'history') return
     loadHistory()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, historySelectedCollaborator, historySelectedStatus, historyAutoRange])
+  }, [tab, dateFrom, dateTo, historySelectedCollaborator, historySelectedStatus])
 
   const dailyMatrixRows = useMemo(() => {
     const byCollaborator = new Map<string, DailyStatusRow>()
@@ -576,8 +831,8 @@ export default function AttendancePage() {
       } as DailyStatusRow
     })
 
-    const q = dailySearch.trim().toLowerCase()
-    const qVariants = searchQueryVariants(dailySearch)
+    const q = deferredDailySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(deferredDailySearch)
     return rows.filter((row) => {
       const displayStatus = formatAttendanceStatus(String(row.status || ''), String(row.reason || ''))
       const employmentState = row.collaborator?.is_active === false ? 'Finiquitado' : 'Vigente'
@@ -617,7 +872,7 @@ export default function AttendancePage() {
       }
       return String(getValue(a)).localeCompare(String(getValue(b)), 'es', { sensitivity: 'base' }) * dir
     })
-  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedAttendance, dailySelectedWorkerType, dailySearch, dailyDate, dailySortField, dailySortDirection])
+  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedAttendance, dailySelectedWorkerType, deferredDailySearch, dailyDate, dailySortField, dailySortDirection])
 
   const historyMatrixRows = useMemo<AttendanceMatrixRow[]>(() => {
     const byCollaborator = new Map<string, AttendanceMatrixRow>()
@@ -672,9 +927,7 @@ export default function AttendancePage() {
     return fromRows.sort((a, b) => a.localeCompare(b))
   }, [dateFrom, dateTo, historyRowsRaw])
 
-  const filteredHistoryRows = useMemo(() => {
-    const q = historySearch.trim().toLowerCase()
-    const qVariants = searchQueryVariants(historySearch)
+  const historyRowsAfterBaseFilters = useMemo(() => {
     return historyMatrixRows.filter((row) => {
       if (historySelectedCollaborator !== 'all' && String(row.collaborator_id) !== historySelectedCollaborator) return false
       const workerType = String(row.collaborator?.worker_type || '').trim()
@@ -685,7 +938,16 @@ export default function AttendancePage() {
         )
         if (!hasSelectedStatus) return false
       }
-      if (!q) return true
+      return true
+    })
+  }, [historyMatrixRows, historySelectedStatus, historySelectedCollaborator, historySelectedWorkerType])
+
+  const historySearchRows = useMemo(() => {
+    const q = deferredHistorySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(deferredHistorySearch)
+    if (!q) return historyRowsAfterBaseFilters
+    return historyRowsAfterBaseFilters.filter((row) => {
+      const workerType = String(row.collaborator?.worker_type || '').trim()
       const documentVariants = documentSearchVariants(row.collaborator?.document)
       const fullName = formatFullName(row.collaborator).toLowerCase()
       const position = String(row.collaborator?.position || '').toLowerCase()
@@ -709,7 +971,26 @@ export default function AttendancePage() {
         reasonValues.includes(q) ||
         dates.includes(q)
       )
-    }).sort((a, b) => {
+    })
+  }, [historyRowsAfterBaseFilters, deferredHistorySearch])
+
+  const filteredHistoryRows = useMemo(() => {
+    const q = deferredHistorySearch.trim()
+    const pinnedIds = new Set(pinnedHistoryCollaboratorIds)
+    const byId = new Map<string, AttendanceMatrixRow>()
+
+    if (pinnedIds.size > 0) {
+      historyRowsAfterBaseFilters.forEach((row) => {
+        if (pinnedIds.has(String(row.collaborator_id))) byId.set(String(row.collaborator_id), row)
+      })
+      if (q) {
+        historySearchRows.forEach((row) => byId.set(String(row.collaborator_id), row))
+      }
+    } else {
+      historySearchRows.forEach((row) => byId.set(String(row.collaborator_id), row))
+    }
+
+    return Array.from(byId.values()).sort((a, b) => {
       const dir = historySortDirection === 'asc' ? 1 : -1
       const getValue = (row: AttendanceMatrixRow) => {
         if (historySortField === 'document') return formatDocument(row.collaborator?.document)
@@ -721,7 +1002,71 @@ export default function AttendancePage() {
       }
       return String(getValue(a)).localeCompare(String(getValue(b)), 'es', { sensitivity: 'base' }) * dir
     })
-  }, [historyMatrixRows, historySearch, historySelectedStatus, historySelectedCollaborator, historySelectedWorkerType, historySortField, historySortDirection])
+  }, [historyRowsAfterBaseFilters, deferredHistorySearch, historySearchRows, pinnedHistoryCollaboratorIds, historySortField, historySortDirection])
+
+  const pinnedHistoryRows = useMemo(() => {
+    const pinnedIds = new Set(pinnedHistoryCollaboratorIds)
+    return historyRowsAfterBaseFilters.filter((row) => pinnedIds.has(String(row.collaborator_id)))
+  }, [historyRowsAfterBaseFilters, pinnedHistoryCollaboratorIds])
+
+  const exportDates = useMemo(() => (
+    tab === 'daily' ? [dailyDate] : historyDateColumns
+  ), [tab, dailyDate, historyDateColumns])
+
+  const exportRows = useMemo<AttendanceMatrixRow[]>(() => (
+    tab === 'daily'
+      ? dailyMatrixRows.map((row) => ({
+        collaborator_id: row.collaborator_id,
+        collaborator: row.collaborator,
+        statusesByDate: { [dailyDate]: String(dailyDraftStatusByCollaborator[row.collaborator_id] || formatAttendanceStatus(row.status, row.reason) || '') },
+        reasonsByDate: { [dailyDate]: String(row.reason || '') },
+      } as AttendanceMatrixRow))
+      : filteredHistoryRows
+  ), [tab, dailyMatrixRows, dailyDate, dailyDraftStatusByCollaborator, filteredHistoryRows])
+
+  const attendanceSummaryRows = useMemo<AttendanceSummaryRow[]>(() => {
+    return exportDates.map((date) => {
+      let direct = 0
+      let indirect = 0
+      exportRows.forEach((row) => {
+        const code = attendanceStatusCode(row.statusesByDate[date], row.reasonsByDate[date])
+        if (code !== '11') return
+        const baseCollab = (collaboratorById.get(String(row.collaborator_id || '')) || {}) as CollaboratorOption
+        const rowCollab = (row.collaborator || {}) as CollaboratorOption
+        const workerType = normalizeWorkerTypeForSummary(rowCollab.worker_type ?? baseCollab.worker_type)
+        if (workerType === 'indirect') indirect += 1
+        if (workerType === 'direct') direct += 1
+      })
+      return {
+        date,
+        label: formatDateLabel(date),
+        direct,
+        indirect,
+        total: direct + indirect,
+      }
+    })
+  }, [exportDates, exportRows, collaboratorById])
+
+  const attendanceSummaryTotals = useMemo(() => (
+    attendanceSummaryRows.reduce(
+      (acc, row) => ({
+        direct: acc.direct + row.direct,
+        indirect: acc.indirect + row.indirect,
+        total: acc.total + row.total,
+      }),
+      { direct: 0, indirect: 0, total: 0 }
+    )
+  ), [attendanceSummaryRows])
+
+  const attendanceSummaryPeak = useMemo(() => (
+    attendanceSummaryRows.reduce((peak, row) => row.total > peak.total ? row : peak, attendanceSummaryRows[0] || {
+      date: '',
+      label: '-',
+      direct: 0,
+      indirect: 0,
+      total: 0,
+    })
+  ), [attendanceSummaryRows])
 
   const handleDailySort = (field: DailySortField) => {
     if (dailySortField === field) {
@@ -741,6 +1086,14 @@ export default function AttendancePage() {
     setHistorySortDirection('asc')
   }
 
+  const handleSearchAction = () => {
+    if (tab === 'daily') {
+      loadDaily()
+      return
+    }
+    loadHistory()
+  }
+
   const handleExportExcel = async () => {
     setExporting(true)
     try {
@@ -751,15 +1104,8 @@ export default function AttendancePage() {
       workbook.created = new Date()
       const worksheet = workbook.addWorksheet('Asistencia')
 
-      const dates = tab === 'daily' ? [dailyDate] : historyDateColumns
-      const rows = tab === 'daily'
-        ? dailyMatrixRows.map((row) => ({
-          collaborator_id: row.collaborator_id,
-          collaborator: row.collaborator,
-          statusesByDate: { [dailyDate]: String(dailyDraftStatusByCollaborator[row.collaborator_id] || formatAttendanceStatus(row.status, row.reason) || '') },
-          reasonsByDate: { [dailyDate]: String(row.reason || '') },
-        } as AttendanceMatrixRow))
-        : filteredHistoryRows
+      const dates = exportDates
+      const rows = exportRows
       const startRow = 2
       const startCol = 2 // B. Column A and row 1 are reserved as visual breathing space.
       const staticHeaders = ['CODIGO', 'CAT', 'RUT', 'PATERNO', 'MATERNO', 'NOMBRE', 'NOMBRE', 'GÉNERO', 'CARGO ACREDITACION']
@@ -822,8 +1168,7 @@ export default function AttendancePage() {
         }
       }
       const statusCodeForExport = (status?: string, reason?: string) => {
-        const display = formatAttendanceStatus(status, reason)
-        return statusToReasonCode(display) || String(reason || status || '').trim().toUpperCase()
+        return attendanceStatusCode(status, reason)
       }
       const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
@@ -980,6 +1325,60 @@ export default function AttendancePage() {
       }
 
       worksheet.views = [{ state: 'frozen', xSplit: startCol + staticHeaders.length - 1, ySplit: tableHeaderRow }]
+
+      const summaryWorksheet = workbook.addWorksheet('Resumen')
+      summaryWorksheet.columns = [
+        { key: 'date', width: 16 },
+        { key: 'direct', width: 14 },
+        { key: 'indirect', width: 14 },
+        { key: 'total', width: 14 },
+      ]
+      summaryWorksheet.mergeCells(1, 1, 1, 4)
+      summaryWorksheet.getCell(1, 1).value = 'RESUMEN ASISTENCIA'
+      summaryWorksheet.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FF1F4E79' } }
+      summaryWorksheet.getCell(1, 1).alignment = { horizontal: 'center', vertical: 'middle' }
+      summaryWorksheet.getRow(1).height = 24
+      summaryWorksheet.mergeCells(2, 1, 2, 4)
+      summaryWorksheet.getCell(2, 1).value = dates.length > 1
+        ? `Periodo: ${formatDateLabel(dates[0])} - ${formatDateLabel(dates[dates.length - 1])}`
+        : `Dia: ${formatDateLabel(dates[0] || dailyDate)}`
+      summaryWorksheet.getCell(2, 1).font = { bold: true, size: 11, color: { argb: 'FF334155' } }
+      summaryWorksheet.getCell(2, 1).alignment = { horizontal: 'center', vertical: 'middle' }
+
+      const summaryHeaders = ['Fecha', 'Directos', 'Indirectos', 'Total']
+      summaryHeaders.forEach((header, idx) => {
+        const cell = summaryWorksheet.getCell(4, idx + 1)
+        cell.value = header
+        cell.fill = blueFill
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+        cell.alignment = { horizontal: 'center', vertical: 'middle' }
+        cell.border = thinBorder
+      })
+
+      attendanceSummaryRows.forEach((summary, idx) => {
+        const rowNo = 5 + idx
+        const values = [summary.label, summary.direct, summary.indirect, summary.total]
+        values.forEach((value, colIdx) => {
+          const cell = summaryWorksheet.getCell(rowNo, colIdx + 1)
+          cell.value = value
+          cell.border = thinBorder
+          cell.alignment = { horizontal: colIdx === 0 ? 'left' : 'center', vertical: 'middle' }
+          cell.font = { size: 11 }
+        })
+      })
+
+      const totalRowNo = 5 + attendanceSummaryRows.length
+      const totalValues = ['TOTAL RANGO', attendanceSummaryTotals.direct, attendanceSummaryTotals.indirect, attendanceSummaryTotals.total]
+      totalValues.forEach((value, idx) => {
+        const cell = summaryWorksheet.getCell(totalRowNo, idx + 1)
+        cell.value = value
+        cell.fill = grayFill
+        cell.font = { bold: true, size: 11, color: { argb: 'FF0F172A' } }
+        cell.alignment = { horizontal: idx === 0 ? 'left' : 'center', vertical: 'middle' }
+        cell.border = mediumBorder
+      })
+      summaryWorksheet.views = [{ state: 'frozen', ySplit: 4 }]
+
       const buffer = await workbook.xlsx.writeBuffer()
       const filename = tab === 'daily'
         ? `asistencia_${dailyDate}.xlsx`
@@ -993,6 +1392,7 @@ export default function AttendancePage() {
   }
 
   const handleDailyStatusChange = (collaboratorId: string, nextStatus: string) => {
+    if (!canEditDailyAttendance) return
     setDailyDraftStatusByCollaborator((prev) => ({
       ...prev,
       [collaboratorId]: nextStatus,
@@ -1010,6 +1410,7 @@ export default function AttendancePage() {
   }, [dailyDraftStatusByCollaborator])
 
   const handleSaveDailyAttendance = async () => {
+    if (!canEditDailyAttendance) return
     if (dailyPendingEntries.length === 0) return
     setSavingDaily(true)
     setError('')
@@ -1028,6 +1429,9 @@ export default function AttendancePage() {
         return
       }
       setDailyDraftStatusByCollaborator({})
+      attendanceDailyRowsCache.clear()
+      attendanceHistoryRowsCache.clear()
+      attendanceAvailableDatesCache = null
       await loadDaily()
     } catch (err) {
       setError(String(err || 'Error guardando asistencia diaria'))
@@ -1065,8 +1469,16 @@ export default function AttendancePage() {
               overflowX: 'hidden',
             }}
           >
-            <CardContent sx={{ p: { xs: 1.5, md: 2 }, '&:last-child': { pb: { xs: 1.5, md: 2 } } }}>
-              <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 1.5, minHeight: 38 }}>
+            <CardContent sx={{ p: { xs: 0.75, md: 1.4 }, '&:last-child': { pb: { xs: 0.75, md: 1.4 } } }}>
+              <Tabs
+                value={tab}
+                onChange={(_, v) => setTab(v)}
+                sx={{
+                  mb: 1,
+                  minHeight: 30,
+                  '& .MuiTab-root': { minHeight: 30, py: 0.2, px: { xs: 1.25, md: 1.5 } },
+                }}
+              >
                 <Tab value="daily" label="Diaria" />
                 <Tab value="history" label="Historica" />
               </Tabs>
@@ -1075,28 +1487,72 @@ export default function AttendancePage() {
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1,
-                  flexWrap: 'nowrap',
-                  overflowX: 'auto',
-                  overflowY: 'hidden',
-                  pt: 1,
-                  pb: 0.75,
-                  WebkitOverflowScrolling: 'touch',
+                  gap: { xs: 0.45, md: 0.55 },
+                  flexWrap: 'wrap',
+                  overflowX: 'hidden',
+                  pt: 0.5,
+                  pb: 0,
+                  minWidth: 0,
                   '& > .MuiTextField-root, & > .MuiFormControl-root': {
-                    flex: { xs: '0 0 160px', md: '0 0 168px' },
+                    flex: { xs: '1 1 100%', sm: '1 1 152px', md: '0 1 148px' },
+                    minWidth: 0,
                   },
                   '& > .attendance-search-field': {
-                    flex: { xs: '0 0 240px', md: '1 1 300px' },
-                    minWidth: { md: 220 },
+                    flex: { xs: '1 1 100%', sm: '1 1 190px', md: '1 1 135px' },
+                    minWidth: 0,
                   },
                   '& > .attendance-action': {
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    whiteSpace: 'nowrap',
+                  },
+                  '& > .attendance-date-field': {
+                    flex: { xs: '1 1 100%', sm: '0 1 170px' },
+                    minWidth: 0,
+                  },
+                  '& > .attendance-period-field': {
+                    flex: { xs: '1 1 100%', sm: '1 1 230px', md: '0 1 235px' },
+                    minWidth: 0,
+                  },
+                  '& > .attendance-week-action': {
+                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 1 132px' },
+                  },
+                  '& > .attendance-latest-action': {
+                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 1 118px' },
+                  },
+                  '& > .attendance-compact-action': {
                     flex: '0 0 auto',
+                  },
+                  '& .MuiButton-root': {
+                    px: { xs: 1, md: 1.15 },
+                    minWidth: 0,
+                    height: 34,
+                    py: 0.35,
+                  },
+                  '& .MuiButton-startIcon': {
+                    mr: 0.35,
+                  },
+                  '& .MuiButton-endIcon': {
+                    ml: 0.35,
+                  },
+                  '& .MuiInputBase-input': {
+                    textOverflow: 'ellipsis',
+                    py: 0.75,
+                  },
+                  '& .MuiInputLabel-root': {
+                    transform: 'translate(14px, 7px) scale(1)',
+                  },
+                  '& .MuiInputLabel-shrink': {
+                    transform: 'translate(14px, -8px) scale(0.75)',
+                  },
+                  '& .MuiOutlinedInput-root': {
+                    minHeight: 34,
                   },
                 }}
               >
                 {tab === 'daily' ? (
                   <>
-                    <Box sx={{ flex: { xs: '0 0 160px', md: '0 0 168px' } }}>
+                    <Box className="attendance-date-field" sx={{ minWidth: 0 }}>
                       <TextField
                         label="Fecha"
                         value={
@@ -1186,30 +1642,127 @@ export default function AttendancePage() {
                   </>
                 ) : (
                   <>
-                    <TextField
-                      label="Desde"
-                      type="date"
-                      value={dateFrom}
-                      onChange={(e) => {
-                        setDateFrom(e.target.value)
-                        setHistoryAutoRange(false)
-                      }}
-                      InputLabelProps={{ shrink: true }}
+                    <Button
+                      className="attendance-action attendance-week-action"
+                      variant="outlined"
                       size="small"
-                      fullWidth
-                    />
-                    <TextField
-                      label="Hasta"
-                      type="date"
-                      value={dateTo}
-                      onChange={(e) => {
-                        setDateTo(e.target.value)
-                        setHistoryAutoRange(false)
+                      disabled={!previousHistoryWeek}
+                      onClick={() => previousHistoryWeek && applyHistoryRange(previousHistoryWeek)}
+                      startIcon={<ChevronLeft />}
+                      sx={{ textTransform: 'none', fontWeight: 800 }}
+                    >
+                      Semana anterior
+                    </Button>
+                    <Box className="attendance-period-field" sx={{ minWidth: 0 }}>
+                      <TextField
+                        label="Período"
+                        value={historyRangeLabel}
+                        onClick={(e) => {
+                          setHistoryTempStartDate(parseYmdToDate(dateFrom))
+                          setHistoryTempEndDate(parseYmdToDate(dateTo))
+                          setHistoryRangeAnchorEl(e.currentTarget)
+                        }}
+                        size="small"
+                        fullWidth
+                        InputProps={{
+                          readOnly: true,
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <CalendarMonth sx={{ fontSize: 21, color: 'rgba(0, 0, 0, 0.72)' }} />
+                            </InputAdornment>
+                          ),
+                        }}
+                      sx={{
+                        '& .MuiInputBase-root, & .MuiInputBase-input': {
+                          cursor: 'pointer',
+                        },
+                        '& .MuiInputBase-input': {
+                          fontSize: 14,
+                        },
                       }}
-                      InputLabelProps={{ shrink: true }}
+                      />
+                      <Popover
+                        open={Boolean(historyRangeAnchorEl)}
+                        anchorEl={historyRangeAnchorEl}
+                        onClose={() => setHistoryRangeAnchorEl(null)}
+                        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                      >
+                        <Box sx={{ p: 1, width: { xs: 330, sm: 360 }, maxWidth: 'calc(100vw - 24px)' }}>
+                          <DateCalendar
+                            value={historyTempEndDate || historyTempStartDate || parseYmdToDate(dateTo)}
+                            onChange={(next) => {
+                              if (!next) return
+                              const nextDate = next as Date
+                              if (!historyTempStartDate || (historyTempStartDate && historyTempEndDate)) {
+                                setHistoryTempStartDate(nextDate)
+                                setHistoryTempEndDate(null)
+                                return
+                              }
+                              const start = historyTempStartDate <= nextDate ? historyTempStartDate : nextDate
+                              const end = historyTempStartDate <= nextDate ? nextDate : historyTempStartDate
+                              setHistoryTempStartDate(start)
+                              setHistoryTempEndDate(end)
+                              setDateFrom(toDateInput(start))
+                              setDateTo(toDateInput(end))
+                              setHistoryAutoRange(false)
+                              setHistoryRangeAnchorEl(null)
+                            }}
+                            slots={{ day: HistoryRangeDay }}
+                            sx={{
+                              mx: 'auto',
+                              width: '100%',
+                              '& .MuiPickersCalendarHeader-root': { px: 1, mb: 0.25 },
+                              '& .MuiDayCalendar-header': { mb: 0.15 },
+                              '& .MuiDayCalendar-weekContainer': { my: 0.1 },
+                              '& .MuiPickersSlideTransition-root': { minHeight: 220 },
+                            }}
+                          />
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, px: 1, pb: 1 }}>
+                            <Button size="small" onClick={() => setHistoryRangeAnchorEl(null)} sx={{ textTransform: 'none' }}>
+                              Cancelar
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              disabled={!historyTempStartDate || !historyTempEndDate}
+                              onClick={() => {
+                                if (!historyTempStartDate || !historyTempEndDate) return
+                                const start = historyTempStartDate <= historyTempEndDate ? historyTempStartDate : historyTempEndDate
+                                const end = historyTempStartDate <= historyTempEndDate ? historyTempEndDate : historyTempStartDate
+                                setDateFrom(toDateInput(start))
+                                setDateTo(toDateInput(end))
+                                setHistoryAutoRange(false)
+                                setHistoryRangeAnchorEl(null)
+                              }}
+                              sx={{ textTransform: 'none', fontWeight: 800 }}
+                            >
+                              Aplicar
+                            </Button>
+                          </Box>
+                        </Box>
+                      </Popover>
+                    </Box>
+                    <Button
+                      className="attendance-action attendance-week-action"
+                      variant="outlined"
                       size="small"
-                      fullWidth
-                    />
+                      disabled={!nextHistoryWeek}
+                      onClick={() => nextHistoryWeek && applyHistoryRange(nextHistoryWeek)}
+                      endIcon={<ChevronRight />}
+                      sx={{ textTransform: 'none', fontWeight: 800 }}
+                    >
+                      Semana siguiente
+                    </Button>
+                    <Button
+                      className="attendance-action attendance-latest-action"
+                      variant="contained"
+                      size="small"
+                      disabled={isViewingLatestHistoryWeek}
+                      onClick={() => applyHistoryRange(latestHistoryWeek, true)}
+                      sx={{ textTransform: 'none', fontWeight: 800 }}
+                    >
+                      Última semana
+                    </Button>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Tipo trabajador</InputLabel>
                       <Select
@@ -1248,15 +1801,15 @@ export default function AttendancePage() {
                   </>
                 )}
                 <Button
-                  className="attendance-action"
+                  className="attendance-action attendance-compact-action"
                   variant="contained"
                   startIcon={<Search />}
-                  onClick={() => (tab === 'daily' ? loadDaily() : loadHistory())}
+                  onClick={handleSearchAction}
                 >
                   Buscar
                 </Button>
                 <Button
-                  className="attendance-action"
+                  className="attendance-action attendance-compact-action"
                   variant="outlined"
                   startIcon={<Refresh />}
                   onClick={() => {
@@ -1267,20 +1820,53 @@ export default function AttendancePage() {
                       setDailySelectedWorkerType('all')
                       setDailySearch('')
                     } else {
-                      setDateFrom(defaultFrom)
-                      setDateTo(defaultTo)
+                      const resetWeek = latestHistoryWeek.start && latestHistoryWeek.end ? latestHistoryWeek : defaultHistoryWeek
+                      setDateFrom(resetWeek.start)
+                      setDateTo(resetWeek.end)
                       setHistoryAutoRange(true)
+                      setHistoryRangeAnchorEl(null)
+                      setHistoryTempStartDate(null)
+                      setHistoryTempEndDate(null)
                       setHistorySelectedCollaborator('all')
                       setHistorySelectedStatus('all')
                       setHistorySelectedWorkerType('all')
                       setHistorySearch('')
+                      setPinnedHistoryCollaboratorIds([])
                     }
                   }}
                 >
                   Limpiar filtros
                 </Button>
+                <Tooltip title="Ver resumen" arrow>
+                  <span className="attendance-action attendance-compact-action">
+                    <IconButton
+                      onClick={() => setSummaryModalOpen(true)}
+                      aria-label="Ver resumen"
+                      disabled={attendanceSummaryRows.length === 0}
+                      sx={{
+                        width: 38,
+                        height: 34,
+                        border: `1px solid ${colors.blue6}`,
+                        borderRadius: 1,
+                        color: colors.blue6,
+                        transition: 'background-color 160ms ease, border-color 160ms ease, color 160ms ease',
+                        '&:hover': {
+                          bgcolor: '#eef6ff',
+                          borderColor: colors.blue8,
+                          color: colors.blue8,
+                        },
+                        '&.Mui-disabled': {
+                          borderColor: '#cbd5e1',
+                          color: '#94a3b8',
+                        },
+                      }}
+                    >
+                      <Assessment fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
                 <Tooltip title="Exportar Excel" arrow>
-                  <span className="attendance-action">
+                  <span className="attendance-action attendance-compact-action">
                     <IconButton
                       onClick={handleExportExcel}
                       aria-label="Exportar Excel"
@@ -1310,7 +1896,7 @@ export default function AttendancePage() {
                     </IconButton>
                   </span>
                 </Tooltip>
-                {tab === 'daily' && (
+                {tab === 'daily' && canEditDailyAttendance && (
                   <Button
                     className="attendance-action"
                     variant="contained"
@@ -1322,6 +1908,53 @@ export default function AttendancePage() {
                   </Button>
                 )}
               </Box>
+              {tab === 'history' && pinnedHistoryRows.length > 0 && (
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.75,
+                    flexWrap: 'wrap',
+                    mt: 1,
+                    pt: 1,
+                    borderTop: `1px solid ${colors.gray9}`,
+                  }}
+                >
+                  <Typography variant="body2" sx={{ color: colors.gray4, fontSize: '0.82rem', mr: 0.25 }}>
+                    Fijados:
+                  </Typography>
+                  {pinnedHistoryRows.map((row) => (
+                    <Chip
+                      key={`pinned-${row.collaborator_id}`}
+                      size="small"
+                      label={formatFullName(row.collaborator)}
+                      onDelete={() => {
+                        setPinnedHistoryCollaboratorIds((prev) =>
+                          prev.filter((id) => id !== String(row.collaborator_id))
+                        )
+                      }}
+                      sx={{
+                        maxWidth: { xs: 190, sm: 240 },
+                        bgcolor: colors.blue15,
+                        color: colors.blue3,
+                        fontWeight: 700,
+                        '& .MuiChip-label': {
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        },
+                      }}
+                    />
+                  ))}
+                  <Button
+                    size="small"
+                    variant="text"
+                    onClick={() => setPinnedHistoryCollaboratorIds([])}
+                    sx={{ textTransform: 'none', fontWeight: 800, ml: 0.25 }}
+                  >
+                    Limpiar fijados
+                  </Button>
+                </Box>
+              )}
             </CardContent>
           </Card>
 
@@ -1389,36 +2022,63 @@ export default function AttendancePage() {
                     <TableBody>
                       {dailyMatrixRows.map((row) => (
                         <TableRow key={row.collaborator_id} hover sx={{ height: 42 }}>
-                          <TableCell>{formatDocument(row.collaborator?.document)}</TableCell>
+                          <TableCell>
+                            <Tooltip
+                              arrow
+                              placement="right"
+                              disableInteractive={false}
+                              title={<ContactHoverContent collaborator={row.collaborator} rowKey={`${row.collaborator_id}-daily`} />}
+                            >
+                              <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'help' }}>
+                                {formatDocument(row.collaborator?.document)}
+                              </Typography>
+                            </Tooltip>
+                          </TableCell>
                           <TableCell>{String(formatFullName(row.collaborator)).toUpperCase()}</TableCell>
                           <TableCell>{String(row.collaborator?.position || '').toUpperCase()}</TableCell>
                           <TableCell>{String(row.collaborator?.specialty || '').toUpperCase()}</TableCell>
                           <TableCell align="center">{String(row.collaborator?.worker_type || '').toUpperCase()}</TableCell>
                           <TableCell align="center">{(row.collaborator?.is_active === false ? 'Finiquitado' : 'Vigente').toUpperCase()}</TableCell>
                           <TableCell align="center" sx={{ minWidth: 176, py: 0.45 }}>
-                            <FormControl size="small" fullWidth>
-                              <Select
-                                value={String(dailyDraftStatusByCollaborator[row.collaborator_id] || formatAttendanceStatus(row.status, row.reason) || '')}
-                                onChange={(e) => handleDailyStatusChange(row.collaborator_id, String(e.target.value || ''))}
-                                displayEmpty
+                            {canEditDailyAttendance ? (
+                              <FormControl size="small" fullWidth>
+                                <Select
+                                  value={String(dailyDraftStatusByCollaborator[row.collaborator_id] || formatAttendanceStatus(row.status, row.reason) || '')}
+                                  onChange={(e) => handleDailyStatusChange(row.collaborator_id, String(e.target.value || ''))}
+                                  displayEmpty
+                                  sx={{
+                                    height: 34,
+                                    '& .MuiSelect-select': {
+                                      py: 0.55,
+                                      fontSize: 13,
+                                    },
+                                  }}
+                                >
+                                  <MenuItem value="">
+                                    <em>Sin estado</em>
+                                  </MenuItem>
+                                  {STATUS_OPTIONS.map((statusOption) => (
+                                    <MenuItem key={`${row.collaborator_id}-${statusOption}`} value={statusOption}>
+                                      {statusOption}
+                                    </MenuItem>
+                                  ))}
+                                </Select>
+                              </FormControl>
+                            ) : (
+                              <Typography
+                                variant="body2"
                                 sx={{
-                                  height: 34,
-                                  '& .MuiSelect-select': {
-                                    py: 0.55,
-                                    fontSize: 13,
-                                  },
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  minHeight: 34,
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: colors.gray2,
                                 }}
                               >
-                                <MenuItem value="">
-                                  <em>Sin estado</em>
-                                </MenuItem>
-                                {STATUS_OPTIONS.map((statusOption) => (
-                                  <MenuItem key={`${row.collaborator_id}-${statusOption}`} value={statusOption}>
-                                    {statusOption}
-                                  </MenuItem>
-                                ))}
-                              </Select>
-                            </FormControl>
+                                {formatAttendanceStatus(row.status, row.reason) || '-'}
+                              </Typography>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1447,7 +2107,7 @@ export default function AttendancePage() {
                     stickyHeader
                     size="small"
                     sx={{
-                      minWidth: `${950 + historyDateColumns.length * 120}px`,
+                      minWidth: `${998 + historyDateColumns.length * 120}px`,
                       tableLayout: 'auto',
                       '& th, & td': {
                         whiteSpace: 'nowrap',
@@ -1458,14 +2118,49 @@ export default function AttendancePage() {
                   >
                     <TableHead>
                       <TableRow sx={{ backgroundColor: colors.blue15 }}>
+                        <TableCell
+                          align="center"
+                          sx={{
+                            position: 'sticky',
+                            left: 0,
+                            zIndex: 7,
+                            width: HISTORY_SELECT_COL_WIDTH,
+                            minWidth: HISTORY_SELECT_COL_WIDTH,
+                            maxWidth: HISTORY_SELECT_COL_WIDTH,
+                            p: 0.25,
+                            bgcolor: colors.blue15,
+                            boxShadow: '1px 0 0 rgba(15,23,42,0.08)',
+                          }}
+                        >
+                          <Tooltip title="Fijar colaboradores" arrow>
+                            <Box
+                              sx={{
+                                width: 28,
+                                height: 28,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: colors.blue6,
+                                overflow: 'visible',
+                                '& .MuiSvgIcon-root': {
+                                  fontSize: 17,
+                                  transform: 'rotate(-35deg)',
+                                  transformOrigin: 'center',
+                                },
+                              }}
+                            >
+                              <PushPin />
+                            </Box>
+                          </Tooltip>
+                        </TableCell>
                         <TableCell sx={{ fontWeight: 600, color: colors.blue1, ...getStickyCellSx('document', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, width: '100%' }}>
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('document')}
-                              sx={{ color: isPinnedHistoryColumn('document') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('document'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'document'} direction={historySortDirection} onClick={() => handleHistorySort('document')}>Documento</TableSortLabel>
                           </Box>
@@ -1475,9 +2170,9 @@ export default function AttendancePage() {
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('name')}
-                              sx={{ color: isPinnedHistoryColumn('name') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('name'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'name'} direction={historySortDirection} onClick={() => handleHistorySort('name')}>Colaborador</TableSortLabel>
                           </Box>
@@ -1487,9 +2182,9 @@ export default function AttendancePage() {
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('position')}
-                              sx={{ color: isPinnedHistoryColumn('position') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('position'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'position'} direction={historySortDirection} onClick={() => handleHistorySort('position')}>Cargo</TableSortLabel>
                           </Box>
@@ -1499,9 +2194,9 @@ export default function AttendancePage() {
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('worker_type')}
-                              sx={{ color: isPinnedHistoryColumn('worker_type') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('worker_type'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'worker_type'} direction={historySortDirection} onClick={() => handleHistorySort('worker_type')}>Tipo Trabajador</TableSortLabel>
                           </Box>
@@ -1511,9 +2206,9 @@ export default function AttendancePage() {
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('specialty')}
-                              sx={{ color: isPinnedHistoryColumn('specialty') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('specialty'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'specialty'} direction={historySortDirection} onClick={() => handleHistorySort('specialty')}>Especialidad</TableSortLabel>
                           </Box>
@@ -1523,9 +2218,9 @@ export default function AttendancePage() {
                             <IconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('is_active')}
-                              sx={{ color: isPinnedHistoryColumn('is_active') ? colors.blue6 : colors.gray6, mr: 0.5 }}
+                              sx={historyPinButtonSx(isPinnedHistoryColumn('is_active'))}
                             >
-                              <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
+                              <PushPin />
                             </IconButton>
                             <TableSortLabel active={historySortField === 'is_active'} direction={historySortDirection} onClick={() => handleHistorySort('is_active')}>Vigencia</TableSortLabel>
                           </Box>
@@ -1544,10 +2239,54 @@ export default function AttendancePage() {
                     <TableBody>
                       {filteredHistoryRows.map((row) => (
                         <TableRow key={row.collaborator_id} hover>
+                          <TableCell
+                            align="center"
+                            sx={{
+                              position: 'sticky',
+                              left: 0,
+                              zIndex: 5,
+                              width: HISTORY_SELECT_COL_WIDTH,
+                              minWidth: HISTORY_SELECT_COL_WIDTH,
+                              maxWidth: HISTORY_SELECT_COL_WIDTH,
+                              p: 0.25,
+                              bgcolor: '#fff',
+                              boxShadow: '1px 0 0 rgba(15,23,42,0.08)',
+                            }}
+                          >
+                            <Checkbox
+                              size="small"
+                              checked={pinnedHistoryCollaboratorIds.includes(String(row.collaborator_id))}
+                              onChange={(event) => {
+                                const checked = event.target.checked
+                                setPinnedHistoryCollaboratorIds((prev) => {
+                                  const id = String(row.collaborator_id)
+                                  if (checked) return prev.includes(id) ? prev : [...prev, id]
+                                  return prev.filter((item) => item !== id)
+                                })
+                              }}
+                              inputProps={{ 'aria-label': `Fijar ${formatFullName(row.collaborator)}` }}
+                              sx={{
+                                p: 0.25,
+                                color: colors.blue6,
+                                '&.Mui-checked': { color: colors.blue6 },
+                              }}
+                            />
+                          </TableCell>
                           <TableCell sx={getStickyCellSx('document')}>
-                            <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 600 }}>
-                              {formatDocument(row.collaborator?.document)}
-                            </Typography>
+                            <Tooltip
+                              arrow
+                              placement="right"
+                              disableInteractive={false}
+                              title={<ContactHoverContent collaborator={row.collaborator} rowKey={`${row.collaborator_id}-history`} />}
+                            >
+                              <Typography
+                                variant="body2"
+                                noWrap
+                                sx={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'help' }}
+                              >
+                                {formatDocument(row.collaborator?.document)}
+                              </Typography>
+                            </Tooltip>
                           </TableCell>
                           <TableCell sx={getStickyCellSx('name')}>
                             <Typography variant="body2" noWrap sx={{ fontSize: '0.8rem', fontWeight: 600 }}>
@@ -1600,6 +2339,150 @@ export default function AttendancePage() {
               </>
             )}
           </Paper>
+          <Dialog
+            open={summaryModalOpen}
+            onClose={() => setSummaryModalOpen(false)}
+            fullWidth
+            maxWidth="lg"
+            PaperProps={{
+              sx: {
+                borderRadius: 2,
+                overflow: 'hidden',
+              },
+            }}
+          >
+            <DialogTitle
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+                bgcolor: colors.blue4,
+                color: colors.white,
+                py: 1.4,
+                px: { xs: 1.5, md: 2 },
+              }}
+            >
+              <Box>
+                <Typography sx={{ fontWeight: 900, fontSize: { xs: 18, md: 20 }, lineHeight: 1.15 }}>
+                  Resumen de asistencia
+                </Typography>
+                <Typography sx={{ color: colors.blue15, fontSize: 13, mt: 0.35 }}>
+                  {exportDates.length > 1
+                    ? `${formatDateLabel(exportDates[0])} - ${formatDateLabel(exportDates[exportDates.length - 1])}`
+                    : formatDateLabel(exportDates[0] || dailyDate)}
+                </Typography>
+              </Box>
+              <Assessment sx={{ color: colors.blue14 }} />
+            </DialogTitle>
+            <DialogContent sx={{ bgcolor: colors.gray10, p: { xs: 1.25, md: 2 } }}>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' },
+                  gap: 1,
+                  mb: 1.5,
+                }}
+              >
+                {[
+                  { label: 'Directos rango', value: attendanceSummaryTotals.direct, color: colors.blue6 },
+                  { label: 'Indirectos rango', value: attendanceSummaryTotals.indirect, color: colors.blue8 },
+                  { label: 'Total rango', value: attendanceSummaryTotals.total, color: colors.gold3 },
+                  { label: 'Mayor día', value: `${attendanceSummaryPeak.total} · ${attendanceSummaryPeak.label}`, color: colors.gold2 },
+                ].map((item) => (
+                  <Box
+                    key={item.label}
+                    sx={{
+                      bgcolor: colors.white,
+                      border: `1px solid ${colors.gray9}`,
+                      borderRadius: 1,
+                      p: 1.25,
+                      minHeight: 58,
+                      boxShadow: '0 8px 18px rgba(15,23,42,0.06)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                    }}
+                  >
+                    <Typography sx={{ fontSize: 12, color: colors.blue7, fontWeight: 800, textTransform: 'uppercase', lineHeight: 1.15 }}>
+                      {item.label}
+                    </Typography>
+                    <Typography sx={{ fontSize: { xs: 20, md: 22 }, lineHeight: 1, fontWeight: 900, color: item.color, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {item.value}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1.35fr) minmax(280px, 0.65fr)' },
+                  gap: 1.25,
+                  alignItems: 'stretch',
+                }}
+              >
+                <Box sx={{ bgcolor: colors.white, border: `1px solid ${colors.gray9}`, borderRadius: 1, p: 1.25, minHeight: 320 }}>
+                  <Typography sx={{ fontWeight: 900, color: colors.gray1, mb: 1 }}>
+                    Dotación por día
+                  </Typography>
+                  <Box sx={{ width: '100%', height: 270 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={attendanceSummaryRows} margin={{ top: 8, right: 12, left: -12, bottom: 6 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={colors.gray9} />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                        <RechartsTooltip />
+                        <Legend />
+                        <Bar dataKey="direct" name="Directos" fill={colors.blue6} radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="indirect" name="Indirectos" fill={colors.gold3} radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Box>
+                </Box>
+
+                <Box sx={{ bgcolor: colors.white, border: `1px solid ${colors.gray9}`, borderRadius: 1, p: 1.25, minHeight: 320 }}>
+                  <Typography sx={{ fontWeight: 900, color: colors.gray1, mb: 1 }}>
+                    Detalle diario
+                  </Typography>
+                  <TableContainer sx={{ maxHeight: 276 }}>
+                    <Table stickyHeader size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 900, bgcolor: colors.blue15 }}>Día</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.blue15 }}>Dir.</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.blue15 }}>Ind.</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.blue15 }}>Total</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {attendanceSummaryRows.map((row) => (
+                          <TableRow key={row.date}>
+                            <TableCell>{row.label}</TableCell>
+                            <TableCell align="right">{row.direct}</TableCell>
+                            <TableCell align="right">{row.indirect}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 900 }}>{row.total}</TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 900, bgcolor: colors.gray10 }}>TOTAL</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.gray10 }}>{attendanceSummaryTotals.direct}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.gray10 }}>{attendanceSummaryTotals.indirect}</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, bgcolor: colors.gray10 }}>{attendanceSummaryTotals.total}</TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              </Box>
+            </DialogContent>
+            <DialogActions sx={{ px: 2, py: 1, bgcolor: colors.white, borderTop: `1px solid ${colors.gray9}` }}>
+              <Button onClick={() => setSummaryModalOpen(false)} variant="outlined" sx={{ textTransform: 'none', fontWeight: 800 }}>
+                Cerrar
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Container>
       </Box>
     </Box>

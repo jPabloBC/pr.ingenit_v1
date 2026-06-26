@@ -4933,6 +4933,71 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][evidence] dialog open 
     return text
   }
 
+  const ReadOnlyReportField = ({
+    label,
+    value,
+    width,
+    minWidth,
+    flex,
+  }: {
+    label: string
+    value: any
+    width?: any
+    minWidth?: any
+    flex?: any
+  }) => {
+    const display = displayOrDash(value)
+    const hasValue = display !== '-'
+    return (
+      <Tooltip title={hasValue ? display : ''} disableHoverListener={!hasValue} arrow>
+        <Box
+          sx={{
+            width: width || { xs: '100%', lg: 220 },
+            minWidth: minWidth || { xs: 0, lg: 180 },
+            flex: flex || { lg: '0 1 220px' },
+            minHeight: 40,
+            px: 1.25,
+            py: 0.55,
+            border: '1px solid rgba(0, 0, 0, 0.23)',
+            borderRadius: 1,
+            bgcolor: '#fff',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            overflow: 'hidden',
+          }}
+        >
+          <Typography
+            component="span"
+            sx={{
+              color: colors.gray5,
+              fontSize: 11,
+              lineHeight: 1,
+              mb: 0.35,
+              textTransform: 'none !important',
+            }}
+          >
+            {label}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              color: colors.gray2,
+              fontSize: 13,
+              lineHeight: 1.25,
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {String(display).toUpperCase()}
+          </Typography>
+        </Box>
+      </Tooltip>
+    )
+  }
+
   const resolveAreaByMode = useCallback((specificArea?: string) => {
     const rowArea = String(specificArea || '').trim()
     return rowArea || String(area || '').trim()
@@ -11152,34 +11217,39 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         alignContent: { lg: 'center' }
                       }}
                     >
-                    <Box sx={{ width: { xs: '100%', lg: 180 }, minWidth: { xs: 0, lg: 180 }, flex: { lg: '0 1 180px' } }}>
-                      <LocalizationProvider dateAdapter={AdapterDateFns}>
-                        <DatePicker
-                          label="Fecha"
-                          value={reportDateValue}
-                          onChange={(value) => {
-                            if (!value || isNaN(value.getTime())) {
-                              setReportDate('')
-                              return
-                            }
-                            setReportDate(format(value, 'yyyy-MM-dd'))
-                          }}
-                          format="yyyy-MM-dd"
-                          shouldDisableDate={shouldDisableReportDate}
-                          disabled={isView}
-                          slotProps={{
-                            textField: {
-                              size: 'small',
-                              sx: { width: '100%', minWidth: 0 },
-                              helperText: isUserRole && isNew && !loadingActivityDates && availableDateSet.size === 0
-                                ? 'Sin actividades'
-                                : undefined,
-                            }
-                          }}
-                        />
-                      </LocalizationProvider>
-                    </Box>
-                    {isUserRole && !isView && !isEditingExisting ? (
+                    {isView ? (
+                      <ReadOnlyReportField label="Fecha" value={reportDate || '-'} width={{ xs: '100%', lg: 180 }} minWidth={{ xs: 0, lg: 180 }} flex={{ lg: '0 1 180px' }} />
+                    ) : (
+                      <Box sx={{ width: { xs: '100%', lg: 180 }, minWidth: { xs: 0, lg: 180 }, flex: { lg: '0 1 180px' } }}>
+                        <LocalizationProvider dateAdapter={AdapterDateFns}>
+                          <DatePicker
+                            label="Fecha"
+                            value={reportDateValue}
+                            onChange={(value) => {
+                              if (!value || isNaN(value.getTime())) {
+                                setReportDate('')
+                                return
+                              }
+                              setReportDate(format(value, 'yyyy-MM-dd'))
+                            }}
+                            format="yyyy-MM-dd"
+                            shouldDisableDate={shouldDisableReportDate}
+                            slotProps={{
+                              textField: {
+                                size: 'small',
+                                sx: { width: '100%', minWidth: 0 },
+                                helperText: isUserRole && isNew && !loadingActivityDates && availableDateSet.size === 0
+                                  ? 'Sin actividades'
+                                  : undefined,
+                              }
+                            }}
+                          />
+                        </LocalizationProvider>
+                      </Box>
+                    )}
+                    {isView ? (
+                      <ReadOnlyReportField label="Cuadrilla" value={reportCrewNameLabel} width={{ xs: '100%', lg: 320 }} minWidth={{ xs: 0, lg: 260 }} flex={{ lg: '0 1 320px' }} />
+                    ) : isUserRole && !isEditingExisting ? (
 	                      <TextField
 	                        select
 	                        label="Cuadrilla"
@@ -11213,6 +11283,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	                    ) : (
 	                      <TextField label="Cuadrilla" size="small" value={reportCrewNameLabel} disabled sx={{ width: { xs: '100%', lg: 320 }, minWidth: { xs: 0, lg: 260 }, flex: { lg: '0 1 320px' } }} />
 	                    )}
+                    {isView ? (
+                      <ReadOnlyReportField label="Área" value={area || 'Sin área'} width={{ xs: '100%', lg: 300 }} minWidth={{ xs: 0, lg: 240 }} flex={{ lg: '0 1 300px' }} />
+                    ) : (
 	                    <TextField
                       select
                       label="Área"
@@ -11230,7 +11303,11 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         <MenuItem key={a} value={a}>{a}</MenuItem>
                       ))}
                     </TextField>
+                    )}
                     
+                    {isView ? (
+                      <ReadOnlyReportField label="Frente" value={workFront || 'Sin frente'} width={{ xs: '100%', lg: 280 }} minWidth={{ xs: 0, lg: 220 }} flex={{ lg: '0 1 280px' }} />
+                    ) : (
                     <TextField
                       select
                       label="Frente"
@@ -11248,12 +11325,14 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         <MenuItem key={opt} value={opt}>{opt}</MenuItem>
                       ))}
                     </TextField>
-                    <Tooltip title={displayOrDash(formatPeopleLabel(supervisor)) === '-' ? '' : displayOrDash(formatPeopleLabel(supervisor))} disableHoverListener={displayOrDash(formatPeopleLabel(supervisor)) === '-'}>
-                      <TextField label="Supervisor" size="small" value={displayOrDash(formatPeopleLabel(supervisor))} disabled sx={{ width: { xs: '100%', lg: 240 }, minWidth: { xs: 0, lg: 200 }, flex: { lg: '0 1 240px' } }} />
-                    </Tooltip>
-                    <TextField label="Especialidad" size="small" value={String(formatSpecialtyLabel(specialty) || '').toUpperCase()} disabled sx={{ width: { xs: '100%', lg: 200 }, minWidth: { xs: 0, lg: 170 }, flex: { lg: '0 1 200px' } }} />
+                    )}
+                    <ReadOnlyReportField label="Supervisor" value={formatPeopleLabel(supervisor)} width={{ xs: '100%', lg: 240 }} minWidth={{ xs: 0, lg: 200 }} flex={{ lg: '0 1 240px' }} />
+                    <ReadOnlyReportField label="Especialidad" value={formatSpecialtyLabel(specialty)} width={{ xs: '100%', lg: 200 }} minWidth={{ xs: 0, lg: 170 }} flex={{ lg: '0 1 200px' }} />
                     {(reportDesignVersion === 'V2' || isUserRole) ? (
                       <>
+                        {isView ? (
+                          <ReadOnlyReportField label="Emitido por" value={emittedByWorker?.name || selectedReport?.emitted_by_name || ''} width={{ xs: '100%', lg: 240 }} minWidth={{ xs: 0, lg: 200 }} flex={{ lg: '0 1 240px' }} />
+                        ) : (
                         <TextField
                           select
                           label="Emitido por"
@@ -11282,13 +11361,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             <MenuItem key={w.id} value={w.id}>{String(w.name || '').toUpperCase()}</MenuItem>
                           ))}
                         </TextField>
-                        <TextField
-                          label="Cargo"
-                          size="small"
-                          value={String(emittedByWorker?.position || '').toUpperCase()}
-                          disabled
-                          sx={{ width: { xs: '100%', lg: 200 }, minWidth: { xs: 0, lg: 170 }, flex: { lg: '0 1 200px' } }}
-                        />
+                        )}
+                        <ReadOnlyReportField label="Cargo" value={emittedByWorker?.position || ''} width={{ xs: '100%', lg: 200 }} minWidth={{ xs: 0, lg: 170 }} flex={{ lg: '0 1 200px' }} />
                       </>
                     ) : null}
                     <Button
@@ -11301,6 +11375,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                     </Button>
                     {showMoreReportOptions ? (
                       <>
+                        {isView ? (
+                          <ReadOnlyReportField label="Área trabajo" value={areaAssignmentMode === 'individual' ? 'Individual' : 'Global'} width={{ xs: '100%', lg: 190 }} minWidth={{ xs: 0, lg: 170 }} flex={{ lg: '0 1 190px' }} />
+                        ) : (
                         <TextField
                           select
                           size="small"
@@ -11313,6 +11390,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           <MenuItem value="global">Global</MenuItem>
                           <MenuItem value="individual">Individual</MenuItem>
                         </TextField>
+                        )}
+                        {isView ? (
+                          <ReadOnlyReportField label="Turno" value={turno === 'Noche' ? 'Noche' : 'Día'} width={{ xs: '100%', lg: 120 }} minWidth={{ xs: 0, lg: 110 }} flex={{ lg: '0 1 120px' }} />
+                        ) : (
                         <TextField
                           select
                           size="small"
@@ -11325,6 +11406,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           <MenuItem value="Dia">Día</MenuItem>
                           <MenuItem value="Noche">Noche</MenuItem>
                         </TextField>
+                        )}
                         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5, alignSelf: 'center', width: { xs: '100%', lg: 'auto' }, minWidth: { xs: 0, lg: 280 }, flex: { lg: '0 1 280px' } }}>
                           <Typography variant="caption">Condición Climática:</Typography>
                           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -11337,6 +11419,28 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                 const icon = React.isValidElement(children)
                                   ? React.cloneElement(children as React.ReactElement<any>, { stroke: active ? '#ffffff' : theme.palette.text.secondary, size: 22 })
                                   : children
+                                if (isViewLocal && !active) return null
+                                if (isViewLocal) {
+                                  return (
+                                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mx: 0.5 }}>
+                                      <Box
+                                        sx={{
+                                          width: 45,
+                                          height: 30,
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          borderRadius: 1,
+                                          bgcolor: theme.palette.primary.main,
+                                          border: `1px solid ${theme.palette.primary.main}`,
+                                        }}
+                                      >
+                                        {icon}
+                                      </Box>
+                                      <Typography variant="caption" sx={{ mt: 0, fontSize: 11, color: theme.palette.primary.main }}>{label}</Typography>
+                                    </Box>
+                                  )
+                                }
                                 return (
                                   <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: canToggleWeather ? 'pointer' : 'default', mx: 0.5, opacity: canToggleWeather || active ? 1 : 0.5 }} onClick={canToggleWeather ? onClick : undefined} role="button" aria-pressed={active}>
                                     <Box
@@ -11367,11 +11471,19 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                 </>
                               )
                             })()}
+                            {isView && !weather.sunny && !weather.cloudy && !weather.rain && !weather.snow ? (
+                              <Typography variant="body2" sx={{ color: colors.gray2, fontWeight: 600, minHeight: 30, display: 'flex', alignItems: 'center' }}>
+                                -
+                              </Typography>
+                            ) : null}
                           </Box>
                         {(!isView && !isEditingExisting && (!reportCrewIds || reportCrewIds.length === 0)) ? (
                           <Typography variant="caption" sx={{ color: '#94a3b8' }}>Seleccione una cuadrilla</Typography>
                         ) : null}
                         </Box>
+                        {isView ? (
+                          <ReadOnlyReportField label="Versión diseño" value={REPORT_DESIGN_VERSIONS.find((v) => v.value === reportDesignVersion)?.label || reportDesignVersion} width={{ xs: '100%', lg: 220 }} minWidth={{ xs: 0, lg: 220 }} flex={{ lg: '0 1 220px' }} />
+                        ) : (
                         <TextField
                           select
                           label="Versión diseño"
@@ -11387,6 +11499,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             </MenuItem>
                           ))}
                         </TextField>
+                        )}
                       </>
                     ) : null}
                     </Box>

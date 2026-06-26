@@ -117,6 +117,9 @@ export async function GET(request: NextRequest) {
     const includeBounds = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('include_bounds') || '').trim().toLowerCase()
     )
+    const boundsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('bounds') || '').trim().toLowerCase()
+    )
     const turnoIdsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('turno_ids') || '').trim().toLowerCase()
     )
@@ -175,6 +178,39 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const fetchBounds = async () => {
+      let minQuery = supabaseAdmin
+        .from('pr_collaborator_daily_status')
+        .select('work_date')
+        .eq('company_id', companyId)
+
+      let maxQuery = supabaseAdmin
+        .from('pr_collaborator_daily_status')
+        .select('work_date')
+        .eq('company_id', companyId)
+
+      if (collaboratorId) {
+        minQuery = minQuery.eq('collaborator_id', collaboratorId)
+        maxQuery = maxQuery.eq('collaborator_id', collaboratorId)
+      }
+      if (statusFilter) {
+        minQuery = minQuery.eq('status', statusFilter)
+        maxQuery = maxQuery.eq('status', statusFilter)
+      }
+
+      const [{ data: minRows, error: minError }, { data: maxRows, error: maxError }] = await Promise.all([
+        minQuery.order('work_date', { ascending: true }).limit(1),
+        maxQuery.order('work_date', { ascending: false }).limit(1),
+      ])
+      if (minError) throw minError
+      if (maxError) throw maxError
+
+      return {
+        min_work_date: String(minRows?.[0]?.work_date || '').trim() || null,
+        max_work_date: String(maxRows?.[0]?.work_date || '').trim() || null,
+      }
+    }
+
     const hasRangeQuery = Boolean(dateFromRaw || dateToRaw)
     let dateFrom = dateFromRaw
     let dateTo = dateToRaw
@@ -188,6 +224,14 @@ export async function GET(request: NextRequest) {
         dateFrom = dateTo
         dateTo = tmp
       }
+    }
+
+    if (boundsOnly) {
+      const bounds = await fetchBounds()
+      return NextResponse.json({
+        ...bounds,
+        company_id: companyId,
+      })
     }
 
     const buildStatusQuery = () => {
@@ -331,31 +375,9 @@ export async function GET(request: NextRequest) {
     let min_work_date: string | null = null
     let max_work_date: string | null = null
     if (includeBounds) {
-      let minQuery = supabaseAdmin
-        .from('pr_collaborator_daily_status')
-        .select('work_date')
-        .eq('company_id', companyId)
-
-      let maxQuery = supabaseAdmin
-        .from('pr_collaborator_daily_status')
-        .select('work_date')
-        .eq('company_id', companyId)
-
-      if (collaboratorId) {
-        minQuery = minQuery.eq('collaborator_id', collaboratorId)
-        maxQuery = maxQuery.eq('collaborator_id', collaboratorId)
-      }
-      if (statusFilter) {
-        minQuery = minQuery.eq('status', statusFilter)
-        maxQuery = maxQuery.eq('status', statusFilter)
-      }
-
-      const [{ data: minRows }, { data: maxRows }] = await Promise.all([
-        minQuery.order('work_date', { ascending: true }).limit(1),
-        maxQuery.order('work_date', { ascending: false }).limit(1),
-      ])
-      min_work_date = String(minRows?.[0]?.work_date || '').trim() || null
-      max_work_date = String(maxRows?.[0]?.work_date || '').trim() || null
+      const bounds = await fetchBounds()
+      min_work_date = bounds.min_work_date
+      max_work_date = bounds.max_work_date
     }
 
     if (hasRangeQuery) {
