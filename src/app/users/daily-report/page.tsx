@@ -329,6 +329,7 @@ type DailyForm = {
   v2_equipment_front_distribution_overrides?: Record<string, number[]>
   [key: string]: any
 }
+type EditSourceMode = "snapshot" | "field_reports"
 type EvidenceFileLite = {
   key: string
   name?: string
@@ -691,11 +692,37 @@ const collectDynamicFrontColumns = (
 }
 
 const splitDynamicFrontColumnsByBlock = (columns: DynamicFrontColumn[]): DynamicFrontColumnsByBlock => {
-  const firstCount = Math.ceil((columns || []).length / 2)
-  return {
-    CANALETAS: (columns || []).slice(0, firstCount),
-    PISCINAS: (columns || []).slice(firstCount)
+  const fallbackSplit = (items: DynamicFrontColumn[]): DynamicFrontColumnsByBlock => {
+    const firstCount = Math.ceil((items || []).length / 2)
+    return {
+      CANALETAS: (items || []).slice(0, firstCount),
+      PISCINAS: (items || []).slice(firstCount)
+    }
   }
+  const inferColumnFront = (column: DynamicFrontColumn): "CANALETAS" | "PISCINAS" | null => {
+    const label = normalizeDynamicFrontKey(`${column?.label || ""} ${column?.key || ""}`)
+    const nocMatches = Array.from(label.matchAll(/NOC\s+N?[º°]?\s*0*(\d+)/g))
+    const nocNumber = Number(nocMatches[0]?.[1] || 0)
+    if (Number.isFinite(nocNumber) && nocNumber > 0) return nocNumber % 2 === 0 ? "PISCINAS" : "CANALETAS"
+    if (label.includes("PISCIN")) return "PISCINAS"
+    if (label.includes("CANALET")) return "CANALETAS"
+    return null
+  }
+  const assigned: DynamicFrontColumnsByBlock = { CANALETAS: [], PISCINAS: [] }
+  const unassigned: DynamicFrontColumn[] = []
+  ;(columns || []).forEach((column) => {
+    const front = inferColumnFront(column)
+    if (front) assigned[front].push(column)
+    else unassigned.push(column)
+  })
+  if (assigned.CANALETAS.length > 0 || assigned.PISCINAS.length > 0) {
+    const fallback = fallbackSplit(unassigned)
+    return {
+      CANALETAS: [...assigned.CANALETAS, ...fallback.CANALETAS],
+      PISCINAS: [...assigned.PISCINAS, ...fallback.PISCINAS]
+    }
+  }
+  return fallbackSplit(columns || [])
 }
 
 const parseDynamicFrontColumns = (value: any): DynamicFrontColumn[] => {
@@ -2144,6 +2171,8 @@ function DetailPersonnelEquipmentV2({
     allocated: { canaletas: 0, piscinas: 0, nocCanaletas: 0, nocPiscinas: 0 }
   },
   usePersistedSnapshotValues = true,
+  preferPersistedDynamicColumns = false,
+  preferPersistedSnapshotData = false,
   readOnly = false
 }: {
   form: DailyForm
@@ -2256,6 +2285,8 @@ function DetailPersonnelEquipmentV2({
     allocated: { canaletas: number; piscinas: number; nocCanaletas: number; nocPiscinas: number }
   }
   usePersistedSnapshotValues?: boolean
+  preferPersistedDynamicColumns?: boolean
+  preferPersistedSnapshotData?: boolean
   readOnly?: boolean
 }) {
   const [managementEquipmentRows, setManagementEquipmentRows] = useState<ManagementEquipmentSnapshotRow[]>([])
@@ -2387,13 +2418,33 @@ function DetailPersonnelEquipmentV2({
   }, [form])
   const dynamicFrontColumns = useMemo(() => {
     const activeFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
-    const liveColumns = collectDynamicFrontColumns(fieldReportsForDynamicColumns || [], reportFrontNames || [])
-    const columnsByBlock = liveColumns.length > 0
-      ? splitDynamicFrontColumnsByBlock(liveColumns)
-      : persistedDynamicFrontColumnsByBlock || splitDynamicFrontColumnsByBlock(persistedDynamicFrontColumns)
+    const persistedColumnsByBlock = persistedDynamicFrontColumnsByBlock || (
+      persistedDynamicFrontColumns.length > 0 ? splitDynamicFrontColumnsByBlock(persistedDynamicFrontColumns) : null
+    )
+    const shouldPreferPersistedSnapshotData = Boolean(preferPersistedSnapshotData || (readOnly && usePersistedSnapshotValues))
+    const shouldUsePersistedColumns = Boolean((preferPersistedDynamicColumns || shouldPreferPersistedSnapshotData) && persistedColumnsByBlock)
+    const liveColumns = shouldUsePersistedColumns
+      ? []
+      : collectDynamicFrontColumns(fieldReportsForDynamicColumns || [], reportFrontNames || [])
+    const columnsByBlock = shouldUsePersistedColumns
+      ? persistedColumnsByBlock!
+      : (liveColumns.length > 0
+        ? splitDynamicFrontColumnsByBlock(liveColumns)
+        : persistedColumnsByBlock || splitDynamicFrontColumnsByBlock(persistedDynamicFrontColumns))
     return columnsByBlock[activeFront] || []
-  }, [fieldReportsForDynamicColumns, form.work_front, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, reportFrontNames])
+  }, [fieldReportsForDynamicColumns, form.work_front, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, preferPersistedDynamicColumns, preferPersistedSnapshotData, readOnly, reportFrontNames, usePersistedSnapshotValues])
   const allDynamicFrontColumns = useMemo(() => {
+    const persistedColumnsByBlock = persistedDynamicFrontColumnsByBlock || (
+      persistedDynamicFrontColumns.length > 0 ? splitDynamicFrontColumnsByBlock(persistedDynamicFrontColumns) : null
+    )
+    const shouldPreferPersistedSnapshotData = Boolean(preferPersistedSnapshotData || (readOnly && usePersistedSnapshotValues))
+    const shouldUsePersistedColumns = Boolean((preferPersistedDynamicColumns || shouldPreferPersistedSnapshotData) && persistedColumnsByBlock)
+    if (shouldUsePersistedColumns) {
+      return [
+        ...(persistedColumnsByBlock!.CANALETAS || []),
+        ...(persistedColumnsByBlock!.PISCINAS || [])
+      ]
+    }
     const liveColumns = collectDynamicFrontColumns(fieldReportsForDynamicColumns || [], reportFrontNames || [])
     if (liveColumns.length > 0) return liveColumns
     if (persistedDynamicFrontColumns.length > 0) return persistedDynamicFrontColumns
@@ -2404,7 +2455,7 @@ function DetailPersonnelEquipmentV2({
       ]
     }
     return []
-  }, [fieldReportsForDynamicColumns, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, reportFrontNames])
+  }, [fieldReportsForDynamicColumns, persistedDynamicFrontColumns, persistedDynamicFrontColumnsByBlock, preferPersistedDynamicColumns, preferPersistedSnapshotData, readOnly, reportFrontNames, usePersistedSnapshotValues])
   const dynamicFrontColumnLabels = dynamicFrontColumns.map((column) => column.label)
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
@@ -2418,9 +2469,10 @@ function DetailPersonnelEquipmentV2({
       })
     }
   }, [allDynamicFrontColumns, dynamicFrontColumns, fieldReportsForDynamicColumns.length, form.work_front])
+  const hasStructuredDynamicFrontColumns = allDynamicFrontColumns.length > 0
   const dynamicDotacionFrontLabels = dynamicFrontColumnLabels.length > 0
     ? dynamicFrontColumnLabels
-    : (hasNocFrontColumn ? [String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"] : [])
+    : (!hasStructuredDynamicFrontColumns && hasNocFrontColumn ? [String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"] : [])
   const resolvedNocFrontColumnLabel = dynamicDotacionFrontLabels[0] || String(nocFrontColumnLabel || "UDR NOC").trim() || "UDR NOC"
   const dotacionFrenteColumns = [
     "INSTALACIÓN FAENA",
@@ -2462,7 +2514,7 @@ function DetailPersonnelEquipmentV2({
   const nocSoftCellBg = "#fff3e6"
   const leftSectionCols = personalColumns.length + dotacionFrenteColumns.length + 3
   const rightSectionCols = equiposColumns.length + maquinariaFrenteColumns.length + 3
-  const strictSnapshotView = Boolean(readOnly && usePersistedSnapshotValues)
+  const strictSnapshotView = Boolean(preferPersistedSnapshotData || (readOnly && usePersistedSnapshotValues))
 
   useEffect(() => {
     if (strictSnapshotView) {
@@ -6344,6 +6396,7 @@ export default function DailyReportPage() {
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null)
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateKey>("daily_v2")
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editSourceMode, setEditSourceMode] = useState<EditSourceMode>("snapshot")
   const [viewRecord, setViewRecord] = useState<DailyReportRecord | null>(null)
   const [exporting, setExporting] = useState(false)
   const [activeActionRecordId, setActiveActionRecordId] = useState<string | null>(null)
@@ -6400,6 +6453,8 @@ export default function DailyReportPage() {
   })
   const editHydrationLockRef = useRef(false)
   const isViewingHistoryVersion = !!historyViewMeta
+  const isEditSnapshotMode = Boolean(editingId && editSourceMode === "snapshot")
+  const isEditReformulateMode = Boolean(editingId && editSourceMode === "field_reports")
   const indirectHoursSettingsMatchSaved = useMemo(
     () => stableIndirectHoursSettingsKey(indirectHoursOverrides, indirectHoursFrontApplyScope, indirectHoursFrontOverrides) === savedIndirectHoursSettingsKey,
     [indirectHoursOverrides, indirectHoursFrontApplyScope, indirectHoursFrontOverrides, savedIndirectHoursSettingsKey]
@@ -7243,7 +7298,7 @@ export default function DailyReportPage() {
 
   const v2IndirectAttendanceRows = useMemo(() => {
     const persistedRows = getPersistedV2RowsFromForm(form, "v2_detail_indirect_rows")
-    const shouldUsePersistedRows = (isViewingHistoryVersion || viewOpen)
+    const shouldUsePersistedRows = (isViewingHistoryVersion || viewOpen || isEditSnapshotMode)
     if (shouldUsePersistedRows) {
       if (persistedRows.length === 0) return []
       if (editingId) {
@@ -7360,11 +7415,11 @@ export default function DailyReportPage() {
     })
 
     return Array.from(groups.values()).sort((a, b) => a.position.localeCompare(b.position, "es", { sensitivity: "base" }))
-  }, [dailyStatusRows, collaborators, editingId, form, isViewingHistoryVersion, viewOpen])
+  }, [dailyStatusRows, collaborators, editingId, form, isEditSnapshotMode, isViewingHistoryVersion, viewOpen])
 
   const v2DirectAttendanceRows = useMemo(() => {
     const persistedRows = getPersistedV2RowsFromForm(form, "v2_detail_direct_rows")
-    const shouldUsePersistedRows = (isViewingHistoryVersion || viewOpen)
+    const shouldUsePersistedRows = (isViewingHistoryVersion || viewOpen || isEditSnapshotMode)
     if (shouldUsePersistedRows) {
       if (persistedRows.length === 0) return []
       if (editingId) {
@@ -7511,7 +7566,7 @@ export default function DailyReportPage() {
       if (bySpec !== 0) return bySpec
       return a.position.localeCompare(b.position, "es", { sensitivity: "base" })
     })
-  }, [dailyStatusRows, collaborators, form.report_date, editingId, form, activePersonWorkdayHours, activeHalfDayHours, isViewingHistoryVersion, viewOpen])
+  }, [dailyStatusRows, collaborators, form.report_date, editingId, form, activePersonWorkdayHours, activeHalfDayHours, isEditSnapshotMode, isViewingHistoryVersion, viewOpen])
 
   const v2RenderDebugRef = useRef<{
     indirectCount: number
@@ -9959,7 +10014,7 @@ export default function DailyReportPage() {
   )
 
   const hasNocFrontColumn = useMemo(() => {
-    const isStrictPersistedView = Boolean(viewOpen || isViewingHistoryVersion)
+    const isStrictPersistedView = Boolean(viewOpen || isViewingHistoryVersion || isEditSnapshotMode)
     const activeFront: "CANALETAS" | "PISCINAS" = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
     const hasNocAssignedToActiveFront =
       (nocFrontAssignment.codesByFront[activeFront] || []).length > 0 ||
@@ -9998,10 +10053,10 @@ export default function DailyReportPage() {
       Number(row?.nocCanaletas || 0) > 0 || Number(row?.nocPiscinas || 0) > 0
     )
     return hasDirect || hasIndirectSpecial || hasMantExcluded || hasOperatorNoc || hasAnyNocSignal
-  }, [directNocDotationByPosition, frontRoleDotation, mantencionFrontCounts, operatorFrontDotationByPosition, form, form.work_front, nocFrontAssignment, v2IndirectAttendanceRows, v2DirectAttendanceRows, viewOpen, isViewingHistoryVersion])
+  }, [directNocDotationByPosition, frontRoleDotation, mantencionFrontCounts, operatorFrontDotationByPosition, form, form.work_front, nocFrontAssignment, v2IndirectAttendanceRows, v2DirectAttendanceRows, viewOpen, isViewingHistoryVersion, isEditSnapshotMode])
 
   const nocFrontColumnLabel = useMemo(() => {
-    const isStrictPersistedView = Boolean(viewOpen || isViewingHistoryVersion)
+    const isStrictPersistedView = Boolean(viewOpen || isViewingHistoryVersion || isEditSnapshotMode)
     const notes: any = (form as any)?.notes && typeof (form as any).notes === "object" ? (form as any).notes : {}
     const formSnap: any = (form as any)?.v2_form_snapshot && typeof (form as any).v2_form_snapshot === "object" ? (form as any).v2_form_snapshot : {}
     const runtime: any = (form as any)?.v2_runtime_snapshot && typeof (form as any).v2_runtime_snapshot === "object" ? (form as any).v2_runtime_snapshot : {}
@@ -10136,7 +10191,7 @@ export default function DailyReportPage() {
     const codes = nocFrontAssignment.codesByFront[activeFront] || []
     if (!codes.length) return "UDR NOC"
     return codes.join(" / ")
-  }, [form, form.work_front, nocFrontAssignment, fieldReportsForDate, viewOpen, isViewingHistoryVersion, viewRecord])
+  }, [form, form.work_front, nocFrontAssignment, fieldReportsForDate, viewOpen, isViewingHistoryVersion, isEditSnapshotMode, viewRecord])
 
   const normalizeDailyReportFrontHeader = (value: unknown) =>
     String(value ?? "")
@@ -10189,7 +10244,7 @@ export default function DailyReportPage() {
 
   const resolvedDailyReportDynamicFrontLabel = useMemo(() => {
     const strictPersistedLabel = String(nocFrontColumnLabel || "").replace(/\s+/g, " ").trim()
-    if ((viewOpen || isViewingHistoryVersion) && strictPersistedLabel) {
+    if ((viewOpen || isViewingHistoryVersion || isEditSnapshotMode) && strictPersistedLabel) {
       return strictPersistedLabel
     }
 
@@ -10316,7 +10371,7 @@ export default function DailyReportPage() {
     if (dynamicLabels.length >= 1) return joinLabels(dynamicLabels)
 
     return ""
-  }, [fieldReportsForDate, form.work_front, nocFrontColumnLabel, reportFrontNameByNormalized, reportFrontNames, viewOpen, isViewingHistoryVersion])
+  }, [fieldReportsForDate, form.work_front, nocFrontColumnLabel, reportFrontNameByNormalized, reportFrontNames, viewOpen, isViewingHistoryVersion, isEditSnapshotMode])
 
   const getV2DotacionFrenteValues = (row: {
     position?: string
@@ -11390,6 +11445,7 @@ export default function DailyReportPage() {
     const date = initialDate
     setHistoryViewMeta(null)
     setEditingId(null)
+    setEditSourceMode("field_reports")
     setReportTemplate("daily_v2")
     const base = emptyForm(date)
     setForm(base)
@@ -11554,6 +11610,7 @@ export default function DailyReportPage() {
     const inferredTemplate = inferTemplateFromRecord(record)
     setReportTemplate(inferredTemplate)
     setEditingId(record.id)
+    setEditSourceMode("snapshot")
     const normalized = normalizeRecordToForm(record)
     const toNum = (value: unknown) => {
       if (value == null || String(value).trim() === "") return 0
@@ -11697,6 +11754,98 @@ export default function DailyReportPage() {
     }
   }
 
+  const getLiveFieldReportsForCurrentDate = async (force = false) => {
+    const day = String(form.report_date || "").slice(0, 10)
+    if (!day) return []
+    const cached = fieldReportsByDateCacheRef.current[day]
+    if (!force && cached) {
+      setFieldReportsForDate(cached)
+      return cached
+    }
+    const res = await fetch(`/api/field-reports?date=${encodeURIComponent(day)}&summary=1&include_calc=1&limit=50`, { cache: "no-store" })
+    const json = await res.json().catch(() => [])
+    if (!res.ok) throw new Error(String((json as any)?.error || "No se pudieron cargar los reportes de terreno."))
+    const rows = Array.isArray(json) ? json : []
+    fieldReportsByDateCacheRef.current[day] = rows
+    setFieldReportsForDate(rows)
+    return rows
+  }
+
+  const sourceFieldReportIdsFromRows = (rows: any[]) =>
+    Array.from(new Set(
+      (rows || [])
+        .map((report: any) => String(report?.id || "").trim())
+        .filter(Boolean)
+    ))
+
+  const changeEditSourceMode = async (mode: EditSourceMode) => {
+    if (!editingId) return
+    const currentFront = frontFromForm(form)
+
+    if (mode === "snapshot") {
+      if (editSourceMode === "snapshot") return
+      const original = editSessionOriginalByFront[currentFront]
+      if (!original) {
+        showToast(`No hay snapshot guardado para ${currentFront}.`, "error")
+        return
+      }
+      const restored = hydrateVisibleFormFromRecord(original)
+      const indirectSettings = getSavedIndirectHoursSettings(original)
+      setEditSourceMode("snapshot")
+      setDetailVisibleTotals(null)
+      setDetailVisibleRows(null)
+      setForm(restored)
+      setIndirectHoursOverrides(indirectSettings.overrides)
+      setIndirectHoursOverridesDraft(indirectSettings.overrides)
+      setIndirectHoursFrontOverrides(indirectSettings.frontOverrides)
+      setIndirectHoursFrontOverridesDraft(indirectSettings.frontOverrides)
+      setIndirectHoursFrontApplyScope(indirectSettings.frontApplyScope)
+      setSavedIndirectHoursSettingsKey(stableIndirectHoursSettingsKey(indirectSettings.overrides, indirectSettings.frontApplyScope, indirectSettings.frontOverrides))
+      setFrontDraftForms((prev) => ({ ...prev, [currentFront]: restored }))
+      setFrontBaselineHashes((prev) => ({ ...prev, [currentFront]: formHash(restored) }))
+      showToast("Editando el snapshot guardado.", "info")
+      return
+    }
+
+    const shouldContinue = window.confirm(
+      `Se reformulará ${currentFront} leyendo nuevamente los reportes de terreno actuales. Los cambios no guardados de este frente se reemplazarán. ¿Deseas continuar?`
+    )
+    if (!shouldContinue) return
+
+    setBootstrapping(true)
+    try {
+      const liveRows = await getLiveFieldReportsForCurrentDate(true)
+      const liveSourceIds = sourceFieldReportIdsFromRows(liveRows)
+      setEditSourceMode("field_reports")
+      setDetailVisibleTotals(null)
+      setDetailVisibleRows(null)
+      setForm((prev) => ({
+        ...prev,
+        source_field_report_ids: liveSourceIds.length > 0 ? liveSourceIds : prev.source_field_report_ids,
+        v2_front_distribution_overrides: {},
+        v2_equipment_front_distribution_overrides: {}
+      }))
+      setFrontDraftForms((prev) => {
+        const currentDraft = prev[currentFront] || form
+        return {
+          ...prev,
+          [currentFront]: {
+            ...currentDraft,
+            source_field_report_ids: liveSourceIds.length > 0 ? liveSourceIds : currentDraft.source_field_report_ids,
+            v2_front_distribution_overrides: {},
+            v2_equipment_front_distribution_overrides: {}
+          }
+        }
+      })
+      setFrontSavedStatus((prev) => ({ ...prev, [currentFront]: false }))
+      showToast("Reformulado desde reportes de terreno. Revisa y guarda para actualizar el reporte.", "info")
+    } catch (err: any) {
+      showToast(err?.message || "No se pudo reformular desde reportes de terreno.", "error")
+    } finally {
+      setBootstrapping(false)
+    }
+  }
+
   const getRecordFront = (record?: DailyReportRecord | null): "CANALETAS" | "PISCINAS" => {
     if (!record) return "CANALETAS"
     const notes = (record as any)?.notes && typeof (record as any)?.notes === "object" ? (record as any).notes : {}
@@ -11790,15 +11939,27 @@ export default function DailyReportPage() {
     const current = form
     const currentFront = frontFromForm(current)
     const oppositeFront: "CANALETAS" | "PISCINAS" = targetFront === "CANALETAS" ? "PISCINAS" : "CANALETAS"
+    const liveSourceIdsForSession = sourceFieldReportIdsFromRows(fieldReportsForDate || [])
+    const normalizeDraftForCurrentEditMode = (draft: DailyForm): DailyForm =>
+      isEditReformulateMode
+        ? {
+            ...draft,
+            source_field_report_ids: liveSourceIdsForSession.length > 0 ? liveSourceIdsForSession : draft.source_field_report_ids,
+            v2_front_distribution_overrides: {},
+            v2_equipment_front_distribution_overrides: {}
+          }
+        : draft
     const currentDirty = isFrontDirty(currentFront)
     if (currentDirty) {
       const ok = window.confirm(`Hay cambios sin guardar en ${currentFront}. ¿Deseas cambiar de frente igualmente?`)
       if (!ok) return
     }
-    setFrontDraftForms((prev) => ({ ...prev, [currentFront]: current }))
+    setFrontDraftForms((prev) => ({ ...prev, [currentFront]: normalizeDraftForCurrentEditMode(current) }))
     const draftTarget = frontDraftForms[targetFront]
     if (draftTarget) {
-      setForm(draftTarget)
+      const nextDraft = normalizeDraftForCurrentEditMode(draftTarget)
+      setForm(nextDraft)
+      setFrontDraftForms((prev) => ({ ...prev, [targetFront]: nextDraft }))
       if (false) console.debug("[daily-report][front-switch-session]", {
         targetFront,
         source: "draft-cache",
@@ -11826,7 +11987,7 @@ export default function DailyReportPage() {
         showToast(err?.message || `No se pudo cargar el detalle de ${targetFront}`, "error")
         return
       }
-      const hydrated = normalizeRecordToForm(detail)
+      const hydrated = normalizeDraftForCurrentEditMode(normalizeRecordToForm(detail))
       const indirectSettings = getSavedIndirectHoursSettings(detail)
       setForm(hydrated)
       setIndirectHoursOverrides(indirectSettings.overrides)
@@ -11847,9 +12008,7 @@ export default function DailyReportPage() {
       })
       return
     }
-    const sourceIdsForTarget = (fieldReportsForDate || [])
-      .map((report: any) => String(report?.id || "").trim())
-      .filter(Boolean)
+    const sourceIdsForTarget = liveSourceIdsForSession
     const base = {
       ...current,
       work_front: targetFront,
@@ -12286,18 +12445,58 @@ export default function DailyReportPage() {
 
       const currentFormat = frontToFormat(currentFront)
       const frozenEquipmentSnapshotDate = String((form as any)?.equipment_snapshot_date || form.report_date || "").slice(0, 10)
-      const persistedSourceFieldReportIds =
+      const fieldReportsForDynamicColumnsSave = Array.isArray(fieldReportsForDate) ? fieldReportsForDate : []
+      const liveSourceFieldReportIds = sourceFieldReportIdsFromRows(fieldReportsForDynamicColumnsSave)
+      const savedSourceFieldReportIds =
         Array.isArray(form.source_field_report_ids)
           ? Array.from(new Set(form.source_field_report_ids.map((x) => String(x || "").trim()).filter(Boolean)))
           : []
-      const fieldReportsForDynamicColumnsSave = Array.isArray(fieldReportsForDate) ? fieldReportsForDate : []
-      const dynamicFrontColumnsForSave = collectDynamicFrontColumns(fieldReportsForDynamicColumnsSave, reportFrontNames)
-      const dynamicFrontColumnsByBlockForSave = splitDynamicFrontColumnsByBlock(dynamicFrontColumnsForSave)
+      const persistedSourceFieldReportIds =
+        (!editingId || isEditReformulateMode) && liveSourceFieldReportIds.length > 0
+          ? liveSourceFieldReportIds
+          : savedSourceFieldReportIds
+      const snapshotNotes = (form as any)?.notes && typeof (form as any).notes === "object" ? (form as any).notes : {}
+      const snapshotForm = (form as any)?.v2_form_snapshot && typeof (form as any).v2_form_snapshot === "object" ? (form as any).v2_form_snapshot : {}
+      const snapshotRuntime = (form as any)?.v2_runtime_snapshot && typeof (form as any).v2_runtime_snapshot === "object" ? (form as any).v2_runtime_snapshot : {}
+      const persistedDynamicColumnsForSave = parseDynamicFrontColumns(
+        (form as any)?.v2_dynamic_front_columns ??
+        snapshotRuntime?.v2_dynamic_front_columns ??
+        snapshotForm?.v2_dynamic_front_columns ??
+        snapshotNotes?.v2_dynamic_front_columns
+      )
+      const persistedDynamicColumnsByBlockForSave = parseDynamicFrontColumnsByBlock(
+        (form as any)?.v2_dynamic_front_columns_by_block ??
+        snapshotRuntime?.v2_dynamic_front_columns_by_block ??
+        snapshotForm?.v2_dynamic_front_columns_by_block ??
+        snapshotNotes?.v2_dynamic_front_columns_by_block
+      )
+      const shouldPreserveSnapshotDynamicColumns = Boolean(
+        isEditSnapshotMode &&
+        (persistedDynamicColumnsForSave.length > 0 || persistedDynamicColumnsByBlockForSave)
+      )
+      const liveDynamicFrontColumnsForSave = shouldPreserveSnapshotDynamicColumns
+        ? []
+        : collectDynamicFrontColumns(fieldReportsForDynamicColumnsSave, reportFrontNames)
+      const dynamicFrontColumnsForSave = shouldPreserveSnapshotDynamicColumns
+        ? (persistedDynamicColumnsForSave.length > 0
+          ? persistedDynamicColumnsForSave
+          : [
+              ...(persistedDynamicColumnsByBlockForSave?.CANALETAS || []),
+              ...(persistedDynamicColumnsByBlockForSave?.PISCINAS || [])
+            ])
+        : liveDynamicFrontColumnsForSave
+      const dynamicFrontColumnsByBlockForSave = shouldPreserveSnapshotDynamicColumns
+        ? (persistedDynamicColumnsByBlockForSave || splitDynamicFrontColumnsByBlock(dynamicFrontColumnsForSave))
+        : splitDynamicFrontColumnsByBlock(dynamicFrontColumnsForSave)
+      const activeDynamicFrontColumnsForSave = dynamicFrontColumnsByBlockForSave[currentFront] || []
+      const hasStructuredDynamicFrontColumnsForSave = dynamicFrontColumnsForSave.length > 0
       const persistedHasNocFrontColumn =
-        dynamicFrontColumnsForSave.length > 0 ||
-        Boolean(hasNocFrontColumn) ||
-        v2DetailSnapshot.v2_detail_indirect_rows.some((row: any) => Number(row?.nocFront || 0) > 0) ||
-        v2DetailSnapshot.v2_detail_direct_rows.some((row: any) => Number(row?.nocFront || 0) > 0)
+        activeDynamicFrontColumnsForSave.length > 0 ||
+        (!hasStructuredDynamicFrontColumnsForSave && (
+          Boolean(hasNocFrontColumn) ||
+          v2DetailSnapshot.v2_detail_indirect_rows.some((row: any) => Number(row?.nocFront || 0) > 0) ||
+          v2DetailSnapshot.v2_detail_direct_rows.some((row: any) => Number(row?.nocFront || 0) > 0)
+        ))
       const assignmentCodesForFront = (nocFrontAssignment.codesByFront[currentFront] || [])
         .map((code) => String(code || "").trim())
         .filter(Boolean)
@@ -12665,6 +12864,7 @@ export default function DailyReportPage() {
     const normalized = hydrateStrictViewFormFromRecord(snapshot as DailyReportRecord)
     setReportTemplate(inferTemplateFromRecord(snapshot))
     setEditingId(null)
+    setEditSourceMode("snapshot")
     setForm(normalized)
     const indirectSettings = getSavedIndirectHoursSettings(snapshot)
     setIndirectHoursOverrides(indirectSettings.overrides)
@@ -12969,9 +13169,39 @@ export default function DailyReportPage() {
         }
         const hasNocInExportRows = [...v2DetailIndirectRows, ...v2DetailDirectRows]
           .some((row: any) => Number(row?.nocFront || 0) > 0)
+        const overrideDynamicFrontColumns = parseDynamicFrontColumns(
+          (form as any)?.v2_dynamic_front_columns ??
+          (viewRecord as any)?.v2_dynamic_front_columns ??
+          persistedRuntime?.v2_dynamic_front_columns ??
+          persistedFormSnap?.v2_dynamic_front_columns ??
+          persistedNotes?.v2_dynamic_front_columns
+        )
+        const overrideDynamicFrontColumnsByBlock =
+          parseDynamicFrontColumnsByBlock(
+            (form as any)?.v2_dynamic_front_columns_by_block ??
+            (viewRecord as any)?.v2_dynamic_front_columns_by_block ??
+            persistedRuntime?.v2_dynamic_front_columns_by_block ??
+            persistedFormSnap?.v2_dynamic_front_columns_by_block ??
+            persistedNotes?.v2_dynamic_front_columns_by_block
+          ) ||
+          (overrideDynamicFrontColumns.length > 0 ? splitDynamicFrontColumnsByBlock(overrideDynamicFrontColumns) : null)
+        const overrideActiveFront = form.work_front === "PISCINAS" ? "PISCINAS" : "CANALETAS"
+        const overrideActiveDynamicFrontColumns = overrideDynamicFrontColumnsByBlock?.[overrideActiveFront] || []
+        const hasStructuredDynamicFrontColumnsForOverride =
+          overrideDynamicFrontColumns.length > 0 ||
+          Boolean(
+            (overrideDynamicFrontColumnsByBlock?.CANALETAS?.length || 0) +
+            (overrideDynamicFrontColumnsByBlock?.PISCINAS?.length || 0)
+          )
         const exportHasNocFrontColumn = viewOpen
-          ? Boolean(hasNocFrontColumn)
-          : Boolean(hasNocFrontColumn && hasNocInExportRows)
+          ? (
+              overrideActiveDynamicFrontColumns.length > 0 ||
+              (!hasStructuredDynamicFrontColumnsForOverride && Boolean(hasNocFrontColumn))
+            )
+          : (
+              overrideActiveDynamicFrontColumns.length > 0 ||
+              (!hasStructuredDynamicFrontColumnsForOverride && Boolean(hasNocFrontColumn && hasNocInExportRows))
+            )
         if (false) console.log("[daily-report][excel-v2][live-indirect-overrides]", {
           activeOverrides: Object.keys(indirectHoursOverrides || {}).length,
           sample: v2DetailIndirectRows.slice(0, 8).map((row: any) => ({
@@ -12998,12 +13228,16 @@ export default function DailyReportPage() {
           work_calendar: form.work_calendar || selected?.work_calendar,
           weather_label: form.weather_label || selected?.weather_label,
           source_field_report_ids: form.source_field_report_ids || selected?.source_field_report_ids || [],
+          v2_dynamic_front_columns: overrideDynamicFrontColumns,
+          v2_dynamic_front_columns_by_block: overrideDynamicFrontColumnsByBlock || undefined,
           notes: {
             report_template: "daily_v2",
             work_front: form.work_front,
             report_format_code: form.report_format_code,
             v2_has_noc_front_column: exportHasNocFrontColumn,
             v2_noc_front_column_label: nocFrontColumnLabel || "UDR NOC",
+            v2_dynamic_front_columns: overrideDynamicFrontColumns,
+            v2_dynamic_front_columns_by_block: overrideDynamicFrontColumnsByBlock || undefined,
             indirect_hours_overrides: indirectHoursOverrides,
             indirect_hours_front_apply_scope: indirectHoursFrontApplyScope,
             indirect_hours_front_overrides: indirectHoursFrontOverrides,
@@ -13027,6 +13261,8 @@ export default function DailyReportPage() {
             report_format_code: form.report_format_code,
             v2_has_noc_front_column: exportHasNocFrontColumn,
             v2_noc_front_column_label: nocFrontColumnLabel || "UDR NOC",
+            v2_dynamic_front_columns: overrideDynamicFrontColumns,
+            v2_dynamic_front_columns_by_block: overrideDynamicFrontColumnsByBlock || undefined,
             source_field_report_ids: form.source_field_report_ids || selected?.source_field_report_ids || [],
             ...s4Snapshot,
             ...visibleExportSummarySnapshot,
@@ -13044,6 +13280,8 @@ export default function DailyReportPage() {
             report_format_code: form.report_format_code,
             v2_has_noc_front_column: exportHasNocFrontColumn,
             v2_noc_front_column_label: nocFrontColumnLabel || "UDR NOC",
+            v2_dynamic_front_columns: overrideDynamicFrontColumns,
+            v2_dynamic_front_columns_by_block: overrideDynamicFrontColumnsByBlock || undefined,
             ...s4Snapshot,
             ...visibleExportSummarySnapshot,
             ...signerSnapshot,
@@ -13140,6 +13378,7 @@ export default function DailyReportPage() {
     try {
       const record = await fetchDailyReportDetail(String(recordSummary.id || ""))
       setEditingId(null)
+      setEditSourceMode("snapshot")
       setHistoryViewMeta(null)
       setReportTemplate(inferTemplateFromRecord(record))
       const normalized = hydrateStrictViewFormFromRecord(record)
@@ -13694,6 +13933,28 @@ export default function DailyReportPage() {
                   ? "Edición"
                   : ((form.work_front === "PISCINAS" ? frontSavedStatus.PISCINAS : frontSavedStatus.CANALETAS) ? "Guardado" : "No guardado")}
               </Button>
+              {editingId ? (
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                  <Button
+                    size="small"
+                    variant={editSourceMode === "snapshot" ? "contained" : "outlined"}
+                    onClick={() => void changeEditSourceMode("snapshot")}
+                    disabled={saving || bootstrapping}
+                    sx={{ minWidth: 88, whiteSpace: "nowrap", textTransform: "none", fontWeight: 700 }}
+                  >
+                    Guardado
+                  </Button>
+                  <Button
+                    size="small"
+                    variant={editSourceMode === "field_reports" ? "contained" : "outlined"}
+                    onClick={() => void changeEditSourceMode("field_reports")}
+                    disabled={saving || bootstrapping}
+                    sx={{ minWidth: 104, whiteSpace: "nowrap", textTransform: "none", fontWeight: 700 }}
+                  >
+                    Reformular
+                  </Button>
+                </Stack>
+              ) : null}
               <Button
                 variant="outlined"
                 disabled
@@ -13905,6 +14166,7 @@ export default function DailyReportPage() {
                       disableReportDateEdit={!editingId && reportDateOptionsForEditor.length === 0}
                     />
                     <DetailPersonnelEquipmentV2
+                      key={`detail-v2-${editingId || "new"}-${form.work_front}-${editSourceMode}`}
                       form={form}
                       onChange={handleChange}
                       onComputedVisibleTotals={handleComputedVisibleTotals}
@@ -13932,7 +14194,9 @@ export default function DailyReportPage() {
                       nocFrontAssignment={nocFrontAssignment}
                       getFrontCounterpartInfo={getFrontCounterpartInfo}
                       prevencionistaFrontDistribution={prevencionistaFrontDistribution}
-                      usePersistedSnapshotValues={Boolean(isViewingHistoryVersion || viewOpen || (!editingId && indirectHoursSettingsMatchSaved))}
+                      usePersistedSnapshotValues={Boolean(isViewingHistoryVersion || viewOpen || isEditSnapshotMode || (!editingId && indirectHoursSettingsMatchSaved))}
+                      preferPersistedDynamicColumns={isEditSnapshotMode}
+                      preferPersistedSnapshotData={isEditSnapshotMode}
                     />
                     <SummaryInformationToDateV2
                       form={form}

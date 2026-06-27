@@ -1357,6 +1357,12 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const dynamicFrontColumnsForExport = persistedDynamicFrontColumnsByBlock
         ? persistedDynamicFrontColumnsByBlock[reportFront]
         : splitPersistedDynamicColumns(persistedDynamicFrontColumns)[reportFront]
+      const hasStructuredDynamicFrontColumnsForExport =
+        persistedDynamicFrontColumns.length > 0 ||
+        Boolean(
+          (persistedDynamicFrontColumnsByBlock?.CANALETAS?.length || 0) +
+          (persistedDynamicFrontColumnsByBlock?.PISCINAS?.length || 0)
+        )
       const strictVisibleRowsHaveNocFront = (() => {
         if (!strictVisibleMode) return false
         const indirect = pickArray('v2_detail_indirect_rows', 'detail_indirect_rows')
@@ -1366,7 +1372,10 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
         return [...indirect, ...direct, ...major, ...minor].some((row: any) => hasPositiveNocFront(row?.nocFront))
       })()
       const hasDynamicNocColumn = strictVisibleMode
-        ? (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag || strictVisibleRowsHaveNocFront)
+        ? (
+            dynamicFrontColumnsForExport.length > 0 ||
+            (!hasStructuredDynamicFrontColumnsForExport && (hasDynamicNocColumnFlag || strictVisibleRowsHaveNocFront))
+          )
         : (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag)
       const rawNocFrontLabel = String(
         (report as any)?.v2_noc_front_column_label ??
@@ -1463,7 +1472,7 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const nocFrontLabel = resolveNocFrontLabel()
       const dynamicFrontLabels = dynamicFrontColumnsForExport.length > 0
         ? dynamicFrontColumnsForExport.map((column) => column.label)
-        : (hasDynamicNocColumn ? [nocFrontLabel] : [])
+        : (!hasStructuredDynamicFrontColumnsForExport && hasDynamicNocColumn ? [nocFrontLabel] : [])
       const dynamicFrontCount = dynamicFrontLabels.length
       const getDynamicFrontValuesForExport = (item: any, count: number) => {
         const values = Array.isArray(item?.dynamicFrontValues)
