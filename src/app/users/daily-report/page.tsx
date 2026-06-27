@@ -3764,6 +3764,7 @@ function DetailPersonnelEquipmentV2({
       : "indirect"
   const directDynamicFrontDotationByRowKey = useMemo(() => {
     const out: Record<string, Record<string, number>> = {}
+    const hoursByRowColumn = new Map<string, { rowKey: string; columnKey: string; hours: number; source: any }>()
     const unresolved: Array<{ reportId: string; columnKey: string; participantId: string; reason: string }> = []
     const columnBySourceReportId = new Map<string, DynamicFrontColumn>()
     ;(dynamicFrontColumns || []).forEach((column) => {
@@ -3861,8 +3862,11 @@ function DetailPersonnelEquipmentV2({
     }
     const addHours = (rowKey: string, columnKey: string, hours: number, source?: any) => {
       if (!rowKey || !columnKey || !(hours > 0)) return
-      out[rowKey] = out[rowKey] || {}
-      out[rowKey][columnKey] = Number(((out[rowKey][columnKey] || 0) + personDotationFromHours(hours, source)).toFixed(2))
+      const key = `${rowKey}::${columnKey}`
+      const current = hoursByRowColumn.get(key) || { rowKey, columnKey, hours: 0, source }
+      current.hours += hours
+      current.source = current.source || source
+      hoursByRowColumn.set(key, current)
     }
 
     ;(fieldReportsForDynamicColumns || []).forEach((report: any) => {
@@ -3926,6 +3930,12 @@ function DetailPersonnelEquipmentV2({
           addHours(rowKey, dynamicColumn.key, extra, report)
         }
       })
+    })
+
+    hoursByRowColumn.forEach((item) => {
+      if (!item.rowKey || !item.columnKey || !(item.hours > 0)) return
+      out[item.rowKey] = out[item.rowKey] || {}
+      out[item.rowKey][item.columnKey] = Number(personDotationFromHours(item.hours, item.source).toFixed(2))
     })
 
     if (process.env.NODE_ENV !== "production" && unresolved.length > 0) {

@@ -3,6 +3,7 @@ import { AppBar, Badge, Box, Button, IconButton, Popover, Stack, Toolbar, Typogr
 import MenuIcon from '@mui/icons-material/Menu';
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
 import { useTheme, useMediaQuery } from '@mui/material';
+import { useRouter } from 'next/navigation';
 import { colors } from '../../theme/theme';
 
 interface UserHeaderProps {
@@ -20,6 +21,7 @@ type InternalNotification = {
 
 const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
   const theme = useTheme()
+  const router = useRouter()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const [notifications, setNotifications] = useState<InternalNotification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
@@ -145,7 +147,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
                     onClick={() => {
                       void markNotificationsRead([notification.id])
                       setAnchorEl(null)
-                      if (notification.link_url) window.location.href = notification.link_url
+                      if (notification.link_url) router.push(notification.link_url)
                     }}
                     sx={{
                       width: '100%',

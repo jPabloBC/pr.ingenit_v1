@@ -1282,7 +1282,11 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       }
 
       const hasDynamicNocColumnFlag = (() => {
-        const rawFlag = runtime?.v2_has_noc_front_column ?? snap?.v2_has_noc_front_column ?? notes?.v2_has_noc_front_column
+        const rawFlag =
+          (report as any)?.v2_has_noc_front_column ??
+          runtime?.v2_has_noc_front_column ??
+          snap?.v2_has_noc_front_column ??
+          notes?.v2_has_noc_front_column
         if (typeof rawFlag === 'boolean') return rawFlag
         if (typeof rawFlag === 'number') return rawFlag > 0
         const txt = String(rawFlag ?? '').trim().toLowerCase()
@@ -1331,8 +1335,18 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
           PISCINAS: parseDynamicFrontColumns(raw.PISCINAS)
         }
       }
-      const persistedDynamicFrontColumns = parseDynamicFrontColumns(runtime?.v2_dynamic_front_columns ?? snap?.v2_dynamic_front_columns ?? notes?.v2_dynamic_front_columns)
-      const persistedDynamicFrontColumnsByBlock = parseDynamicFrontColumnsByBlock(runtime?.v2_dynamic_front_columns_by_block ?? snap?.v2_dynamic_front_columns_by_block ?? notes?.v2_dynamic_front_columns_by_block)
+      const persistedDynamicFrontColumns = parseDynamicFrontColumns(
+        (report as any)?.v2_dynamic_front_columns ??
+        runtime?.v2_dynamic_front_columns ??
+        snap?.v2_dynamic_front_columns ??
+        notes?.v2_dynamic_front_columns
+      )
+      const persistedDynamicFrontColumnsByBlock = parseDynamicFrontColumnsByBlock(
+        (report as any)?.v2_dynamic_front_columns_by_block ??
+        runtime?.v2_dynamic_front_columns_by_block ??
+        snap?.v2_dynamic_front_columns_by_block ??
+        notes?.v2_dynamic_front_columns_by_block
+      )
       const splitPersistedDynamicColumns = (columns: Array<{ key: string; label: string }>) => {
         const firstCount = Math.ceil(columns.length / 2)
         return {
@@ -1354,7 +1368,13 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
       const hasDynamicNocColumn = strictVisibleMode
         ? (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag || strictVisibleRowsHaveNocFront)
         : (dynamicFrontColumnsForExport.length > 0 || hasDynamicNocColumnFlag)
-      const rawNocFrontLabel = String(runtime?.v2_noc_front_column_label ?? snap?.v2_noc_front_column_label ?? notes?.v2_noc_front_column_label ?? '').trim()
+      const rawNocFrontLabel = String(
+        (report as any)?.v2_noc_front_column_label ??
+        runtime?.v2_noc_front_column_label ??
+        snap?.v2_noc_front_column_label ??
+        notes?.v2_noc_front_column_label ??
+        ''
+      ).trim()
       const extractNocLabelForFrontHeader = (value: any) => {
         const raw = String(value || '').trim()
         if (!raw) return ''

@@ -291,6 +291,46 @@ const pickDailyReportSnapshot = (record: any) => {
   return candidates.find((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate)) || {}
 }
 
+const parseDailyReportDynamicFrontColumns = (value: any): Array<{ key: string; label: string }> => {
+  const raw = (() => {
+    const parsed = parseJsonMaybe(value)
+    return Array.isArray(parsed) ? parsed : []
+  })()
+  return raw
+    .map((column: any) => ({
+      key: String(column?.key || column?.label || '').trim(),
+      label: normalizeLabel(column?.label || column?.key || ''),
+    }))
+    .filter((column) => column.key && column.label)
+}
+
+const parseDailyReportDynamicFrontColumnsByBlock = (
+  value: any
+): Record<'CANALETAS' | 'PISCINAS', Array<{ key: string; label: string }>> | null => {
+  const raw = parseJsonMaybe(value)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  return {
+    CANALETAS: parseDailyReportDynamicFrontColumns(raw.CANALETAS),
+    PISCINAS: parseDailyReportDynamicFrontColumns(raw.PISCINAS),
+  }
+}
+
+const getDailyReportBlockFront = (value: any): 'CANALETAS' | 'PISCINAS' | null => {
+  const front = normalizeLabel(value)
+  if (front === 'CANALETAS' || front === 'CONTRATO BASE CANALETAS') return 'CANALETAS'
+  if (front === 'PISCINAS' || front === 'CONTRATO BASE PISCINAS') return 'PISCINAS'
+  return null
+}
+
+const getDailyReportDynamicColumnsForRecord = (record: any, snapshot: any) => {
+  const columnsByBlock = parseDailyReportDynamicFrontColumnsByBlock(snapshot?.v2_dynamic_front_columns_by_block)
+  const blockFront = getDailyReportBlockFront(record?.work_front || snapshot?.work_front)
+  if (columnsByBlock && blockFront) return columnsByBlock[blockFront] || []
+  const allColumns = parseDailyReportDynamicFrontColumns(snapshot?.v2_dynamic_front_columns)
+  if (!columnsByBlock) return allColumns
+  return [...columnsByBlock.CANALETAS, ...columnsByBlock.PISCINAS]
+}
+
 const getDailyReportDirectSnapshotRows = (record: any) => {
   const snapshot = pickDailyReportSnapshot(record) as any
   const rawRows = Array.isArray(snapshot?.v2_detail_direct_rows)
@@ -304,6 +344,7 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
     snapshot?.nocFrontColumnLabel ||
     ''
   )
+  const dynamicColumns = getDailyReportDynamicColumnsForRecord(record, snapshot)
 
   return rawRows
     .flatMap((row: any) => {
@@ -313,11 +354,25 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
       const splitDotacion = toNumber(row?.instalacionFaena ?? row?.front1) + toNumber(row?.frente ?? row?.mainFront ?? row?.front2)
       const hhTotal = toNumber(row?.hhTotalObra ?? row?.hh_total_obra)
       const baseHh = hhTotal > 0 ? hhTotal : ((dotacion > 0 ? dotacion : splitDotacion) * hhTurnoDia)
-      const nocDotacion = toNumber(row?.nocFront)
-      const nocHh = nocDotacion > 0 ? nocDotacion * hhTurnoDia : 0
+      const dynamicFrontValues = Array.isArray(row?.dynamicFrontValues)
+        ? row.dynamicFrontValues.map((value: any) => toNumber(value))
+        : []
+      const dynamicRows = dynamicColumns
+        .map((column, idx) => {
+          const dotacion = toNumber(dynamicFrontValues[idx])
+          return {
+            frontKey: getNocFrontLookupKey(column.label) || normalizeLabel(column.label),
+            specialty: specialty || 'PERSONAL DIRECTO',
+            hh: dotacion > 0 ? dotacion * hhTurnoDia : 0,
+          }
+        })
+        .filter((item) => item.frontKey && item.hh > 0)
+      const legacyNocDotacion = dynamicRows.length === 0 ? toNumber(row?.nocFront) : 0
+      const legacyNocHh = legacyNocDotacion > 0 ? legacyNocDotacion * hhTurnoDia : 0
       return [
         { frontKey: baseFront, specialty: specialty || 'PERSONAL DIRECTO', hh: baseHh },
-        { frontKey: nocFrontKey, specialty: specialty || 'PERSONAL DIRECTO', hh: nocHh },
+        ...dynamicRows,
+        { frontKey: nocFrontKey, specialty: specialty || 'PERSONAL DIRECTO', hh: legacyNocHh },
       ]
     })
     .filter((row: { frontKey: string; specialty: string; hh: number }) => row.frontKey && row.hh > 0)

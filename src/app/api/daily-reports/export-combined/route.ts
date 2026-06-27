@@ -27,6 +27,19 @@ const normalizeFront = (value: any) => {
   return raw || 'SIN FRENTE'
 }
 
+const normalizeBaseActivityFront = (value: any): 'CANALETAS' | 'PISCINAS' | null => {
+  const raw = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return null
+  if (raw === 'CANALETAS' || raw === 'CONTRATO BASE CANALETAS') return 'CANALETAS'
+  if (raw === 'PISCINAS' || raw === 'CONTRATO BASE PISCINAS') return 'PISCINAS'
+  return null
+}
+
 const weekFromReportNo = (reportNo: number) => {
   if (!reportNo) return null
   if (reportNo <= 5) return 1
@@ -921,8 +934,11 @@ async function addActivitiesSheet(
     const observations: string[] = []
     rows.forEach((activity: any, activityIdx: number) => {
       const description = getActivityDescription(activity)
-      const front = normalizeFront(activity?.work_front || activity?.activity_front || activity?.front || report?.work_front)
-      if (context.sourceFieldReportIds.length <= 0 && front !== context.workFront) return
+      const explicitActivityFront = activity?.work_front || activity?.activity_front || activity?.front || activity?.frente || ''
+      const activityFront = normalizeBaseActivityFront(explicitActivityFront)
+      const reportFront = normalizeBaseActivityFront(report?.work_front || report?.front || report?.frente || '')
+      const front = explicitActivityFront ? activityFront : reportFront
+      if (front !== context.workFront) return
       const hasPositiveQuantity = hasPositiveActivityQuantity(activity)
       const { quantity, unit } = hasPositiveQuantity
         ? getActivityQuantityUnit(activity)
