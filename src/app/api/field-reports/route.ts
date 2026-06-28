@@ -1178,6 +1178,271 @@ const stripMissingTable = (errorMsg: string) => {
   return relationMissing || schemaCacheMissing
 }
 
+const chunkArray = <T,>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
+const isFieldReportCreatedBySessionUserDirect = (report: any, session: any) => {
+  const userId = String(session?.user?.id || '').trim()
+  const userEmail = normalizeText(String(session?.user?.email || ''))
+  const creatorCandidates = [
+    report?.created_by,
+    report?.created_by_user_id,
+    report?.created_by_id,
+    report?.creator_user_id,
+    report?.user_id,
+    report?.owner_user_id,
+    report?.auth_id,
+  ].map((value: any) => String(value || '').trim()).filter(Boolean)
+  if (userId && creatorCandidates.some((value) => value === userId)) return true
+  if (userEmail && creatorCandidates.some((value) => normalizeText(value) === userEmail)) return true
+  const creatorEmailCandidates = [
+    report?.created_by_email,
+    report?.owner_email,
+    report?.email,
+  ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+  return Boolean(userEmail && creatorEmailCandidates.some((value) => value === userEmail))
+}
+
+const getAuditOwnedFieldReportIds = async (
+  supabaseAdminClient: any,
+  session: any,
+  reportIds: string[]
+) => {
+  const owned = new Set<string>()
+  const ids = Array.from(new Set((reportIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
+  const userId = String(session?.user?.id || '').trim()
+  const userEmail = normalizeText(String(session?.user?.email || ''))
+  if (!ids.length || (!userId && !userEmail)) return owned
+
+  try {
+    for (const chunk of chunkArray(ids, 75)) {
+      const { data, error } = await supabaseAdminClient
+        .from('pr_platform_audit_logs')
+        .select('resource_id, actor_user_id, actor_email')
+        .eq('company_id', session.user.companyId)
+        .eq('resource_type', 'field_report')
+        .eq('action', 'create')
+        .in('resource_id', chunk)
+
+      if (error) {
+        const msg = String((error as any)?.message || error)
+        if (stripMissingTable(msg) || getMissingColumnName(msg)) return owned
+        continue
+      }
+
+      ;(data || []).forEach((row: any) => {
+        const resourceId = String(row?.resource_id || '').trim()
+        if (!resourceId) return
+        const actorUserId = String(row?.actor_user_id || '').trim()
+        const actorEmail = normalizeText(String(row?.actor_email || ''))
+        if ((userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)) {
+          owned.add(resourceId)
+        }
+      })
+    }
+  } catch {
+    return owned
+  }
+
+  return owned
+}
+
+const annotateFieldReportOwnership = async (supabaseAdminClient: any, session: any, rows: any[]) => {
+  if (!Array.isArray(rows) || rows.length === 0) return rows
+  const directOwnedIds = new Set<string>()
+  const auditCandidateIds: string[] = []
+
+  rows.forEach((row: any) => {
+    const id = String(row?.id || '').trim()
+    if (!id) return
+    if (isFieldReportCreatedBySessionUserDirect(row, session)) {
+      directOwnedIds.add(id)
+    } else {
+      auditCandidateIds.push(id)
+    }
+  })
+
+  const auditOwnedIds = await getAuditOwnedFieldReportIds(supabaseAdminClient, session, auditCandidateIds)
+  return rows.map((row: any) => {
+    const id = String(row?.id || '').trim()
+    const createdByCurrentUser = Boolean(id && (directOwnedIds.has(id) || auditOwnedIds.has(id)))
+    return { ...row, created_by_current_user: createdByCurrentUser }
+  })
+}
+
+const isFieldReportCreatedBySessionUser = async (supabaseAdminClient: any, report: any, session: any) => {
+  if (isFieldReportCreatedBySessionUserDirect(report, session)) return true
+  const id = String(report?.id || '').trim()
+  if (!id) return false
+  const auditOwnedIds = await getAuditOwnedFieldReportIds(supabaseAdminClient, session, [id])
+  return auditOwnedIds.has(id)
+}
+
+const parseIdList = (value: any): string[] => {
+  if (Array.isArray(value)) return value.map((id) => String(id || '').trim()).filter(Boolean)
+  if (value == null || value === '') return []
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.map((id) => String(id || '').trim()).filter(Boolean)
+      if (parsed && typeof parsed === 'object') return parseIdList((parsed as any).source_field_report_ids)
+    } catch {}
+    return raw
+      .replace(/^\{|\}$/g, '')
+      .split(',')
+      .map((id) => id.trim().replace(/^"|"$/g, ''))
+      .filter(Boolean)
+  }
+  if (typeof value === 'object') return parseIdList(value?.source_field_report_ids)
+  return [String(value || '').trim()].filter(Boolean)
+}
+
+const parseJsonObjectMaybe = (value: any): Record<string, any> | null => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const getDailyReportSourceFieldReportIds = (row: any) => {
+  const notes = parseJsonObjectMaybe(row?.notes)
+  return Array.from(new Set([
+    ...parseIdList(row?.source_field_report_ids),
+    ...parseIdList(notes?.source_field_report_ids),
+  ]))
+}
+
+const getDailyReportUsageByFieldReportIds = async (
+  supabaseAdminClient: any,
+  companyId: string,
+  fieldReportIds: string[],
+  forceBroadFallback = false
+) => {
+  const ids = Array.from(new Set((fieldReportIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
+  const usage = new Map<string, { dailyReportIds: Set<string>; samples: any[] }>()
+  if (!companyId || ids.length === 0) return usage
+
+  const ensure = (fieldReportId: string) => {
+    if (!usage.has(fieldReportId)) usage.set(fieldReportId, { dailyReportIds: new Set<string>(), samples: [] })
+    return usage.get(fieldReportId)!
+  }
+
+  const register = (fieldReportId: string, row: any) => {
+    const id = String(fieldReportId || '').trim()
+    const dailyReportId = String(row?.id || '').trim()
+    if (!id || !dailyReportId) return
+    const slot = ensure(id)
+    if (slot.dailyReportIds.has(dailyReportId)) return
+    slot.dailyReportIds.add(dailyReportId)
+    if (slot.samples.length < 5) {
+      slot.samples.push({
+        id: dailyReportId,
+        report_no: row?.report_no || null,
+        report_date: row?.report_date || null,
+        work_front: row?.work_front || null,
+      })
+    }
+  }
+
+  const applyRows = (rows: any[], chunkSet: Set<string>) => {
+    ;(rows || []).forEach((row: any) => {
+      getDailyReportSourceFieldReportIds(row).forEach((fieldReportId) => {
+        if (chunkSet.has(fieldReportId)) register(fieldReportId, row)
+      })
+    })
+  }
+
+  let needsBroadFallback = false
+  for (const chunk of chunkArray(ids, 50)) {
+    const chunkSet = new Set(chunk)
+    const selectCandidates = [
+      'id, report_no, report_date, work_front, source_field_report_ids, notes',
+      'id, report_no, report_date, work_front, source_field_report_ids',
+    ]
+    let chunkResolved = false
+    for (const select of selectCandidates) {
+      const { data, error } = await supabaseAdminClient
+        .from('pr_daily_reports')
+        .select(select)
+        .eq('company_id', companyId)
+        .overlaps('source_field_report_ids', chunk)
+        .limit(1000)
+
+      if (!error) {
+        applyRows(data || [], chunkSet)
+        chunkResolved = true
+        break
+      }
+
+      const msg = String((error as any)?.message || error)
+      if (stripMissingTable(msg) || getMissingColumnName(msg) === 'source_field_report_ids') return usage
+      if (getMissingColumnName(msg) === 'notes') continue
+      needsBroadFallback = true
+      break
+    }
+    if (!chunkResolved && needsBroadFallback) break
+  }
+
+  if (needsBroadFallback || forceBroadFallback) {
+    const allIdsSet = new Set(ids)
+    const selectCandidates = [
+      'id, report_no, report_date, work_front, source_field_report_ids, notes',
+      'id, report_no, report_date, work_front, source_field_report_ids',
+    ]
+    for (const select of selectCandidates) {
+      const { data, error } = await supabaseAdminClient
+        .from('pr_daily_reports')
+        .select(select)
+        .eq('company_id', companyId)
+        .order('report_date', { ascending: false })
+        .limit(5000)
+
+      if (!error) {
+        applyRows(data || [], allIdsSet)
+        break
+      }
+
+      const msg = String((error as any)?.message || error)
+      if (stripMissingTable(msg) || getMissingColumnName(msg) === 'source_field_report_ids') return usage
+      if (getMissingColumnName(msg) === 'notes') continue
+      break
+    }
+  }
+
+  return usage
+}
+
+const annotateFieldReportDailyReportLocks = async (
+  supabaseAdminClient: any,
+  companyId: string,
+  rows: any[]
+) => {
+  if (!Array.isArray(rows) || rows.length === 0) return rows
+  const ids = rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean)
+  const usageByFieldReportId = await getDailyReportUsageByFieldReportIds(supabaseAdminClient, companyId, ids)
+  return rows.map((row: any) => {
+    const id = String(row?.id || '').trim()
+    const usage = usageByFieldReportId.get(id)
+    const count = usage?.dailyReportIds?.size || 0
+    return {
+      ...row,
+      daily_report_count: count,
+      has_daily_reports: count > 0,
+      is_locked_by_daily_report: count > 0,
+      daily_report_lock_samples: usage?.samples || [],
+    }
+  })
+}
+
 const parseJsonArray = (value: any): any[] => {
   if (Array.isArray(value)) return value
   if (typeof value === 'string') {
@@ -1636,7 +1901,13 @@ export async function GET(req: NextRequest) {
       const { data, error } = await q.eq('id', id).single()
       if (error) return NextResponse.json({ error: String(error) }, { status: 500 })
       const enriched = await enrichReportPeople(supabaseAdmin, String(session.user.companyId), data)
-      return NextResponse.json(enriched)
+      const [owned] = await annotateFieldReportOwnership(supabaseAdmin, session, [enriched])
+      const [locked] = await annotateFieldReportDailyReportLocks(
+        supabaseAdmin,
+        String(session.user.companyId),
+        [owned || enriched]
+      )
+      return NextResponse.json(locked || owned || enriched)
     }
 
     let activeSelect = listSelect
@@ -1757,7 +2028,16 @@ export async function GET(req: NextRequest) {
         })
         .filter(Boolean)
     }
-    const listRows = filterActivityRowsForSearch(Array.isArray(data) ? data : [])
+    const ownedRows = await annotateFieldReportOwnership(
+      supabaseAdmin,
+      session,
+      filterActivityRowsForSearch(Array.isArray(data) ? data : [])
+    )
+    const listRows = await annotateFieldReportDailyReportLocks(
+      supabaseAdmin,
+      String(session.user.companyId),
+      ownedRows
+    )
     if (role === 'user') {
       // If user specialty is missing, avoid hiding all reports.
       if (!userSpecialty) {
@@ -1981,10 +2261,25 @@ export async function DELETE(req: NextRequest) {
       .maybeSingle()
     if (existingError) return NextResponse.json({ error: String(existingError) }, { status: 500 })
     if (!existing?.id) return NextResponse.json({ error: 'Reporte no encontrado' }, { status: 404 })
-    const actorUserId = String(session?.user?.id || '').trim()
-    const createdBy = String(existing?.created_by || '').trim()
-    if (role === 'user' && (!actorUserId || !createdBy || createdBy !== actorUserId)) {
+    if (role === 'user' && !(await isFieldReportCreatedBySessionUser(supabaseAdmin, existing, session))) {
       return NextResponse.json({ error: 'Forbidden: solo el creador puede eliminar reporte de terreno' }, { status: 403 })
+    }
+
+    const dailyReportUsage = await getDailyReportUsageByFieldReportIds(
+      supabaseAdmin,
+      String(session.user.companyId),
+      [String(id)],
+      true
+    )
+    const linkedDailyReportUsage = dailyReportUsage.get(String(id))
+    const linkedDailyReportCount = linkedDailyReportUsage?.dailyReportIds?.size || 0
+    if (linkedDailyReportCount > 0) {
+      return NextResponse.json({
+        error: 'No se puede eliminar este reporte de terreno porque ya fue usado en un reporte diario.',
+        code: 'FIELD_REPORT_LINKED_TO_DAILY_REPORT',
+        daily_report_count: linkedDailyReportCount,
+        daily_reports: linkedDailyReportUsage?.samples || [],
+      }, { status: 409 })
     }
 
     const { data, error } = await supabaseAdmin

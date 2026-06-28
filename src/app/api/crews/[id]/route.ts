@@ -55,12 +55,77 @@ const isCrewCreatedBySessionUser = (crew: any, session: any) => {
     crew?.auth_id,
   ].map((value: any) => String(value || '').trim()).filter(Boolean)
   if (userId && creatorCandidates.some((value) => value === userId)) return true
+  if (userEmail && creatorCandidates.some((value) => normalizeIdentityText(value) === userEmail)) return true
   const creatorEmailCandidates = [
     crew?.created_by_email,
     crew?.owner_email,
     crew?.email,
   ].map((value: any) => normalizeIdentityText(value)).filter(Boolean)
   return Boolean(userEmail && creatorEmailCandidates.some((value) => value === userEmail))
+}
+
+const isCrewCreatedBySessionUserFromAudit = async (supabaseAdminClient: any, crewId: string, session: any) => {
+  const id = String(crewId || '').trim()
+  const userId = String(session?.user?.id || '').trim()
+  const userEmail = normalizeIdentityText(session?.user?.email)
+  if (!id || (!userId && !userEmail)) return false
+
+  try {
+    const { data, error } = await supabaseAdminClient
+      .from('pr_platform_audit_logs')
+      .select('actor_user_id, actor_email')
+      .eq('company_id', session.user.companyId)
+      .eq('resource_type', 'crew')
+      .eq('resource_id', id)
+      .eq('action', 'create')
+      .limit(25)
+
+    if (error) return false
+    return (data || []).some((row: any) => {
+      const actorUserId = String(row?.actor_user_id || '').trim()
+      const actorEmail = normalizeIdentityText(row?.actor_email)
+      return (userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)
+    })
+  } catch {
+    return false
+  }
+}
+
+const isMissingColumnError = (error: any) => {
+  const code = String(error?.code || '')
+  const msg = String(error?.message || '').toLowerCase()
+  return code === '42703' || msg.includes('could not find the') || msg.includes('column')
+}
+
+const findFieldReportsUsingCrew = async (supabaseAdminClient: any, companyId: string, crewId: string) => {
+  const id = String(crewId || '').trim()
+  if (!companyId || !id) return []
+
+  const mapRows = (rows: any[] = []) => rows.map((row: any) => ({
+    id: row?.id || null,
+    date: row?.date || null,
+    report_sequence_no: row?.report_sequence_no || null,
+  }))
+
+  const fullQuery = await supabaseAdminClient
+    .from('pr_field_reports')
+    .select('id, date, report_sequence_no, crew_id, crew_ids')
+    .eq('company_id', companyId)
+    .or(`crew_id.eq.${id},crew_ids.cs.{${id}}`)
+    .limit(10)
+
+  if (!fullQuery.error) return mapRows(fullQuery.data || [])
+  if (!isMissingColumnError(fullQuery.error)) throw fullQuery.error
+
+  const legacyQuery = await supabaseAdminClient
+    .from('pr_field_reports')
+    .select('id, date, report_sequence_no, crew_id')
+    .eq('company_id', companyId)
+    .eq('crew_id', id)
+    .limit(10)
+
+  if (legacyQuery.error) throw legacyQuery.error
+  return mapRows(legacyQuery.data || [])
 }
 
 const CREW_SCREEN_RESOURCE_TYPE = 'crew_screen'
@@ -520,9 +585,24 @@ export async function DELETE(req: NextRequest, ctx: any) {
     }
 
     if (!beforeCrew) return NextResponse.json({ error: 'Cuadrilla no encontrada' }, { status: 404 })
-    const canDeleteCrew = role === 'admin' || role === 'dev' || (role === 'user' && isCrewCreatedBySessionUser(beforeCrew, session))
+    const canDeleteCrew = role === 'admin' || role === 'dev' || (
+      role === 'user' && (
+        isCrewCreatedBySessionUser(beforeCrew, session) ||
+        await isCrewCreatedBySessionUserFromAudit(supabaseAdmin, id, session)
+      )
+    )
     if (!canDeleteCrew) {
       return NextResponse.json({ error: 'Forbidden: solo admin/dev o el usuario creador puede eliminar esta cuadrilla' }, { status: 403 })
+    }
+
+    const linkedFieldReports = await findFieldReportsUsingCrew(supabaseAdmin, session.user.companyId, id)
+    if (linkedFieldReports.length > 0) {
+      return NextResponse.json({
+        error: 'No se puede eliminar esta cuadrilla porque ya tiene reportes de terreno asociados.',
+        code: 'CREW_LINKED_TO_FIELD_REPORTS',
+        field_report_count: linkedFieldReports.length,
+        field_reports: linkedFieldReports,
+      }, { status: 409 })
     }
 
     const { error: delMembersErr } = await supabaseAdmin.from('pr_crew_members').delete().eq('crew_id', id)

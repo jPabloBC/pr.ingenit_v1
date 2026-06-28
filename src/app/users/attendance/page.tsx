@@ -421,7 +421,7 @@ const attendanceHistoryRowsInFlight = new Map<string, Promise<AttendanceHistoryP
 export default function AttendancePage() {
   const { data: session } = useSession()
   const currentRole = String((session?.user as any)?.role || '').trim().toLowerCase()
-  const canEditDailyAttendance = currentRole !== 'user'
+  const canEditDailyAttendance = currentRole === 'admin'
 
   const [tab, setTab] = useState<'daily' | 'history'>('daily')
   const [loading, setLoading] = useState(true)

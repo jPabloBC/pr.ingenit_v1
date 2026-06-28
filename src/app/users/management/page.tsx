@@ -39,6 +39,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import { useMediaQuery, useTheme } from '@mui/material';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
@@ -51,7 +52,6 @@ import {
   CalendarMonth,
   ChevronLeft,
   ChevronRight,
-  DeleteOutline,
   EditOutlined,
   FileUpload,
   Download,
@@ -61,6 +61,7 @@ import {
   Search,
   Clear,
 } from '@mui/icons-material';
+import { Trash2 } from 'lucide-react';
 import UserHeader from '@/components/layout/UserHeader';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
@@ -421,7 +422,7 @@ type PhotoSlideItem = {
 
 type PhotoSlideGroup = {
   key: string;
-  layout: 'two' | 'three';
+  layout: 'one' | 'two' | 'three';
   crew: string;
   defaultTitle: string;
   items: PhotoSlideItem[];
@@ -686,7 +687,7 @@ const EquipmentStateBadge = ({ active, label, activeColor = colors.blue6 }: { ac
       py: 0.35,
       borderRadius: 999,
       border: `1px solid ${active ? activeColor : colors.blue11}`,
-      bgcolor: active ? colors.blue15 : '#f7fbff',
+      bgcolor: active ? colors.blue15 : colors.managementPanelBg,
       color: active ? activeColor : colors.blue7,
       fontSize: 12,
       fontWeight: 700,
@@ -1423,6 +1424,7 @@ export default function ManagementPage() {
     const saved = String(window.localStorage.getItem(MANAGEMENT_TAB_STORAGE_KEY) || '').trim();
     return isManagementTab(saved) ? saved : 'hh';
   });
+  const [hhAvailableDates, setHhAvailableDates] = useState<string[]>([]);
   const [hhMatrixStartDate, setHhMatrixStartDate] = useState('');
   const [hhMatrixEndDate, setHhMatrixEndDate] = useState('');
   const [hhSummaryReloadNonce, setHhSummaryReloadNonce] = useState(0);
@@ -1854,6 +1856,14 @@ export default function ManagementPage() {
   const getPhotoActivityFilterKey = React.useCallback((item: PhotoEvidenceItem) => {
     return `${normalizeText(item.front || 'Sin frente')}::${normalizeText(getPhotoActivityLabel(item))}`;
   }, [getPhotoActivityLabel]);
+  const getPhotoSlideBucketKey = React.useCallback((item: PhotoEvidenceItem) => {
+    const reportKey = normalizeText([
+      item.date,
+      item.reportNo,
+      item.reportId || item.reportTitle || 'Sin reporte',
+    ].filter(Boolean).join('|')) || 'sin-reporte';
+    return `${reportKey}::${getPhotoActivityFilterKey(item)}`;
+  }, [getPhotoActivityFilterKey]);
   const photoEvidenceMatchesKeyword = React.useCallback((item: PhotoEvidenceItem) => {
     if (!photoKeywordQuery) return true;
     const values = [
@@ -1932,7 +1942,22 @@ export default function ManagementPage() {
     });
     return Array.from(byFront.entries()).map(([front, activities]) => ({
       front,
-      activities: activities.slice(0, 8),
+      groups: (() => {
+        const visibleActivities = activities.slice(0, 8);
+        const repeatedExactActivityGroups = visibleActivities
+          .filter((activity) => activity.imageCount > 1)
+          .map((activity) => ({
+            label: `${activity.label} (coincidencias exactas)`,
+            activities: [activity],
+          }));
+        const otherActivities = visibleActivities.filter((activity) => activity.imageCount <= 1);
+        return [
+          ...repeatedExactActivityGroups,
+          otherActivities.length > 0
+            ? { label: 'Otras actividades', activities: otherActivities }
+            : null,
+        ].filter(Boolean) as Array<{ label: string; activities: PhotoActivitySuggestion[] }>;
+      })(),
     }));
   }, [photoActivitySuggestions]);
   const filteredSelectablePhotoCandidates = useMemo(
@@ -2026,62 +2051,68 @@ export default function ManagementPage() {
       includedPhotoEvidenceOrder.map((key, index) => [String(key || '').trim(), index])
     );
 
-    const byFront = new Map<string, PhotoEvidenceItem[]>();
+    const compareEvidenceForSlides = (a: PhotoEvidenceItem, b: PhotoEvidenceItem) => {
+      const aKey = String(a.key || '').trim();
+      const bKey = String(b.key || '').trim();
+      const aOrder = selectionOrder.has(aKey) ? Number(selectionOrder.get(aKey)) : Number.POSITIVE_INFINITY;
+      const bOrder = selectionOrder.has(bKey) ? Number(selectionOrder.get(bKey)) : Number.POSITIVE_INFINITY;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const aNo = Number(a.reportNo || 0);
+      const bNo = Number(b.reportNo || 0);
+      if (aNo !== bNo) return aNo - bNo;
+      if (a.crew !== b.crew) return a.crew.localeCompare(b.crew, 'es');
+      const aActivity = getPhotoActivityLabel(a);
+      const bActivity = getPhotoActivityLabel(b);
+      if (aActivity !== bActivity) return aActivity.localeCompare(bActivity, 'es');
+      return a.name.localeCompare(b.name, 'es');
+    };
+
+    const byFront = new Map<string, Map<string, PhotoEvidenceItem[]>>();
     photoEvidence.forEach((item) => {
       const front = String(item.front || defaultTitle || 'SIN FRENTE').trim() || 'SIN FRENTE';
-      const current = byFront.get(front) || [];
+      const frontBuckets = byFront.get(front) || new Map<string, PhotoEvidenceItem[]>();
+      const bucketKey = getPhotoSlideBucketKey(item);
+      const current = frontBuckets.get(bucketKey) || [];
       current.push(item);
-      byFront.set(front, current);
+      frontBuckets.set(bucketKey, current);
+      byFront.set(front, frontBuckets);
     });
     const frontKeys = Array.from(byFront.keys()).sort((a, b) => a.localeCompare(b, 'es'));
     for (const front of frontKeys) {
-      const items = (byFront.get(front) || []).slice().sort((a, b) => {
-        const aKey = String(a.key || '').trim();
-        const bKey = String(b.key || '').trim();
-        const aOrder = selectionOrder.has(aKey) ? Number(selectionOrder.get(aKey)) : Number.POSITIVE_INFINITY;
-        const bOrder = selectionOrder.has(bKey) ? Number(selectionOrder.get(bKey)) : Number.POSITIVE_INFINITY;
-        if (aOrder !== bOrder) return aOrder - bOrder;
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        const aNo = Number(a.reportNo || 0);
-        const bNo = Number(b.reportNo || 0);
-        if (aNo !== bNo) return aNo - bNo;
-        if (a.crew !== b.crew) return a.crew.localeCompare(b.crew, 'es');
-        return a.name.localeCompare(b.name, 'es');
-      });
-      const slideItems: PhotoSlideItem[] = items.map((evidence) => {
-        const ratio = Number(photoEvidenceRatioByKey[evidence.key] || 1);
-        return {
-          evidence,
-          ratio,
-          isNarrow: false,
-          isVeryWide: ratio > RATIO_VERY_WIDE,
-        };
-      });
-      for (let i = 0; i < slideItems.length;) {
-        const current = slideItems[i];
-        const layout: 'two' | 'three' = 'two';
-        const maxPerPage = 2;
-        const chunk: PhotoSlideItem[] = [current];
-        let j = i + 1;
-        while (j < slideItems.length && chunk.length < maxPerPage) {
-          const next = slideItems[j];
-          const nextLayout: 'two' | 'three' = 'two';
-          if (nextLayout !== layout) break;
-          chunk.push(next);
-          j += 1;
-        }
-        groups.push({
-          key: `${normalizeText(defaultTitle) || 'sector'}:${normalizeText(front) || 'front'}:${chunk.map((it) => String(it.evidence.key || '')).join('|')}`,
-          crew: Array.from(new Set(chunk.map((it) => it.evidence.crew).filter(Boolean))).join(' / ') || '-',
-          layout,
-          defaultTitle: getPhotoGroupDefaultTitle(chunk, defaultTitle),
-          items: chunk,
+      const bucketEntries = Array.from((byFront.get(front) || new Map<string, PhotoEvidenceItem[]>()).entries())
+        .map(([bucketKey, evidenceItems]) => ({
+          bucketKey,
+          evidenceItems: evidenceItems.slice().sort(compareEvidenceForSlides),
+        }))
+        .sort((a, b) => compareEvidenceForSlides(a.evidenceItems[0], b.evidenceItems[0]));
+
+      for (const bucket of bucketEntries) {
+        const slideItems: PhotoSlideItem[] = bucket.evidenceItems.map((evidence: PhotoEvidenceItem) => {
+          const ratio = Number(photoEvidenceRatioByKey[evidence.key] || 1);
+          return {
+            evidence,
+            ratio,
+            isNarrow: false,
+            isVeryWide: ratio > RATIO_VERY_WIDE,
+          };
         });
-        i = j;
+        for (let i = 0; i < slideItems.length;) {
+          const chunk = slideItems.slice(i, i + 2);
+          const layout: 'one' | 'two' = chunk.length === 1 ? 'one' : 'two';
+          groups.push({
+            key: `${normalizeText(defaultTitle) || 'sector'}:${normalizeText(front) || 'front'}:${bucket.bucketKey}:${chunk.map((it) => String(it.evidence.key || '')).join('|')}`,
+            crew: Array.from(new Set(chunk.map((it) => it.evidence.crew).filter(Boolean))).join(' / ') || '-',
+            layout,
+            defaultTitle: getPhotoGroupDefaultTitle(chunk, defaultTitle),
+            items: chunk,
+          });
+          i += 2;
+        }
       }
     }
     return groups;
-  }, [getPhotoGroupDefaultTitle, includedPhotoEvidenceOrder, photoEvidenceRatioByKey]);
+  }, [getPhotoActivityLabel, getPhotoGroupDefaultTitle, getPhotoSlideBucketKey, includedPhotoEvidenceOrder, photoEvidenceRatioByKey]);
 
   const canaletasPhotoGroups = useMemo<PhotoSlideGroup[]>(() => {
     return buildPhotoGroups(visibleCanaletasPhotoEvidence, photoPage3AreaTitle || 'ÁREA CANALETAS');
@@ -2241,9 +2272,9 @@ export default function ManagementPage() {
         sx={{
           ...(inRange
             ? {
-                backgroundColor: 'rgba(25, 118, 210, 0.14)',
+                backgroundColor: alpha(colors.managementCalendarBlue, 0.14),
                 borderRadius: 0,
-                '&:hover, &:focus': { backgroundColor: 'rgba(25, 118, 210, 0.2)' },
+                '&:hover, &:focus': { backgroundColor: alpha(colors.managementCalendarBlue, 0.2) },
               }
             : {}),
           ...(isStart
@@ -2282,9 +2313,9 @@ export default function ManagementPage() {
         sx={{
           ...(inRange
             ? {
-                backgroundColor: 'rgba(25, 118, 210, 0.14)',
+                backgroundColor: alpha(colors.managementCalendarBlue, 0.14),
                 borderRadius: 0,
-                '&:hover, &:focus': { backgroundColor: 'rgba(25, 118, 210, 0.2)' },
+                '&:hover, &:focus': { backgroundColor: alpha(colors.managementCalendarBlue, 0.2) },
               }
             : {}),
           ...(isStart
@@ -2514,6 +2545,29 @@ export default function ManagementPage() {
       const exportCanaletasGroups = sanitizeGroupsForExport(canaletasPhotoGroups);
       const exportPiscinasGroups = sanitizeGroupsForExport(piscinasPhotoGroups);
       const exportAdicionalesGroups = sanitizeGroupsForExport(adicionalesPhotoGroups);
+      const addPhotoGroupImagesToSlide = async (slide: any, group: PhotoSlideGroup) => {
+        const slotByLayout = group.layout === 'one'
+          ? [{ x: 1.65, y: 1.42, w: 10.05, h: 5.78 }]
+          : group.layout === 'three'
+            ? [
+                { x: 0.38, y: 1.78, w: 4.06, h: 5.38 },
+                { x: 4.64, y: 1.78, w: 4.06, h: 5.38 },
+                { x: 8.9, y: 1.78, w: 4.06, h: 5.38 },
+              ]
+            : [
+                { x: 0.38, y: 1.78, w: 6.25, h: 5.38 },
+                { x: 6.7, y: 1.78, w: 6.25, h: 5.38 },
+              ];
+        for (let idx = 0; idx < slotByLayout.length; idx += 1) {
+          const item = group.items[idx] || null;
+          if (!item) continue;
+          const data = await toDataUrl(
+            `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
+            { normalizeForPptx: true }
+          );
+          await addNativeCroppedImage(slide, data, slotByLayout[idx]);
+        }
+      };
 
       for (const group of exportCanaletasGroups) {
         if (!includeNextPage()) continue;
@@ -2541,38 +2595,7 @@ export default function ManagementPage() {
           bold: true,
         });
 
-        if (group.layout === 'three') {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 4.64, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 8.9, y: 1.78, w: 4.06, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 3; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        } else {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 6.25, h: 5.38 },
-            { x: 6.7, y: 1.78, w: 6.25, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 2; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        }
+        await addPhotoGroupImagesToSlide(slide, group);
       }
 
       if (includeNextPage()) {
@@ -2616,38 +2639,7 @@ export default function ManagementPage() {
           bold: true,
         });
 
-        if (group.layout === 'three') {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 4.64, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 8.9, y: 1.78, w: 4.06, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 3; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        } else {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 6.25, h: 5.38 },
-            { x: 6.7, y: 1.78, w: 6.25, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 2; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        }
+        await addPhotoGroupImagesToSlide(slide, group);
       }
 
       if (includeNextPage()) {
@@ -2690,38 +2682,7 @@ export default function ManagementPage() {
           bold: true,
         });
 
-        if (group.layout === 'three') {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 4.64, y: 1.78, w: 4.06, h: 5.38 },
-            { x: 8.9, y: 1.78, w: 4.06, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 3; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        } else {
-          const slots = [
-            { x: 0.38, y: 1.78, w: 6.25, h: 5.38 },
-            { x: 6.7, y: 1.78, w: 6.25, h: 5.38 },
-          ];
-          for (let idx = 0; idx < 2; idx += 1) {
-            const item = group.items[idx] || null;
-            if (!item) continue;
-            const data = await toDataUrl(
-              `/api/field-reports/evidence/download?key=${encodeURIComponent(item.evidence.key)}&name=${encodeURIComponent(item.evidence.name || 'imagen')}`,
-              { normalizeForPptx: true }
-            );
-            const slot = slots[idx];
-            await addNativeCroppedImage(slide, data, slot);
-          }
-        }
+        await addPhotoGroupImagesToSlide(slide, group);
       }
 
       if (includeNextPage()) {
@@ -3107,6 +3068,29 @@ export default function ManagementPage() {
         if (!mounted) return;
         setActivitiesAvailableDates([]);
         setActivitiesWeeksReady(true);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'hh') return;
+    let mounted = true;
+    fetchFieldReportDateKeys()
+      .then((dates) => {
+        if (!mounted) return;
+        const cleanDates = Array.from(new Set(
+          dates
+            .map((date) => String(date || '').slice(0, 10))
+            .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+        )).sort((a, b) => b.localeCompare(a));
+        setHhAvailableDates(cleanDates);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setHhAvailableDates([]);
       });
 
     return () => {
@@ -3608,6 +3592,15 @@ export default function ManagementPage() {
   }, [hhMatrixRange.end, hhMatrixRange.start]);
 
   const currentCalendarWeekRange = useMemo(() => getWeekRangeFromDateKey(dateToKey(new Date())), []);
+  const hhAvailableWeeks = useMemo(() => buildWeekRangesFromDateKeys(hhAvailableDates), [hhAvailableDates]);
+  const hhWeekOptions = useMemo(() => {
+    const baseWeeks = hhAvailableWeeks.length > 0 ? hhAvailableWeeks : (reportDateKeys.length > 0 ? buildWeekRangesFromDateKeys(reportDateKeys) : []);
+    const selectedWeek = hhMatrixRange.start ? getWeekRangeFromDateKey(hhMatrixRange.start) : null;
+    if (!selectedWeek?.start) return baseWeeks.length > 0 ? baseWeeks : [currentCalendarWeekRange];
+    const hasSelectedWeek = baseWeeks.some((range) => range.start === selectedWeek.start);
+    if (hasSelectedWeek) return baseWeeks;
+    return [selectedWeek, ...baseWeeks].sort((a, b) => b.start.localeCompare(a.start));
+  }, [currentCalendarWeekRange, hhAvailableWeeks, hhMatrixRange.start, reportDateKeys]);
   const activitiesAvailableWeeks = useMemo(() => buildWeekRangesFromDateKeys(activitiesAvailableDates), [activitiesAvailableDates]);
   const latestAvailableActivitiesWeek = useMemo(
     () => activitiesAvailableWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || activitiesAvailableWeeks[0] || currentCalendarWeekRange,
@@ -3634,11 +3627,13 @@ export default function ManagementPage() {
     ? `Semana ${getProjectWeekNumber(activitiesWeekRange.start)}: ${formatSpanishShortDate(activitiesWeekRange.start)} al ${formatSpanishShortDate(activitiesWeekRange.end)}`
     : 'Semana: cargando...';
   const latestAvailableWeekRange = useMemo(() => {
+    const fromAvailableWeeks = hhAvailableWeeks.find((range) => range.start <= currentCalendarWeekRange.start);
+    if (fromAvailableWeeks) return fromAvailableWeeks;
     if (hhSummary?.date_from || hhSummary?.date_to) {
       return getWeekRangeFromDateKey(String(hhSummary.date_from || hhSummary.date_to || ''));
     }
     return { start: '', end: '' };
-  }, [hhSummary?.date_from, hhSummary?.date_to]);
+  }, [currentCalendarWeekRange.start, hhAvailableWeeks, hhSummary?.date_from, hhSummary?.date_to]);
   const canNavigateHhWeek = Boolean(hhMatrixRange.start || hhSummary?.date_from);
   const nextHhWeekStart = useMemo(() => {
     const baseStart = hhMatrixRange.start || hhSummary?.date_from || hhSummary?.date_to || '';
@@ -4433,10 +4428,10 @@ export default function ManagementPage() {
           zIndex: 3,
           '& .MuiOutlinedInput-root': {
             bgcolor: 'transparent',
-            color: '#ffffff',
+            color: colors.white,
             borderRadius: 0,
-            fontSize: { xs: '0.72rem', md: '1rem' },
-            fontWeight: 900,
+            fontSize: 'clamp(0.42rem, 1.24cqw, 1rem)',
+            fontWeight: 700,
             textTransform: 'uppercase',
             '& fieldset': { border: 'none' },
             '&:hover fieldset': { border: 'none' },
@@ -4455,7 +4450,7 @@ export default function ManagementPage() {
   };
 
   const renderPhotoPreviewSlot = (item: PhotoSlideItem | null, url: string, sx: any) => (
-    <Box sx={{ ...sx, bgcolor: '#e2e8f0' }}>
+    <Box sx={{ ...sx, bgcolor: colors.slate200 }}>
       {url ? (
         <Box
           component="img"
@@ -4473,11 +4468,11 @@ export default function ManagementPage() {
                 left: 0,
                 right: 0,
                 bottom: 0,
-                bgcolor: 'rgba(15, 23, 42, 0.78)',
-                color: '#ffffff',
+                bgcolor: alpha(colors.slate900, 0.78),
+                color: colors.white,
                 px: { xs: 0.55, md: 0.9 },
                 py: { xs: 0.35, md: 0.55 },
-                fontSize: { xs: '0.48rem', md: '0.68rem' },
+                fontSize: 'clamp(0.32rem, 0.82cqw, 0.68rem)',
                 lineHeight: 1.2,
                 fontWeight: 700,
                 display: '-webkit-box',
@@ -4499,24 +4494,54 @@ export default function ManagementPage() {
               position: 'absolute',
               right: 6,
               top: 6,
-              bgcolor: 'rgba(22, 101, 52, 0.82)',
-              color: '#fff',
+              bgcolor: alpha(colors.green800, 0.82),
+              color: colors.white,
               '& .remove-icon': { display: 'none' },
-              '&:hover': { bgcolor: 'rgba(220,38,38,0.9)' },
+              '&:hover': { bgcolor: alpha(colors.red600, 0.9) },
               '&:hover .pin-icon': { display: 'none' },
               '&:hover .remove-icon': { display: 'block' },
             }}
           >
             <PushPin className="pin-icon" fontSize="small" />
-            <DeleteOutline className="remove-icon" fontSize="small" />
+            <Trash2 className="remove-icon" size={16} />
           </IconButton>
         </>
       ) : null}
     </Box>
   );
 
+  const renderPhotoPreviewGroupImages = (group: PhotoSlideGroup, urls: string[]) => {
+    const first = group.items[0] || null;
+    const second = group.items[1] || null;
+    const third = group.items[2] || null;
+    if (group.layout === 'one') {
+      return renderPhotoPreviewSlot(first, urls[0] || '', {
+        position: 'absolute',
+        left: '12.5%',
+        top: '17%',
+        width: '75%',
+        height: '74%',
+      });
+    }
+    if (group.layout === 'three') {
+      return (
+        <>
+          {renderPhotoPreviewSlot(first, urls[0] || '', { position: 'absolute', left: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
+          {renderPhotoPreviewSlot(second, urls[1] || '', { position: 'absolute', left: '34.8%', top: '19%', width: '30.4%', height: '72%' })}
+          {renderPhotoPreviewSlot(third, urls[2] || '', { position: 'absolute', right: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
+        </>
+      );
+    }
+    return (
+      <>
+        {renderPhotoPreviewSlot(first, urls[0] || '', { position: 'absolute', left: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
+        {renderPhotoPreviewSlot(second, urls[1] || '', { position: 'absolute', right: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
+      </>
+    );
+  };
+
   return (
-    <Box sx={{ minHeight: '100vh', background: '#f5f7fb' }}>
+    <Box sx={{ minHeight: '100vh', background: colors.gray10 }}>
       <Script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js" strategy="afterInteractive" />
       <UserHeader title="Gestión y Datos" />
       {activeTab === 'interferences' ? (
@@ -4529,15 +4554,15 @@ export default function ManagementPage() {
             right: { xs: 16, sm: 28 },
             zIndex: 1200,
             bgcolor: colors.blue1,
-            color: '#ffffff',
-            border: '2px solid #7dd3fc',
-            boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
+            color: colors.white,
+            border: `2px solid ${colors.blue14}`,
+            boxShadow: `0 10px 24px ${alpha(colors.blue1, 0.32)}`,
             '&:hover': {
               bgcolor: colors.blue1,
-              borderColor: '#bae6fd',
-              boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
+              borderColor: colors.blue15,
+              boxShadow: `0 10px 28px ${alpha(colors.sky300, 0.55)}`,
               '& .plus-icon': {
-                color: '#7dd3fc',
+                color: colors.blue14,
                 transform: 'scale(1.18)',
               },
             },
@@ -4563,15 +4588,15 @@ export default function ManagementPage() {
             right: { xs: 16, sm: 28 },
             zIndex: 1200,
             bgcolor: colors.blue1,
-            color: '#ffffff',
-            border: '2px solid #7dd3fc',
-            boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
+            color: colors.white,
+            border: `2px solid ${colors.blue14}`,
+            boxShadow: `0 10px 24px ${alpha(colors.blue1, 0.32)}`,
             '&:hover': {
               bgcolor: colors.blue1,
-              borderColor: '#bae6fd',
-              boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
+              borderColor: colors.blue15,
+              boxShadow: `0 10px 28px ${alpha(colors.sky300, 0.55)}`,
               '& .plus-icon': {
-                color: '#7dd3fc',
+                color: colors.blue14,
                 transform: 'scale(1.18)',
               },
             },
@@ -4615,11 +4640,11 @@ export default function ManagementPage() {
                 px: { xs: 0.75, md: 1.25 },
                 pt: 0.55,
                 pb: 0,
-                borderBottom: `1px solid #a9c4ea`,
+                borderBottom: `1px solid ${colors.blue14}`,
                 minHeight: { xs: 45, md: 48 },
-                background: '#f7fbff',
+                background: colors.white,
                 backdropFilter: 'blur(10px)',
-                boxShadow: '0 3px 8px rgba(15, 23, 42, 0.06)',
+                boxShadow: `0 3px 8px ${alpha(colors.slate900, 0.06)}`,
                 '& .MuiTabs-scroller': {
                   borderRadius: 0,
                   backgroundColor: 'transparent',
@@ -4631,7 +4656,7 @@ export default function ManagementPage() {
                 },
                 '& .MuiTabs-scrollButtons': {
                   width: 30,
-                  color: '#355070',
+                  color: colors.blue7,
                   borderRadius: 1,
                   mx: 0.15,
                   '&.Mui-disabled': { opacity: 0.25 },
@@ -4639,29 +4664,29 @@ export default function ManagementPage() {
                 '& .MuiTab-root': {
                   minHeight: { xs: 38, md: 41 },
                   mb: '-1px',
-                  fontWeight: 850,
+                  fontWeight: 700,
                   fontSize: { xs: 12.5, md: 13.5 },
                   textTransform: 'none',
                   px: { xs: 1.05, sm: 1.35, md: 1.55 },
                   py: 0.45,
                   minWidth: 'max-content',
                   borderRadius: '8px 8px 0 0',
-                  color: '#475569',
+                  color: colors.gray4,
                   border: '1px solid transparent',
                   borderBottomColor: 'transparent',
                   transition: 'background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease',
                 },
                 '& .MuiTab-root:hover': {
                   color: colors.blue2,
-                  backgroundColor: '#eef5ff',
-                  borderColor: '#d7e4f7',
+                  backgroundColor: colors.blue15,
+                  borderColor: colors.blue14,
                 },
                 '& .Mui-selected': {
                   color: `${colors.blue2} !important`,
-                  backgroundColor: '#ffffff',
-                  borderColor: '#a9c4ea',
-                  borderBottomColor: '#ffffff',
-                  boxShadow: '0 -2px 8px rgba(15, 55, 110, 0.08)',
+                  backgroundColor: colors.white,
+                  borderColor: colors.blue14,
+                  borderBottomColor: colors.white,
+                  boxShadow: `0 -2px 8px ${alpha(colors.managementShadowBlue, 0.08)}`,
                   zIndex: 2,
                 },
                 '& .MuiTabs-indicator': {
@@ -4690,7 +4715,7 @@ export default function ManagementPage() {
                   p: { xs: 1, md: 1.1 },
                   width: { xs: '100%', lg: '70%' },
                   maxWidth: 1400,
-                  borderColor: '#d8dee9',
+                  borderColor: colors.blue13,
                   display: 'flex',
                   flexDirection: { xs: 'column', md: 'row' },
                   alignItems: { xs: 'stretch', md: 'center' },
@@ -4703,14 +4728,14 @@ export default function ManagementPage() {
                   size="small"
                   disabled={!canNavigateHhWeek}
                   onClick={() => moveHhWeek(-1)}
-                  sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap' }}
+                  sx={{ fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
                 >
                   Semana anterior
                 </Button>
                 <Typography
                   sx={{
-                    color: '#0f172a',
-                    fontWeight: 900,
+                    color: colors.gray4,
+                    fontWeight: 700,
                     textAlign: 'center',
                     flex: 1,
                     minWidth: { md: 280 },
@@ -4719,13 +4744,57 @@ export default function ManagementPage() {
                 >
                   {hhVisibleWeekLabel}
                 </Typography>
-                <Stack direction="row" spacing={1} justifyContent={{ xs: 'stretch', md: 'flex-end' }} sx={{ flexShrink: 0 }}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  justifyContent={{ xs: 'stretch', md: 'flex-end' }}
+                  sx={{ flexShrink: 0, flexWrap: { xs: 'wrap', sm: 'nowrap' }, rowGap: 1 }}
+                >
+                  <TextField
+                    select
+                    size="small"
+                    value={hhMatrixRange.start || ''}
+                    disabled={loading || hhWeekOptions.length === 0}
+                    SelectProps={{
+                      renderValue: (value) => {
+                        const selected = hhWeekOptions.find((range) => range.start === value)
+                        return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
+                      },
+                    }}
+                    onChange={(event) => {
+                      const selected = hhWeekOptions.find((range) => range.start === event.target.value);
+                      if (!selected) return;
+                      hhMatrixManualRangeChangeRef.current = true;
+                      hhMatrixRangeHydratedFromSummaryRef.current = false;
+                      setHhMatrixStartDate(selected.start);
+                      setHhMatrixEndDate(selected.end);
+                    }}
+                    sx={{
+                      width: { xs: '100%', sm: 142, md: 142 },
+                      minWidth: { xs: '100%', sm: 142, md: 142 },
+                      flex: { xs: '1 1 100%', sm: '0 0 142px' },
+                      '& .MuiInputBase-root': { height: 32 },
+                      '& .MuiSelect-select': {
+                        py: 0.55,
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      },
+                    }}
+                  >
+                    {hhWeekOptions.map((range) => (
+                      <MenuItem key={`hh-week-${range.start}`} value={range.start}>
+                        {`Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`}
+                      </MenuItem>
+                    ))}
+                  </TextField>
                   <Button
                     variant="contained"
                     size="small"
                     disabled={isViewingLatestAvailableHhWeek}
                     onClick={loadLatestHhWeek}
-                    sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
+                  sx={{ fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
                   >
                     Última semana
                   </Button>
@@ -4734,7 +4803,7 @@ export default function ManagementPage() {
                     size="small"
                     disabled={!canNavigateHhNextWeek}
                     onClick={() => moveHhWeek(1)}
-                    sx={{ fontWeight: 800, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
+                  sx={{ fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
                   >
                     Semana siguiente
                   </Button>
@@ -4754,32 +4823,32 @@ export default function ManagementPage() {
                   alignItems: 'stretch',
                 }}
               >
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
+                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
                       Total HH directas
                     </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 900, lineHeight: 1.1, textAlign: 'right' }}>
+                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
                       {formatNumber(totalDirectHh)}
                     </Typography>
                   </Stack>
                 </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
+                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
                       Directos declarados
                     </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 900, lineHeight: 1.1, textAlign: 'right' }}>
+                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
                       {totalDirectRows}
                     </Typography>
                   </Stack>
                 </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: '#d8dee9' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
                   <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
+                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
                       HH extras directas
                     </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 900, lineHeight: 1.1, textAlign: 'right' }}>
+                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
                       {formatNumber(totalDirectHhExtras)}
                     </Typography>
                   </Stack>
@@ -4791,7 +4860,7 @@ export default function ManagementPage() {
                     minHeight: 46,
                     px: 2,
                     width: '100%',
-                    fontWeight: 800,
+                    fontWeight: 700,
                     textTransform: 'none',
                     whiteSpace: 'nowrap',
                     alignSelf: 'stretch',
@@ -4815,14 +4884,14 @@ export default function ManagementPage() {
                   }
                 }}
               >
-                <DialogTitle sx={{ fontWeight: 900, color: '#0f172a', pb: 1 }}>
+                <DialogTitle sx={{ fontWeight: 700, color: colors.slate900, pb: 1 }}>
                   Matriz HH por especialidad, cargo y frente
                 </DialogTitle>
                 <DialogContent
                 sx={{
                   p: 0,
                   overflow: 'hidden',
-                  background: '#ffffff',
+                  background: colors.white,
                 }}
               >
                 <Box
@@ -4833,12 +4902,12 @@ export default function ManagementPage() {
                     gridTemplateColumns: { xs: '1fr', md: '1fr auto' },
                     gap: 1,
                     alignItems: 'center',
-                    borderBottom: '1px solid #e5e7eb',
-                    background: '#f8fafc',
+                    borderBottom: `1px solid ${colors.gray200}`,
+                    background: colors.slate50,
                   }}
                 >
                   <Box>
-                    <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700 }}>
+                    <Typography variant="caption" sx={{ color: colors.slate500, fontWeight: 700 }}>
                       {hhMatrixRange.start && hhMatrixRange.end
                         ? `${formatDate(hhMatrixRange.start)} - ${formatDate(hhMatrixRange.end)} · ${hhMatrixWeeks.length} semana${hhMatrixWeeks.length === 1 ? '' : 's'}`
                         : 'Seleccione un rango para visualizar'}
@@ -4863,7 +4932,7 @@ export default function ManagementPage() {
                         readOnly: true,
                         endAdornment: (
                           <InputAdornment position="end">
-                            <CalendarMonth sx={{ color: '#64748b', fontSize: 20 }} />
+                            <CalendarMonth sx={{ color: colors.slate500, fontSize: 20 }} />
                           </InputAdornment>
                         ),
                       }}
@@ -4941,8 +5010,8 @@ export default function ManagementPage() {
                     sx={{
                       minWidth: Math.max(960, 610 + hhMatrixWeeks.length * 118),
                       '& th, & td': {
-                        borderRight: '1px solid #e5e7eb',
-                        borderBottom: '1px solid #e5e7eb',
+                        borderRight: `1px solid ${colors.gray200}`,
+                        borderBottom: `1px solid ${colors.gray200}`,
                         whiteSpace: 'nowrap',
                       },
                       '& th:last-of-type, & td:last-of-type': { borderRight: 0 },
@@ -4950,38 +5019,38 @@ export default function ManagementPage() {
                   >
                     <TableHead>
                       <TableRow>
-                        <TableCell sx={{ fontWeight: 900, background: '#e2e8f0', minWidth: 190, left: 0, position: 'sticky', zIndex: 4 }}>
+                        <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190, left: 0, position: 'sticky', zIndex: 4 }}>
                           Especialidad
                         </TableCell>
-                        <TableCell sx={{ fontWeight: 900, background: '#e2e8f0', minWidth: 190 }}>
+                        <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190 }}>
                           Cargo
                         </TableCell>
-                        <TableCell sx={{ fontWeight: 900, background: '#e2e8f0', minWidth: 190 }}>
+                        <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190 }}>
                           Frente
                         </TableCell>
                         {hhMatrixWeeks.map((week) => (
-                          <TableCell key={week.key} align="right" sx={{ fontWeight: 900, background: '#e2e8f0', minWidth: 118 }}>
+                          <TableCell key={week.key} align="right" sx={{ fontWeight: 700, background: colors.slate200, minWidth: 118 }}>
                             <Box sx={{ display: 'grid', lineHeight: 1.1 }}>
                               <span>{week.label}</span>
-                              <span style={{ fontSize: 11, color: '#64748b', fontWeight: 700 }}>
+                              <span style={{ fontSize: 11, color: colors.slate500, fontWeight: 700 }}>
                                 {week.start.slice(5)} - {week.end.slice(5)}
                               </span>
                             </Box>
                           </TableCell>
                         ))}
-                        <TableCell align="center" sx={{ fontWeight: 900, background: '#dbeafe', minWidth: 82 }}>
+                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 82 }}>
                           Directos
                         </TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 900, background: '#dbeafe', minWidth: 92 }}>
+                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 92 }}>
                           HH
                         </TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 900, background: '#dbeafe', minWidth: 92 }}>
+                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 92 }}>
                           HH Extras
                         </TableCell>
-                        <TableCell align="right" sx={{ fontWeight: 900, background: '#bfdbfe', minWidth: 96 }}>
+                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue200, minWidth: 96 }}>
                           Total HH
                         </TableCell>
-                        <TableCell align="center" sx={{ fontWeight: 900, background: '#dbeafe', minWidth: 82 }}>
+                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 82 }}>
                           Reportes
                         </TableCell>
                       </TableRow>
@@ -4989,7 +5058,7 @@ export default function ManagementPage() {
                     <TableBody>
                       {hhMatrixRows.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={8 + hhMatrixWeeks.length} sx={{ py: 3, color: '#64748b', textAlign: 'center' }}>
+                          <TableCell colSpan={8 + hhMatrixWeeks.length} sx={{ py: 3, color: colors.slate500, textAlign: 'center' }}>
                             No hay HH en el rango seleccionado.
                           </TableCell>
                         </TableRow>
@@ -4998,7 +5067,7 @@ export default function ManagementPage() {
                           const rowTotal = Number(row.hh || 0) + Number(row.hhExtras || 0);
                           return (
                             <TableRow key={row.key} hover>
-                              <TableCell sx={{ fontWeight: 800, background: '#ffffff', position: 'sticky', left: 0, zIndex: 2 }}>
+                              <TableCell sx={{ fontWeight: 700, background: colors.white, position: 'sticky', left: 0, zIndex: 2 }}>
                                 {row.specialty}
                               </TableCell>
                               <TableCell>{row.position}</TableCell>
@@ -5009,9 +5078,9 @@ export default function ManagementPage() {
                                 </TableCell>
                               ))}
                               <TableCell align="center">{row.peopleRows}</TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 800 }}>{formatNumber(row.hh)}</TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 800 }}>{formatNumber(row.hhExtras)}</TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 900, background: '#eff6ff' }}>{formatNumber(rowTotal)}</TableCell>
+                              <TableCell align="right" sx={{ fontWeight: 700 }}>{formatNumber(row.hh)}</TableCell>
+                              <TableCell align="right" sx={{ fontWeight: 700 }}>{formatNumber(row.hhExtras)}</TableCell>
+                              <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue50 }}>{formatNumber(rowTotal)}</TableCell>
                               <TableCell align="center">{row.reports}</TableCell>
                             </TableRow>
                           );
@@ -5019,27 +5088,27 @@ export default function ManagementPage() {
                       )}
                       {hhMatrixRows.length > 0 ? (
                         <TableRow>
-                          <TableCell colSpan={3} sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff', position: 'sticky', left: 0, zIndex: 2 }}>
+                          <TableCell colSpan={3} sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white, position: 'sticky', left: 0, zIndex: 2 }}>
                             TOTAL
                           </TableCell>
                           {hhMatrixWeeks.map((week) => (
-                            <TableCell key={`total-${week.key}`} align="right" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                            <TableCell key={`total-${week.key}`} align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                               {formatNumber(hhMatrixTotalsByWeek[week.key] || 0)}
                             </TableCell>
                           ))}
-                          <TableCell align="center" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                          <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {hhMatrixRows.reduce((acc, row) => acc + row.peopleRows, 0)}
                           </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                          <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixRows.reduce((acc, row) => acc + row.hh, 0))}
                           </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                          <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixRows.reduce((acc, row) => acc + row.hhExtras, 0))}
                           </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                          <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixGrandTotal)}
                           </TableCell>
-                          <TableCell align="center" sx={{ fontWeight: 900, background: '#0f3f86', color: '#ffffff' }}>
+                          <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             -
                           </TableCell>
                         </TableRow>
@@ -5048,7 +5117,7 @@ export default function ManagementPage() {
                   </Table>
                 </TableContainer>
                 </DialogContent>
-                <DialogActions sx={{ borderTop: '1px solid #e5e7eb', px: 2, py: 1 }}>
+                <DialogActions sx={{ borderTop: `1px solid ${colors.gray200}`, px: 2, py: 1 }}>
                   <Button onClick={() => setHhMatrixDialogOpen(false)} variant="outlined">
                     Cerrar
                   </Button>
@@ -5060,13 +5129,13 @@ export default function ManagementPage() {
               ) : loading ? (
                 <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 4 }}>
                   <CircularProgress size={22} />
-                  <Typography sx={{ color: '#4b5563' }}>Cargando reportes...</Typography>
+                  <Typography sx={{ color: colors.gray600 }}>Cargando reportes...</Typography>
                 </Stack>
               ) : (
                 <Stack spacing={{ xs: 1, md: 1.25 }}>
                   {dashboardByDay.length === 0 ? (
-                    <Paper variant="outlined" sx={{ py: 4, textAlign: 'center', borderColor: '#d8dee9' }}>
-                      <Typography sx={{ color: '#64748b' }}>No hay HH directas declaradas para mostrar.</Typography>
+                    <Paper variant="outlined" sx={{ py: 4, textAlign: 'center', borderColor: colors.managementBorder }}>
+                      <Typography sx={{ color: colors.slate500 }}>No hay HH directas declaradas para mostrar.</Typography>
                     </Paper>
                   ) : (
                     dashboardByDay.map((day) => (
@@ -5074,19 +5143,19 @@ export default function ManagementPage() {
                         key={day.date}
                         disableGutters
                         sx={{
-                          border: '1px solid #d8dee9',
+                          border: `1px solid ${colors.managementBorder}`,
                           borderRadius: 2,
                           overflow: 'hidden',
-                          background: '#ffffff',
+                          background: colors.white,
                           boxShadow: 'none',
                           '&:before': { display: 'none' },
                         }}
                       >
                         <AccordionSummary
-                          expandIcon={<ExpandMore sx={{ color: '#ffffff' }} />}
+                          expandIcon={<ExpandMore sx={{ color: colors.white }} />}
                           sx={{
                             background: `linear-gradient(135deg, ${colors.blue4} 0%, ${colors.blue2} 100%)`,
-                            color: '#ffffff',
+                            color: colors.white,
                             minHeight: { xs: 52, md: 56 },
                             px: { xs: 1.25, md: 2 },
                             '& .MuiAccordionSummary-content': {
@@ -5101,26 +5170,26 @@ export default function ManagementPage() {
                             alignItems={{ xs: 'flex-start', md: 'center' }}
                             sx={{ width: '100%' }}
                           >
-                            <Typography variant="h6" sx={{ fontWeight: 900, color: '#ffffff', fontSize: { xs: '1.15rem', md: '1.25rem' } }}>
+                            <Typography variant="h6" sx={{ fontWeight: 700, color: colors.white, fontSize: { xs: '1.15rem', md: '1.25rem' } }}>
                               {formatDate(day.date)}
                             </Typography>
                             <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-                              <Typography sx={{ fontWeight: 800, color: '#ffffff' }}>
+                              <Typography sx={{ fontWeight: 700, color: colors.white }}>
                                 HH: {formatNumber(day.hh)}
                               </Typography>
-                              <Typography sx={{ color: '#dbeafe' }}>
+                              <Typography sx={{ color: colors.blue100 }}>
                                 HH Extras: {formatNumber(day.hhExtras)}
                               </Typography>
-                              <Typography sx={{ color: '#dbeafe' }}>
+                              <Typography sx={{ color: colors.blue100 }}>
                                 Directos: {day.peopleRows}
                               </Typography>
-                              <Typography sx={{ color: '#dbeafe' }}>
+                              <Typography sx={{ color: colors.blue100 }}>
                                 Reportes: {day.reports}
                               </Typography>
-                              <Typography sx={{ color: '#dbeafe' }}>
+                              <Typography sx={{ color: colors.blue100 }}>
                                 Indirectos Turno: {day.indirectTurnoTotal}
                               </Typography>
-                              <Typography sx={{ color: '#dbeafe' }}>
+                              <Typography sx={{ color: colors.blue100 }}>
                                 HH Indirectos: {formatNumber(day.indirectTurnoHhTotal || 0)}
                               </Typography>
                             </Stack>
@@ -5135,19 +5204,19 @@ export default function ManagementPage() {
                             gap: { xs: 0.75, lg: 0 },
                           }}
                         >
-                          <Box sx={{ p: { xs: 1, md: 1.25 }, borderRight: { lg: '1px solid #e5e7eb' }, display: 'grid', gap: 1, alignContent: 'start' }}>
+                          <Box sx={{ p: { xs: 1, md: 1.25 }, borderRight: { lg: `1px solid ${colors.gray200}` }, display: 'grid', gap: 1, alignContent: 'start' }}>
                           <Box>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 900, color: '#111827', mb: 1 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.gray900, mb: 1 }}>
                               Horas por especialidad
                             </Typography>
-                            <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                            <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                               <Table size="small">
                                 <TableHead>
                                   <TableRow>
-                                    <TableCell sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Especialidad</TableCell>
-                                    <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Directos</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Extras</TableCell>
+                                    <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Especialidad</TableCell>
+                                    <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Directos</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Extras</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
@@ -5155,8 +5224,8 @@ export default function ManagementPage() {
                                     <TableRow key={item.label}>
                                       <TableCell sx={{ py: 0.45, px: 1 }}>{item.label}</TableCell>
                                       <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
                                     </TableRow>
                                   ))}
                                 </TableBody>
@@ -5165,18 +5234,18 @@ export default function ManagementPage() {
                           </Box>
 
                           <Box>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 900, color: '#111827', mb: 1 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.gray900, mb: 1 }}>
                               Horas por frente
                             </Typography>
-                            <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                            <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                               <Table size="small">
                                 <TableHead>
                                   <TableRow>
-                                    <TableCell sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Frente</TableCell>
-                                    <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Directos</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Extras</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Rep. Diario</TableCell>
+                                    <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Frente</TableCell>
+                                    <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Directos</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Extras</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Rep. Diario</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
@@ -5187,28 +5256,28 @@ export default function ManagementPage() {
                                         <TableRow>
                                           <TableCell sx={{ py: 0.45, px: 1, fontWeight: 700 }}>{item.label}</TableCell>
                                           <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1, background: '#fffde7' }}>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1, background: colors.yellow50 }}>
                                             {Number(item.dailyReportDirectHh || 0) > 0 ? formatNumber(item.dailyReportDirectHh || 0) : '-'}
                                           </TableCell>
                                         </TableRow>
                                         {specialtyGroups.map((specialty) => (
                                           <React.Fragment key={`${item.label}-${specialty.label}`}>
-                                            <TableRow sx={{ background: '#f8fafc' }}>
-                                              <TableCell sx={{ py: 0.4, px: 1, pl: 3, color: '#475569' }}>
+                                            <TableRow sx={{ background: colors.slate50 }}>
+                                              <TableCell sx={{ py: 0.4, px: 1, pl: 3, color: colors.slate600 }}>
                                                 - {specialty.label}
                                               </TableCell>
-                                              <TableCell align="center" sx={{ py: 0.4, px: 1, color: '#475569' }}>
+                                              <TableCell align="center" sx={{ py: 0.4, px: 1, color: colors.slate600 }}>
                                                 {specialty.peopleRows}
                                               </TableCell>
-                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: '#475569' }}>
+                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: colors.slate600 }}>
                                                 {formatNumber(specialty.hh)}
                                               </TableCell>
-                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: '#475569' }}>
+                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: colors.slate600 }}>
                                                 {formatNumber(specialty.hhExtras)}
                                               </TableCell>
-                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: '#475569', background: '#fffde7' }}>
+                                              <TableCell align="right" sx={{ py: 0.4, px: 1, color: colors.slate600, background: colors.yellow50 }}>
                                                 {Number(specialty.dailyReportDirectHh || 0) > 0 ? formatNumber(specialty.dailyReportDirectHh || 0) : '-'}
                                               </TableCell>
                                             </TableRow>
@@ -5224,18 +5293,18 @@ export default function ManagementPage() {
 
                           </Box>
 
-                          <Box sx={{ p: { xs: 1, md: 1.25 }, borderRight: { lg: '1px solid #e5e7eb' } }}>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 900, color: '#111827', mb: 1 }}>
+                          <Box sx={{ p: { xs: 1, md: 1.25 }, borderRight: { lg: `1px solid ${colors.gray200}` } }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.gray900, mb: 1 }}>
                               Agrupado por cargo
                             </Typography>
-                            <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                            <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                               <Table size="small">
                                 <TableHead>
                                   <TableRow>
-                                    <TableCell sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Cargo</TableCell>
-                                    <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Directos</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH Extras</TableCell>
+                                    <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Cargo</TableCell>
+                                    <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Directos</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Extras</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
@@ -5243,8 +5312,8 @@ export default function ManagementPage() {
                                     <TableRow key={item.label}>
                                       <TableCell sx={{ py: 0.45, px: 1 }}>{item.label}</TableCell>
                                       <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
-                                      <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
+                                      <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hhExtras)}</TableCell>
                                     </TableRow>
                                   ))}
                                 </TableBody>
@@ -5253,22 +5322,22 @@ export default function ManagementPage() {
                           </Box>
 
                           <Box sx={{ p: { xs: 1, md: 1.25 } }}>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 900, color: '#111827', mb: 1 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.gray900, mb: 1 }}>
                               Indirectos en Turno
                             </Typography>
-                            <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                            <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                               <Table size="small">
                                 <TableHead>
                                   <TableRow>
-                                    <TableCell sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Cargo</TableCell>
-                                    <TableCell align="center" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>Indirectos</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 800, background: '#eef2f7', py: 0.55, px: 1 }}>HH</TableCell>
+                                    <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Cargo</TableCell>
+                                    <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Indirectos</TableCell>
+                                    <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH</TableCell>
                                   </TableRow>
                                 </TableHead>
                                 <TableBody>
                                   {day.indirectTurnoByPosition.length === 0 ? (
                                     <TableRow>
-                                      <TableCell colSpan={3} sx={{ color: '#64748b', fontStyle: 'italic', py: 0.45, px: 1 }}>
+                                      <TableCell colSpan={3} sx={{ color: colors.slate500, fontStyle: 'italic', py: 0.45, px: 1 }}>
                                         Sin indirectos en Turno para esta fecha.
                                       </TableCell>
                                     </TableRow>
@@ -5278,15 +5347,15 @@ export default function ManagementPage() {
                                         <TableRow key={item.label}>
                                           <TableCell sx={{ py: 0.45, px: 1 }}>{item.label}</TableCell>
                                           <TableCell align="center" sx={{ py: 0.45, px: 1 }}>{item.peopleRows}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(item.hh)}</TableCell>
                                         </TableRow>
                                       ))}
                                       <TableRow>
-                                        <TableCell sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>TOTAL</TableCell>
-                                        <TableCell align="center" sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>
+                                        <TableCell sx={{ py: 0.55, px: 1, fontWeight: 700, background: colors.managementTableHead }}>TOTAL</TableCell>
+                                        <TableCell align="center" sx={{ py: 0.55, px: 1, fontWeight: 700, background: colors.managementTableHead }}>
                                           {day.indirectTurnoTotal}
                                         </TableCell>
-                                        <TableCell align="right" sx={{ py: 0.55, px: 1, fontWeight: 900, background: '#eef2f7' }}>
+                                        <TableCell align="right" sx={{ py: 0.55, px: 1, fontWeight: 700, background: colors.managementTableHead }}>
                                           {formatNumber(day.indirectTurnoHhTotal || 0)}
                                         </TableCell>
                                       </TableRow>
@@ -5308,8 +5377,8 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.25, md: 1.75 },
-                    borderColor: '#d8dee9',
-                    background: '#ffffff',
+                    borderColor: colors.managementBorder,
+                    background: colors.white,
                   }}
                 >
                   {historicalHhError ? (
@@ -5317,11 +5386,11 @@ export default function ManagementPage() {
                   ) : historicalHhLoading ? (
                     <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                       <CircularProgress size={22} />
-                      <Typography sx={{ color: '#4b5563' }}>Cargando HH histórico...</Typography>
+                      <Typography sx={{ color: colors.gray600 }}>Cargando HH histórico...</Typography>
                     </Stack>
                   ) : historicalHhByFront.length === 0 ? (
                     <Box sx={{ py: 4, textAlign: 'center' }}>
-                      <Typography sx={{ color: '#64748b' }}>No hay HH histórico cargado.</Typography>
+                      <Typography sx={{ color: colors.slate500 }}>No hay HH histórico cargado.</Typography>
                     </Box>
                   ) : (
                     <Stack spacing={{ xs: 1, md: 1.25 }}>
@@ -5333,19 +5402,19 @@ export default function ManagementPage() {
                             defaultExpanded={false}
                             disableGutters
                             sx={{
-                              border: '1px solid #d8dee9',
+                              border: `1px solid ${colors.managementBorder}`,
                               borderRadius: 2,
                               overflow: 'hidden',
-                              background: '#ffffff',
+                              background: colors.white,
                               boxShadow: 'none',
                               '&:before': { display: 'none' },
                             }}
                           >
                             <AccordionSummary
-                              expandIcon={<ExpandMore sx={{ color: '#ffffff' }} />}
+                              expandIcon={<ExpandMore sx={{ color: colors.white }} />}
                               sx={{
                                 background: `linear-gradient(135deg, ${colors.blue4} 0%, ${colors.blue2} 100%)`,
-                                color: '#ffffff',
+                                color: colors.white,
                                 minHeight: { xs: 52, md: 56 },
                                 px: { xs: 1.25, md: 2 },
                                 '& .MuiAccordionSummary-content': { my: { xs: 0.75, md: 1 } },
@@ -5358,23 +5427,23 @@ export default function ManagementPage() {
                                 alignItems={{ xs: 'flex-start', md: 'center' }}
                                 sx={{ width: '100%' }}
                               >
-                                <Typography variant="h6" sx={{ fontWeight: 900, color: '#ffffff', fontSize: { xs: '1.1rem', md: '1.25rem' } }}>
+                                <Typography variant="h6" sx={{ fontWeight: 700, color: colors.white, fontSize: { xs: '1.1rem', md: '1.25rem' } }}>
                                   {frontGroup.front}
                                 </Typography>
                                 <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap alignItems="center">
-                                  <Typography sx={{ fontWeight: 800, color: '#ffffff' }}>
+                                  <Typography sx={{ fontWeight: 700, color: colors.white }}>
                                     Reportes: {frontGroup.rows.length}
                                   </Typography>
-                                  <Typography sx={{ color: '#dbeafe' }}>
+                                  <Typography sx={{ color: colors.blue100 }}>
                                     HH acum: {formatNumber(toNumber(lastRow?.total_hh_accum))}
                                   </Typography>
-                                  <Typography sx={{ color: '#dbeafe' }}>
+                                  <Typography sx={{ color: colors.blue100 }}>
                                     HM acum: {formatNumber(toNumber(lastRow?.major_hm_accum) + toNumber(lastRow?.minor_hm_accum))}
                                   </Typography>
                                   <Button
                                     size="small"
                                     variant="outlined"
-                                    startIcon={historicalHhExportingFront === frontGroup.front ? <CircularProgress size={14} sx={{ color: '#ffffff' }} /> : <FileUpload />}
+                                    startIcon={historicalHhExportingFront === frontGroup.front ? <CircularProgress size={14} sx={{ color: colors.white }} /> : <FileUpload />}
                                     disabled={historicalHhExportingFront === frontGroup.front}
                                     onClick={(event) => {
                                       event.stopPropagation();
@@ -5383,13 +5452,13 @@ export default function ManagementPage() {
                                     onFocus={(event) => event.stopPropagation()}
                                     sx={{
                                       ml: { xs: 0, md: 1 },
-                                      color: '#ffffff',
-                                      borderColor: 'rgba(255,255,255,0.65)',
-                                      fontWeight: 800,
+                                      color: colors.white,
+                                      borderColor: alpha(colors.white, 0.65),
+                                      fontWeight: 700,
                                       textTransform: 'none',
                                       '&:hover': {
-                                        borderColor: '#ffffff',
-                                        background: 'rgba(255,255,255,0.12)',
+                                        borderColor: colors.white,
+                                        background: alpha(colors.white, 0.12),
                                       },
                                     }}
                                   >
@@ -5407,23 +5476,23 @@ export default function ManagementPage() {
                                   alignItems: 'start',
                                 }}
                               >
-                                <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflowX: 'auto' }}>
+                                <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, overflowX: 'auto' }}>
                                   <Table size="small" sx={{ minWidth: 1180 }}>
                                     <TableHead>
                                       <TableRow>
-                                        <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>Semana</TableCell>
-                                        <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>Fecha</TableCell>
-                                        <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>Daily Report N°</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Indirectas</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Directas</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Diarias</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH I. Acum</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH D. Acum</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Totales Acum</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HM Mayores Diarias</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HM Mayores Acum</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HM Menores y mov Diarias</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HM Menores y mov Acum</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Semana</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Fecha</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Daily Report N°</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Indirectas</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Directas</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Diarias</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH I. Acum</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH D. Acum</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Totales Acum</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HM Mayores Diarias</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HM Mayores Acum</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HM Menores y mov Diarias</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HM Menores y mov Acum</TableCell>
                                       </TableRow>
                                     </TableHead>
                                     <TableBody>
@@ -5434,10 +5503,10 @@ export default function ManagementPage() {
                                           <TableCell align="center" sx={{ py: 0.45, px: 1 }}>N°{row.report_no}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.indirect_hh))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.direct_hh))}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(toNumber(row.daily_hh))}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(toNumber(row.daily_hh))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.indirect_hh_accum))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.direct_hh_accum))}</TableCell>
-                                          <TableCell align="right" sx={{ fontWeight: 800, py: 0.45, px: 1 }}>{formatNumber(toNumber(row.total_hh_accum))}</TableCell>
+                                          <TableCell align="right" sx={{ fontWeight: 700, py: 0.45, px: 1 }}>{formatNumber(toNumber(row.total_hh_accum))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.major_hm_daily))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.major_hm_accum))}</TableCell>
                                           <TableCell align="right" sx={{ py: 0.45, px: 1 }}>{formatNumber(toNumber(row.minor_hm_daily))}</TableCell>
@@ -5448,23 +5517,23 @@ export default function ManagementPage() {
                                   </Table>
                                 </TableContainer>
 
-                                <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                                <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                                   <Table size="small">
                                     <TableHead>
                                       <TableRow>
-                                        <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>Semana</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Ind. Sem.</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HH Dir. Sem.</TableCell>
-                                        <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7', py: 0.55, px: 1 }}>HM Semanal</TableCell>
+                                        <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>Semana</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Ind. Sem.</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HH Dir. Sem.</TableCell>
+                                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead, py: 0.55, px: 1 }}>HM Semanal</TableCell>
                                       </TableRow>
                                     </TableHead>
                                     <TableBody>
                                       {frontGroup.weekly.map((week) => (
                                         <TableRow key={`${frontGroup.front}-${week.weekNo}`}>
-                                          <TableCell align="center" sx={{ py: 0.45, px: 1, fontWeight: 800 }}>{week.weekNo}</TableCell>
-                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 800, background: '#fffec8' }}>{formatNumber(week.indirectHh)}</TableCell>
-                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 800, background: '#fffec8' }}>{formatNumber(week.directHh)}</TableCell>
-                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 800, background: '#fffec8' }}>{formatNumber(week.hm)}</TableCell>
+                                          <TableCell align="center" sx={{ py: 0.45, px: 1, fontWeight: 700 }}>{week.weekNo}</TableCell>
+                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 700, background: colors.yellow100 }}>{formatNumber(week.indirectHh)}</TableCell>
+                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 700, background: colors.yellow100 }}>{formatNumber(week.directHh)}</TableCell>
+                                          <TableCell align="right" sx={{ py: 0.45, px: 1, fontWeight: 700, background: colors.yellow100 }}>{formatNumber(week.hm)}</TableCell>
                                         </TableRow>
                                       ))}
                                     </TableBody>
@@ -5483,11 +5552,11 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.5, md: 2 },
-                    borderColor: '#a9c4ea',
-                    borderTopColor: '#a9c4ea',
+                    borderColor: colors.managementBorderStrong,
+                    borderTopColor: colors.managementBorderStrong,
                     borderRadius: '0 0 10px 10px',
-                    background: '#ffffff',
-                    boxShadow: '0 10px 20px rgba(15, 23, 42, 0.05)',
+                    background: colors.white,
+                    boxShadow: `0 10px 20px ${alpha(colors.slate900, 0.05)}`,
                   }}
                 >
                   <Stack spacing={1.5}>
@@ -5498,10 +5567,10 @@ export default function ManagementPage() {
                       alignItems={{ xs: 'stretch', md: 'center' }}
                     >
                       <Box>
-                        <Typography sx={{ fontWeight: 900, color: '#111827' }}>
+                        <Typography sx={{ fontWeight: 700, color: colors.gray900 }}>
                           Personal por frente y cuadrilla
                         </Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: 13 }}>
+                        <Typography sx={{ color: colors.slate500, fontSize: 13 }}>
                           Integrantes declarados en reportes de terreno, separados por frente.
                         </Typography>
                       </Box>
@@ -5519,7 +5588,7 @@ export default function ManagementPage() {
                             readOnly: true,
                             endAdornment: (
                               <InputAdornment position="end">
-                                <CalendarMonth sx={{ color: '#111827', fontSize: 20 }} />
+                                <CalendarMonth sx={{ color: colors.gray900, fontSize: 20 }} />
                               </InputAdornment>
                             ),
                           }}
@@ -5648,12 +5717,12 @@ export default function ManagementPage() {
                           sx={{
                             width: 44,
                             height: 40,
-                            border: '1px solid #0b5dcc',
+                            border: `1px solid ${colors.managementActionBlue}`,
                             borderRadius: 1,
-                            color: '#0b5dcc',
-                            bgcolor: '#eff6ff',
-                            '&:hover': { bgcolor: '#dbeafe', borderColor: '#084da8' },
-                            '&.Mui-disabled': { borderColor: '#cbd5e1' },
+                            color: colors.managementActionBlue,
+                            bgcolor: colors.blue50,
+                            '&:hover': { bgcolor: colors.blue100, borderColor: colors.managementActionBlueDark },
+                            '&.Mui-disabled': { borderColor: colors.slate300 },
                           }}
                         >
                           {crewPersonnelExporting ? <CircularProgress size={19} /> : <Download sx={{ fontSize: 26 }} />}
@@ -5671,7 +5740,7 @@ export default function ManagementPage() {
                             }}
                             aria-label="Limpiar filtros de personal"
                             title="Limpiar filtros"
-                            sx={{ border: '1px solid #cbd5e1', borderRadius: 1, alignSelf: { xs: 'flex-end', sm: 'center' } }}
+                            sx={{ border: `1px solid ${colors.slate300}`, borderRadius: 1, alignSelf: { xs: 'flex-end', sm: 'center' } }}
                           >
                             <Clear sx={{ fontSize: 18 }} />
                           </IconButton>
@@ -5686,27 +5755,27 @@ export default function ManagementPage() {
                         gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' },
                       }}
                     >
-                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: '#e5e7eb' }}>
-                        <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Personas</Typography>
-                        <Typography sx={{ color: colors.blue1, fontWeight: 900, fontSize: 24, lineHeight: 1.1 }}>
+                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: colors.gray200 }}>
+                        <Typography variant="caption" sx={{ color: colors.slate500, fontWeight: 700 }}>Personas</Typography>
+                        <Typography sx={{ color: colors.blue1, fontWeight: 700, fontSize: 24, lineHeight: 1.1 }}>
                           {crewPersonnelStats.people}
                         </Typography>
                       </Paper>
-                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: '#e5e7eb' }}>
-                        <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>Frentes</Typography>
-                        <Typography sx={{ color: colors.blue1, fontWeight: 900, fontSize: 24, lineHeight: 1.1 }}>
+                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: colors.gray200 }}>
+                        <Typography variant="caption" sx={{ color: colors.slate500, fontWeight: 700 }}>Frentes</Typography>
+                        <Typography sx={{ color: colors.blue1, fontWeight: 700, fontSize: 24, lineHeight: 1.1 }}>
                           {crewPersonnelStats.fronts}
                         </Typography>
                       </Paper>
-                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: '#e5e7eb' }}>
-                        <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 800 }}>HH</Typography>
-                        <Typography sx={{ color: colors.blue1, fontWeight: 900, fontSize: 24, lineHeight: 1.1 }}>
+                      <Paper variant="outlined" sx={{ p: 1.15, borderColor: colors.gray200 }}>
+                        <Typography variant="caption" sx={{ color: colors.slate500, fontWeight: 700 }}>HH</Typography>
+                        <Typography sx={{ color: colors.blue1, fontWeight: 700, fontSize: 24, lineHeight: 1.1 }}>
                           {formatNumber(crewPersonnelStats.hh)}
                         </Typography>
                       </Paper>
                     </Box>
 
-                    <Typography sx={{ color: '#64748b', fontSize: 13 }}>
+                    <Typography sx={{ color: colors.slate500, fontSize: 13 }}>
                       Mostrando {filteredCrewPersonnelRows.length} de {crewPersonnelRows.length} registros.
                     </Typography>
 
@@ -5715,16 +5784,16 @@ export default function ManagementPage() {
                     ) : loading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                         <CircularProgress size={22} />
-                        <Typography sx={{ color: '#4b5563' }}>Cargando personal...</Typography>
+                        <Typography sx={{ color: colors.gray600 }}>Cargando personal...</Typography>
                       </Stack>
                     ) : filteredCrewPersonnelRows.length === 0 ? (
                       <Box sx={{ py: 4, textAlign: 'center' }}>
-                        <Typography sx={{ color: '#64748b' }}>
+                        <Typography sx={{ color: colors.slate500 }}>
                           No hay integrantes que coincidan con la búsqueda.
                         </Typography>
                       </Box>
                     ) : (
-                      <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                      <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                         <Table
                           size="small"
                           sx={{
@@ -5737,15 +5806,15 @@ export default function ManagementPage() {
                         >
                           <TableHead>
                             <TableRow>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 120 }}>Fecha</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 250 }}>Frente</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 330 }}>Nombre</TableCell>
-                              <TableCell sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 230 }}>Cargo</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 130 }}>Tipo</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 150 }}>RUT</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 90 }}>HH</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 110 }}>HH extras</TableCell>
-                              <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7', minWidth: 110 }}>Reporte</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 120 }}>Fecha</TableCell>
+                              <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 250 }}>Frente</TableCell>
+                              <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 330 }}>Nombre</TableCell>
+                              <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 230 }}>Cargo</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 130 }}>Tipo</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 150 }}>RUT</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 90 }}>HH</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 110 }}>HH extras</TableCell>
+                              <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead, minWidth: 110 }}>Reporte</TableCell>
                             </TableRow>
                           </TableHead>
                           <TableBody>
@@ -5753,11 +5822,11 @@ export default function ManagementPage() {
                               <TableRow key={row.key}>
                                 <TableCell align="center" sx={{ py: 0.65, minWidth: 120 }}>{formatDate(row.date)}</TableCell>
                                 <TableCell sx={{ py: 0.65, minWidth: 250, fontWeight: 700 }}>{row.front || '-'}</TableCell>
-                                <TableCell sx={{ py: 0.65, minWidth: 330, fontWeight: 800 }}>{row.name || '-'}</TableCell>
+                                <TableCell sx={{ py: 0.65, minWidth: 330, fontWeight: 700 }}>{row.name || '-'}</TableCell>
                                 <TableCell sx={{ py: 0.65, minWidth: 230 }}>{row.position || '-'}</TableCell>
                                 <TableCell align="center" sx={{ py: 0.65, minWidth: 130 }}>{row.workerType || '-'}</TableCell>
                                 <TableCell align="center" sx={{ py: 0.65, minWidth: 150 }}>{formatChileanRut(row.rut)}</TableCell>
-                                <TableCell align="center" sx={{ py: 0.65, minWidth: 90, fontWeight: 800 }}>{formatNumber(row.hh)}</TableCell>
+                                <TableCell align="center" sx={{ py: 0.65, minWidth: 90, fontWeight: 700 }}>{formatNumber(row.hh)}</TableCell>
                                 <TableCell align="center" sx={{ py: 0.65, minWidth: 110 }}>{formatNumber(row.hhExtras)}</TableCell>
                                 <TableCell align="center" sx={{ py: 0.65, minWidth: 110 }}>
                                   {row.reportNo ? `N°${row.reportNo}` : row.reportId.slice(0, 8)}
@@ -5780,7 +5849,7 @@ export default function ManagementPage() {
                     p: { xs: 1, md: 1.1 },
                     width: { xs: '100%', lg: '70%' },
                     maxWidth: 1400,
-                    borderColor: '#d8dee9',
+                    borderColor: colors.managementBorder,
                     display: 'grid',
                     gridTemplateColumns: { xs: '1fr', md: 'auto minmax(240px, 1fr) auto' },
                     alignItems: { xs: 'stretch', md: 'center' },
@@ -5798,7 +5867,7 @@ export default function ManagementPage() {
                   </Button>
                   <Typography
                     sx={{
-                      color: isActivitiesGlobalSearch ? '#94a3b8' : '#0f172a',
+                      color: isActivitiesGlobalSearch ? colors.slate400 : colors.slate900,
                       fontWeight: 600,
                       textAlign: 'center',
                       flex: 1,
@@ -5872,8 +5941,8 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.5, md: 2 },
-                    borderColor: '#d8dee9',
-                    background: '#ffffff',
+                    borderColor: colors.managementBorder,
+                    background: colors.white,
                   }}
                 >
                   <Stack spacing={1.5}>
@@ -5883,7 +5952,7 @@ export default function ManagementPage() {
                       justifyContent="space-between"
                       alignItems={{ xs: 'stretch', md: 'center' }}
                     >
-                      <Typography sx={{ fontWeight: 900, color: '#111827' }}>
+                      <Typography sx={{ fontWeight: 700, color: colors.gray900 }}>
                         Actividades de reportes de terreno
                       </Typography>
                       <TextField
@@ -5895,7 +5964,7 @@ export default function ManagementPage() {
                         sx={{ width: { xs: '100%', md: 480 } }}
                       />
                     </Stack>
-                    <Typography sx={{ color: '#64748b', fontSize: 13 }}>
+                    <Typography sx={{ color: colors.slate500, fontSize: 13 }}>
                       Mostrando {filteredManagementActivities.length} de {managementActivities.length} actividades.
                     </Typography>
 
@@ -5904,11 +5973,11 @@ export default function ManagementPage() {
                     ) : loading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                         <CircularProgress size={22} />
-                        <Typography sx={{ color: '#4b5563' }}>Cargando actividades...</Typography>
+                        <Typography sx={{ color: colors.gray600 }}>Cargando actividades...</Typography>
                       </Stack>
                     ) : filteredManagementActivities.length === 0 ? (
                       <Box sx={{ py: 4, textAlign: 'center' }}>
-                        <Typography sx={{ color: '#64748b' }}>
+                        <Typography sx={{ color: colors.slate500 }}>
                           No hay actividades que coincidan con la búsqueda.
                         </Typography>
                       </Box>
@@ -5922,26 +5991,26 @@ export default function ManagementPage() {
                             <Box
                               key={`${row.reportId}-${row.sourceIndex}-${row.name}`}
                               sx={{
-                                border: '1px solid #e5e7eb',
+                                border: `1px solid ${colors.gray200}`,
                                 borderRadius: 1,
                                 px: 1,
                                 py: 0.85,
                                 display: 'grid',
                                 gap: 0.6,
-                                background: rowIndex % 2 === 0 ? '#f8fbff' : '#e8f5fc',
+                                background: rowIndex % 2 === 0 ? colors.managementPanelBgSoft : colors.managementPanelBgAlt,
                               }}
                             >
                               <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#334155', flexShrink: 0 }}>
-                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Fecha: </Box>
+                                <Typography sx={{ fontSize: 12, fontWeight: 700, color: colors.slate700, flexShrink: 0 }}>
+                                  <Box component="span" sx={{ fontWeight: 700, color: colors.slate500 }}>Fecha: </Box>
                                   {dateLabel}
                                 </Typography>
-                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#1d4ed8', flexShrink: 0, textAlign: 'center' }}>
-                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Reporte: </Box>
+                                <Typography sx={{ fontSize: 12, fontWeight: 700, color: colors.blue700, flexShrink: 0, textAlign: 'center' }}>
+                                  <Box component="span" sx={{ fontWeight: 700, color: colors.slate500 }}>Reporte: </Box>
                                   {reportLabel}
                                 </Typography>
-                                <Typography sx={{ fontSize: 12, fontWeight: 900, color: '#111827', flexShrink: 0, textAlign: 'center' }}>
-                                  <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>Cantidad: </Box>
+                                <Typography sx={{ fontSize: 12, fontWeight: 700, color: colors.gray900, flexShrink: 0, textAlign: 'center' }}>
+                                  <Box component="span" sx={{ fontWeight: 700, color: colors.slate500 }}>Cantidad: </Box>
                                   {quantityLabel} {row.unit || ''}
                                 </Typography>
                               </Stack>
@@ -5950,8 +6019,8 @@ export default function ManagementPage() {
                                 sx={{
                                   minWidth: 0,
                                   fontSize: 13,
-                                  fontWeight: 800,
-                                  color: '#111827',
+                                  fontWeight: 700,
+                                  color: colors.gray900,
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
                                   whiteSpace: 'nowrap',
@@ -5979,13 +6048,13 @@ export default function ManagementPage() {
                                     sx={{
                                       minWidth: 0,
                                       fontSize: 12,
-                                      color: '#475569',
+                                      color: colors.slate600,
                                       overflow: 'hidden',
                                       textOverflow: 'ellipsis',
                                       whiteSpace: 'nowrap',
                                     }}
                                   >
-                                    <Box component="span" sx={{ fontWeight: 900, color: '#64748b' }}>{label}: </Box>
+                                    <Box component="span" sx={{ fontWeight: 700, color: colors.slate500 }}>{label}: </Box>
                                     {value}
                                   </Typography>
                                 ))}
@@ -5995,7 +6064,7 @@ export default function ManagementPage() {
                         })}
                       </Stack>
                     ) : (
-                      <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflowX: 'hidden' }}>
+                      <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, overflowX: 'hidden' }}>
                         <Table
                           size="small"
                           sx={{
@@ -6025,15 +6094,15 @@ export default function ManagementPage() {
                           </colgroup>
                           <TableHead>
                             <TableRow>
-                              <TableCell title="Fecha" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Fecha</TableCell>
-                              <TableCell title="Reporte" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Reporte</TableCell>
-                              <TableCell title="Actividad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Actividad</TableCell>
-                              <TableCell title="Cantidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Cantidad</TableCell>
-                              <TableCell title="Unidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff', overflow: 'visible', textOverflow: 'clip' }}>Unidad</TableCell>
-                              <TableCell title="Frente" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Frente</TableCell>
-                              <TableCell title="Área" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Área</TableCell>
-                              <TableCell title="Cuadrilla" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Cuadrilla</TableCell>
-                              <TableCell title="Especialidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: '#ffffff' }}>Especialidad</TableCell>
+                              <TableCell title="Fecha" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white, overflow: 'visible', textOverflow: 'clip' }}>Fecha</TableCell>
+                              <TableCell title="Reporte" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white, overflow: 'visible', textOverflow: 'clip' }}>Reporte</TableCell>
+                              <TableCell title="Actividad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white }}>Actividad</TableCell>
+                              <TableCell title="Cantidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white, overflow: 'visible', textOverflow: 'clip' }}>Cantidad</TableCell>
+                              <TableCell title="Unidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white, overflow: 'visible', textOverflow: 'clip' }}>Unidad</TableCell>
+                              <TableCell title="Frente" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white }}>Frente</TableCell>
+                              <TableCell title="Área" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white }}>Área</TableCell>
+                              <TableCell title="Cuadrilla" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white }}>Cuadrilla</TableCell>
+                              <TableCell title="Especialidad" align="center" sx={{ fontWeight: 600, background: colors.blue2, color: colors.white }}>Especialidad</TableCell>
                             </TableRow>
                           </TableHead>
                           <TableBody>
@@ -6045,8 +6114,8 @@ export default function ManagementPage() {
                                 <TableRow
                                   key={`${row.reportId}-${row.sourceIndex}-${row.name}`}
                                   sx={{
-                                    bgcolor: rowIndex % 2 === 0 ? '#f8fbff' : '#e8f5fc',
-                                    '&:hover': { bgcolor: '#dbeeff' },
+                                    bgcolor: rowIndex % 2 === 0 ? colors.managementPanelBgSoft : colors.managementPanelBgAlt,
+                                    '&:hover': { bgcolor: colors.managementPanelHover },
                                   }}
                                 >
                                   <TableCell title={dateLabel} sx={{ py: 0.55, overflow: 'visible', textOverflow: 'clip' }}>{dateLabel}</TableCell>
@@ -6073,19 +6142,19 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.25, md: 1.75 },
-                    borderColor: '#cdd9ea',
+                    borderColor: colors.managementBorderSoft,
                     borderRadius: 2,
-                    boxShadow: '0 8px 20px rgba(15, 23, 42, 0.04)',
-                    background: '#ffffff',
+                    boxShadow: `0 8px 20px ${alpha(colors.slate900, 0.04)}`,
+                    background: colors.white,
                   }}
                 >
                   <Stack spacing={1.25}>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} justifyContent="space-between" alignItems={{ xs: 'stretch', md: 'center' }}>
                       <Box>
-                        <Typography sx={{ fontWeight: 900, color: '#111827', fontSize: 18 }}>
+                        <Typography sx={{ fontWeight: 700, color: colors.gray900, fontSize: 18 }}>
                           Frentes y UDR
                         </Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: 13 }}>
+                        <Typography sx={{ color: colors.slate500, fontSize: 13 }}>
                           Catálogo usado por los reportes de uso de recursos para armar títulos y correlativos.
                         </Typography>
                       </Box>
@@ -6095,28 +6164,28 @@ export default function ManagementPage() {
                     {reportFrontsLoading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 2 }}>
                         <CircularProgress size={22} />
-                        <Typography sx={{ color: '#4b5563' }}>Cargando frentes...</Typography>
+                        <Typography sx={{ color: colors.gray600 }}>Cargando frentes...</Typography>
                       </Stack>
                     ) : null}
 
-                    <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, backgroundColor: '#ffffff', overflowX: 'auto' }}>
+                    <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, backgroundColor: colors.white, overflowX: 'auto' }}>
                       <Table size="small" sx={{ minWidth: 1160 }}>
                         <TableHead>
                           <TableRow>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Nombre</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Código</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Tipo</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Correlativo</TableCell>
-                            <TableCell align="right" sx={{ fontWeight: 900, background: '#eef2f7' }}>Próximo N°</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Título</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Estado</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Acción</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Nombre</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Código</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Tipo</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Correlativo</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Próximo N°</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Título</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Estado</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Acción</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
                           {!reportFrontsLoading && reportFronts.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={8} sx={{ color: '#64748b', fontStyle: 'italic' }}>
+                              <TableCell colSpan={8} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
                                 Sin frentes configurados.
                               </TableCell>
                             </TableRow>
@@ -6124,7 +6193,7 @@ export default function ManagementPage() {
                             const isBaseReference = String(front.type || '').toLowerCase() === 'base';
                             return (
                             <TableRow key={String(front.id || front.code || front.name)} sx={{ opacity: front.is_active ? 1 : 0.62 }}>
-                              <TableCell sx={{ minWidth: 260, fontWeight: 800 }}>{front.name}</TableCell>
+                              <TableCell sx={{ minWidth: 260, fontWeight: 700 }}>{front.name}</TableCell>
                               <TableCell sx={{ minWidth: 170 }}>{front.code || '-'}</TableCell>
                               <TableCell sx={{ minWidth: 110 }}>{String(front.type || 'udr').toUpperCase()}</TableCell>
                               <TableCell sx={{ minWidth: 130 }}>
@@ -6133,7 +6202,7 @@ export default function ManagementPage() {
                                   ? ` · ${formatSpanishShortDate(front.date_anchor)}`
                                   : ''}
                               </TableCell>
-                              <TableCell align="right" sx={{ minWidth: 100, fontWeight: 800 }}>
+                              <TableCell align="right" sx={{ minWidth: 100, fontWeight: 700 }}>
                                 {front.sequence_mode === 'incremental'
                                   ? String(front.next_sequence_no || 1).padStart(3, '0')
                                   : (front.date_anchor_sequence_no ? String(front.date_anchor_sequence_no).padStart(3, '0') : '-')}
@@ -6146,25 +6215,25 @@ export default function ManagementPage() {
                                   py: 0.35,
                                   borderRadius: 999,
                                   fontSize: 12,
-                                  fontWeight: 800,
-                                  bgcolor: front.is_active ? '#dcfce7' : '#f1f5f9',
-                                  color: front.is_active ? '#166534' : '#64748b',
+                                  fontWeight: 700,
+                                  bgcolor: front.is_active ? colors.green100 : colors.slate100,
+                                  color: front.is_active ? colors.green800 : colors.slate500,
                                 }}>
                                   {front.is_active ? 'Activo' : 'Inactivo'}
                                 </Box>
                               </TableCell>
                               <TableCell align="center" sx={{ minWidth: 120 }}>
                                 {isBaseReference ? (
-                                  <Typography sx={{ color: '#64748b', fontSize: 12, fontWeight: 800 }}>
+                                  <Typography sx={{ color: colors.slate500, fontSize: 12, fontWeight: 700 }}>
                                     Referencia
                                   </Typography>
                                 ) : (
                                   <>
-                                    <IconButton size="small" onClick={() => openEditReportFrontDialog(front)} aria-label="Editar frente" title="Editar" sx={{ color: '#2563eb' }}>
+                                    <IconButton size="small" onClick={() => openEditReportFrontDialog(front)} aria-label="Editar frente" title="Editar" sx={{ color: colors.blue600 }}>
                                       <EditOutlined sx={{ fontSize: 18 }} />
                                     </IconButton>
-                                    <IconButton size="small" disabled={!front.is_active || !front.id || reportFrontSaving} onClick={() => deactivateReportFront(front)} aria-label="Desactivar frente" title="Desactivar" sx={{ color: '#ef4444' }}>
-                                      <DeleteOutline sx={{ fontSize: 18 }} />
+                                    <IconButton size="small" disabled={!front.is_active || !front.id || reportFrontSaving} onClick={() => deactivateReportFront(front)} aria-label="Desactivar frente" title="Desactivar" sx={{ color: colors.red500 }}>
+                                      <Trash2 size={16} />
                                     </IconButton>
                                   </>
                                 )}
@@ -6221,7 +6290,7 @@ export default function ManagementPage() {
                             readOnly: true,
                             endAdornment: (
                               <InputAdornment position="end">
-                                <CalendarMonth sx={{ color: '#64748b', fontSize: 20 }} />
+                                <CalendarMonth sx={{ color: colors.slate500, fontSize: 20 }} />
                               </InputAdornment>
                             ),
                           }}
@@ -6270,7 +6339,7 @@ export default function ManagementPage() {
                         </IconButton>
                         <Typography
                           sx={{
-                            color: '#bfcad9',
+                            color: colors.managementDisabledText,
                             fontSize: 13,
                             fontWeight: 500,
                             ml: { xs: 0, sm: 0.5 },
@@ -6290,7 +6359,7 @@ export default function ManagementPage() {
                     {equipmentLoading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 2 }}>
                         <CircularProgress size={22} />
-                        <Typography sx={{ color: '#4b5563' }}>Cargando equipos...</Typography>
+                        <Typography sx={{ color: colors.gray600 }}>Cargando equipos...</Typography>
                       </Stack>
                     ) : null}
 
@@ -6300,7 +6369,7 @@ export default function ManagementPage() {
                         .filter((entry) => entry.row.equipment_kind === kind);
                       return (
                         <Box key={kind}>
-                          <Typography sx={{ fontWeight: 800, color: '#1f2937', mb: 0.75 }}>
+                          <Typography sx={{ fontWeight: 700, color: colors.slate800, mb: 0.75 }}>
                             {kind === 'MAYOR' ? 'Equipos Mayores' : 'Equipos Menores'}
                           </Typography>
                           <Box
@@ -6314,11 +6383,11 @@ export default function ManagementPage() {
                             {indexedRows.length === 0 ? (
                               <Box
                                 sx={{
-                                  border: '1px solid #e5e7eb',
+                                  border: `1px solid ${colors.gray200}`,
                                   borderRadius: 1,
-                                  bgcolor: '#ffffff',
+                                  bgcolor: colors.white,
                                   p: 1.5,
-                                  color: '#64748b',
+                                  color: colors.slate500,
                                   fontStyle: 'italic',
                                 }}
                               >
@@ -6342,9 +6411,9 @@ export default function ManagementPage() {
                                 <Box
                                   key={`${kind}-card-${index}`}
                                   sx={{
-                                    border: '1px solid #e2e8f0',
+                                    border: `1px solid ${colors.slate200}`,
                                     borderRadius: 1,
-                                    bgcolor: '#ffffff',
+                                    bgcolor: colors.white,
                                     p: { xs: 1.25, sm: 1.5 },
                                     minWidth: 0,
                                   }}
@@ -6359,19 +6428,19 @@ export default function ManagementPage() {
                                       }}
                                     >
                                       <Box sx={{ minWidth: 0 }}>
-                                        <Typography sx={{ fontWeight: 850, color: '#111827', fontSize: 15, lineHeight: 1.25, wordBreak: 'break-word' }}>
+                                        <Typography sx={{ fontWeight: 700, color: colors.gray900, fontSize: 15, lineHeight: 1.25, wordBreak: 'break-word' }}>
                                           {String(row.equipment_name || '-').toUpperCase()}
                                         </Typography>
-                                        <Typography sx={{ color: '#64748b', fontSize: 12.5, mt: 0.25, wordBreak: 'break-word' }}>
+                                        <Typography sx={{ color: colors.slate500, fontSize: 12.5, mt: 0.25, wordBreak: 'break-word' }}>
                                           Patente: {String(row.patent || '-').toUpperCase()}
                                         </Typography>
                                       </Box>
                                       <Stack direction="row" spacing={0.15} sx={{ flex: '0 0 auto' }}>
-                                        <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: '#2563eb', p: 0.5 }}>
+                                        <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600, p: 0.5 }}>
                                           <EditOutlined sx={{ fontSize: 18 }} />
                                         </IconButton>
-                                        <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: '#ef4444', p: 0.5 }}>
-                                          <DeleteOutline sx={{ fontSize: 18 }} />
+                                        <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500, p: 0.5 }}>
+                                          <Trash2 size={16} />
                                         </IconButton>
                                       </Stack>
                                     </Box>
@@ -6388,14 +6457,14 @@ export default function ManagementPage() {
                                           key={item.label}
                                           sx={{
                                             minWidth: 0,
-                                            border: '1px solid #e5eaf2',
+                                            border: `1px solid ${colors.managementBorderMuted}`,
                                             borderRadius: 1,
                                             px: 0.75,
                                             py: 0.6,
-                                            bgcolor: '#f8fafc',
+                                            bgcolor: colors.slate50,
                                           }}
                                         >
-                                          <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', lineHeight: 1.1 }}>
+                                          <Typography sx={{ color: colors.slate400, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.1 }}>
                                             {item.label}
                                           </Typography>
                                           <Box
@@ -6404,13 +6473,13 @@ export default function ManagementPage() {
                                               height: 22,
                                               borderRadius: 999,
                                               border: `1px solid ${item.active ? item.color : colors.blue11}`,
-                                              bgcolor: item.active ? colors.blue15 : '#ffffff',
+                                              bgcolor: item.active ? colors.blue15 : colors.white,
                                               color: item.active ? item.color : colors.blue7,
                                               display: 'flex',
                                               alignItems: 'center',
                                               justifyContent: 'center',
                                               fontSize: 11.5,
-                                              fontWeight: 800,
+                                              fontWeight: 700,
                                               minWidth: 0,
                                               overflow: 'hidden',
                                               textOverflow: 'ellipsis',
@@ -6435,17 +6504,17 @@ export default function ManagementPage() {
                                           key={label}
                                           sx={{
                                             minWidth: 0,
-                                            border: '1px solid #e5eaf2',
+                                            border: `1px solid ${colors.managementBorderMuted}`,
                                             borderRadius: 1,
                                             px: 0.75,
                                             py: 0.55,
-                                            bgcolor: '#fbfdff',
+                                            bgcolor: colors.managementWhiteSoft,
                                           }}
                                         >
-                                          <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase', lineHeight: 1.1 }}>
+                                          <Typography sx={{ color: colors.slate400, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', lineHeight: 1.1 }}>
                                             {label}
                                           </Typography>
-                                          <Typography sx={{ color: '#111827', fontSize: 13, fontWeight: 800, mt: 0.4, wordBreak: 'break-word' }}>
+                                          <Typography sx={{ color: colors.gray900, fontSize: 13, fontWeight: 700, mt: 0.4, wordBreak: 'break-word' }}>
                                             {value}
                                           </Typography>
                                         </Box>
@@ -6456,17 +6525,17 @@ export default function ManagementPage() {
                                       <Box
                                         sx={{
                                           minWidth: 0,
-                                          border: '1px solid #e5eaf2',
+                                          border: `1px solid ${colors.managementBorderMuted}`,
                                           borderRadius: 1,
                                           px: 0.75,
                                           py: 0.6,
-                                          bgcolor: '#fbfdff',
+                                          bgcolor: colors.managementWhiteSoft,
                                         }}
                                       >
-                                        <Typography sx={{ color: '#94a3b8', fontSize: 10.5, fontWeight: 800, textTransform: 'uppercase' }}>
+                                        <Typography sx={{ color: colors.slate400, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase' }}>
                                           Notas
                                         </Typography>
-                                        <Typography sx={{ color: '#111827', fontSize: 13, wordBreak: 'break-word' }}>
+                                        <Typography sx={{ color: colors.gray900, fontSize: 13, wordBreak: 'break-word' }}>
                                           {String(row.notes || '-')}
                                         </Typography>
                                       </Box>
@@ -6477,28 +6546,28 @@ export default function ManagementPage() {
                             })}
                           </Box>
 
-                          <TableContainer sx={{ display: { xs: 'none', xl: 'block' }, width: '100%', border: '1px solid #e5e7eb', borderRadius: 1, backgroundColor: '#ffffff' }}>
+                          <TableContainer sx={{ display: { xs: 'none', xl: 'block' }, width: '100%', border: `1px solid ${colors.gray200}`, borderRadius: 1, backgroundColor: colors.white }}>
                             <Table size="small" sx={{ minWidth: 1160 }}>
                               <TableHead>
                                 <TableRow>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }}>Nombre (máquina/equipo)</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }}>Patente</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Operativa</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Mantención</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Acreditación</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Panne</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Cantidad</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">CANALETAS</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">PISCINAS</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Kilometraje</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }}>Notas</TableCell>
-                                  <TableCell sx={{ fontWeight: 800, color: '#94a3b8' }} align="center">Acción</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Nombre (máquina/equipo)</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Patente</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Operativa</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Mantención</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Acreditación</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Panne</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Cantidad</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">CANALETAS</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">PISCINAS</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Kilometraje</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Notas</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Acción</TableCell>
                                 </TableRow>
                               </TableHead>
                               <TableBody>
                                 {indexedRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={12} sx={{ color: '#64748b', fontStyle: 'italic' }}>
+                                    <TableCell colSpan={12} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
                                       Sin equipos cargados para este tipo.
                                     </TableCell>
                                   </TableRow>
@@ -6506,8 +6575,8 @@ export default function ManagementPage() {
                                   <TableRow
                                     key={`${kind}-${index}`}
                                     sx={{
-                                      bgcolor: index % 2 === 0 ? '#ffffff' : '#f8fafc',
-                                      '&:hover': { bgcolor: '#eef6ff' },
+                                      bgcolor: index % 2 === 0 ? colors.white : colors.slate50,
+                                      '&:hover': { bgcolor: colors.managementTableHover },
                                     }}
                                   >
                                     <TableCell sx={{ minWidth: 180 }}>{String(row.equipment_name || '-').toUpperCase()}</TableCell>
@@ -6530,11 +6599,11 @@ export default function ManagementPage() {
                                     <TableCell align="center">{row.mileage_km === null || row.mileage_km === undefined ? '-' : String(row.mileage_km)}</TableCell>
                                     <TableCell sx={{ minWidth: 180 }}>{String(row.notes || '-')}</TableCell>
                                     <TableCell align="center">
-                                      <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: '#2563eb' }}>
+                                      <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600 }}>
                                         <EditOutlined sx={{ fontSize: 18 }} />
                                       </IconButton>
-                                      <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: '#ef4444' }}>
-                                        <DeleteOutline sx={{ fontSize: 18 }} />
+                                      <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500 }}>
+                                        <Trash2 size={16} />
                                       </IconButton>
                                     </TableCell>
                                   </TableRow>
@@ -6552,22 +6621,22 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.5, md: 2 },
-                    borderColor: '#d8dee9',
-                    background: '#ffffff',
+                    borderColor: colors.managementBorder,
+                    background: colors.white,
                   }}
                 >
                   <Stack spacing={1.75}>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
                       <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography sx={{ fontWeight: 900, color: '#0f172a', fontSize: { xs: '1rem', md: '1.1rem' } }}>
+                        <Typography sx={{ fontWeight: 700, color: colors.slate900, fontSize: { xs: '1rem', md: '1.1rem' } }}>
                           Vista previa de caratula (PPTX)
                         </Typography>
-                        <Typography sx={{ mt: 0.15, fontSize: 12.5, color: '#1e3a8a', fontWeight: 700 }}>
+                        <Typography sx={{ mt: 0.15, fontSize: 12.5, color: colors.blue900, fontWeight: 700 }}>
                           Página {currentPreviewPage} de {Math.max(1, totalPhotoSlides)}
                         </Typography>
                         {activePhotoEvidenceSummary ? (
                           <Typography
-                            sx={{ mt: 0.2, fontSize: 12.5, color: '#334155' }}
+                            sx={{ mt: 0.2, fontSize: 12.5, color: colors.slate700 }}
                             noWrap
                             title={activePhotoEvidenceSummary}
                           >
@@ -6579,10 +6648,10 @@ export default function ManagementPage() {
                             mt: 0.15,
                             fontSize: 11.5,
                             color: !hasPhotoPeriodSelected
-                              ? '#64748b'
+                              ? colors.slate500
                               : photoConfigDirty
-                                ? '#b45309'
-                                : (photoConfigExistsForScope ? '#64748b' : '#991b1b'),
+                                ? colors.amber700
+                                : (photoConfigExistsForScope ? colors.slate500 : colors.red800),
                             fontWeight: hasPhotoPeriodSelected && photoConfigDirty ? 700 : 500,
                           }}
                         >
@@ -6621,14 +6690,14 @@ export default function ManagementPage() {
                           disabled={photoConfigSaving || !photoConfigDirty || !hasPhotoPeriodSelected}
                           sx={{
                             textTransform: 'none',
-                            fontWeight: 800,
-                            color: '#eff6ff',
+                            fontWeight: 700,
+                            color: colors.blue50,
                             '&:hover': {
-                              color: '#ffffff',
+                              color: colors.white,
                             },
                             '&.Mui-disabled': {
-                              color: '#0f4f9f',
-                              WebkitTextFillColor: '#0f4f9f',
+                              color: colors.managementLinkBlue,
+                              WebkitTextFillColor: colors.managementLinkBlue,
                             },
                           }}
                         >
@@ -6636,14 +6705,14 @@ export default function ManagementPage() {
                         </Button>
                         <Button
                           variant="contained"
-                          startIcon={photoExporting ? <CircularProgress size={16} sx={{ color: '#ffffff' }} /> : <Download />}
+                          startIcon={photoExporting ? <CircularProgress size={16} sx={{ color: colors.white }} /> : <Download />}
                           onClick={() => void exportPhotoReportPptx()}
                           disabled={photoExporting || !canExportPhotoReport || !hasPhotoPeriodSelected}
                           sx={{
                             bgcolor: colors.blue1,
-                            color: '#ffffff',
+                            color: colors.white,
                             textTransform: 'none',
-                            fontWeight: 800,
+                            fontWeight: 700,
                             px: 1.4,
                             '&:hover': { bgcolor: colors.blue2 },
                           }}
@@ -6671,7 +6740,7 @@ export default function ManagementPage() {
                         variant="outlined"
                         sx={{
                           p: { xs: 1, md: 1.25 },
-                          borderColor: '#d8dee9',
+                          borderColor: colors.managementBorder,
                           borderRadius: 1.5,
                           minWidth: 0,
                           width: '100%',
@@ -6728,18 +6797,18 @@ export default function ManagementPage() {
                           <Box
                             sx={{
                               width: '100%',
-                              border: '1px solid #d8dee9',
+                              border: `1px solid ${colors.managementBorder}`,
                               borderRadius: 1.5,
                               px: 1,
                               py: 0.9,
-                              background: '#f8fbff',
+                              background: colors.managementPanelBgSoft,
                             }}
                           >
                             <Typography
                               sx={{
                                 fontSize: 12,
                                 fontWeight: 700,
-                                color: '#4b6785',
+                                color: colors.managementTextMuted,
                                 mb: 0.7,
                                 ml: 0.25,
                                 lineHeight: 1,
@@ -6761,12 +6830,12 @@ export default function ManagementPage() {
                                 readOnly: true,
                                 endAdornment: (
                                   <InputAdornment position="end">
-                                    <CalendarMonth sx={{ color: '#64748b' }} />
+                                    <CalendarMonth sx={{ color: colors.slate500 }} />
                                   </InputAdornment>
                                 ),
                                 sx: {
                                   cursor: 'pointer',
-                                  background: '#ffffff',
+                                  background: colors.white,
                                 },
                               }}
                             />
@@ -6784,7 +6853,7 @@ export default function ManagementPage() {
                             InputProps={{
                               startAdornment: (
                                 <InputAdornment position="start">
-                                  <Search sx={{ color: '#64748b', fontSize: 19 }} />
+                                  <Search sx={{ color: colors.slate500, fontSize: 19 }} />
                                 </InputAdornment>
                               ),
                               endAdornment: photoKeywordFilter ? (
@@ -6793,7 +6862,7 @@ export default function ManagementPage() {
                                     size="small"
                                     onClick={() => setPhotoKeywordFilter('')}
                                     aria-label="Limpiar filtro fotográfico"
-                                    sx={{ color: '#64748b' }}
+                                    sx={{ color: colors.slate500 }}
                                   >
                                     <Clear fontSize="small" />
                                   </IconButton>
@@ -6884,9 +6953,9 @@ export default function ManagementPage() {
                               Sector siguiente
                             </Button>
                           </Stack>
-                          <Accordion disableGutters elevation={0} sx={{ border: '1px solid #d8dee9', borderRadius: 1.25, '&:before': { display: 'none' } }}>
+                          <Accordion disableGutters elevation={0} sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1.25, '&:before': { display: 'none' } }}>
                             <AccordionSummary expandIcon={<ExpandMore />} sx={{ minHeight: 36 }}>
-                              <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#334155' }}>Opciones avanzadas (URLs)</Typography>
+                              <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate700 }}>Opciones avanzadas (URLs)</Typography>
                             </AccordionSummary>
                             <AccordionDetails sx={{ pt: 0.5 }}>
                               <Stack spacing={1}>
@@ -6922,15 +6991,19 @@ export default function ManagementPage() {
 
                       <Box
                         sx={{
-                          width: '100%',
+                          width: {
+                            xs: '100%',
+                            md: 'min(100%, calc((100vh - 210px) * 16 / 9))',
+                          },
                           maxWidth: '100%',
                           minWidth: 0,
-                          justifySelf: 'stretch',
+                          justifySelf: 'center',
                           aspectRatio: '16 / 9',
+                          containerType: 'inline-size',
                           borderRadius: 2,
                           overflow: 'hidden',
-                          border: '1px solid rgba(148, 163, 184, 0.45)',
-                          boxShadow: '0 18px 44px rgba(2, 34, 78, 0.26)',
+                          border: `1px solid ${alpha(colors.slate400, 0.45)}`,
+                          boxShadow: `0 18px 44px ${alpha(colors.managementDeepShadowBlue, 0.26)}`,
                           position: 'relative',
                         }}
                       >
@@ -6948,7 +7021,7 @@ export default function ManagementPage() {
                             sx={{
                               width: `${100 / Math.max(1, totalPhotoSlides)}%`,
                               height: '100%',
-                              backgroundColor: '#0b3f84',
+                              backgroundColor: colors.managementNavy,
                               backgroundImage: `
                                 url(${DEFAULT_PHOTO_REPORT_BACKGROUND_URL})
                               `,
@@ -6960,19 +7033,19 @@ export default function ManagementPage() {
                               justifyContent: 'space-between',
                               py: { xs: 3, md: 4.25 },
                               px: { xs: 2.25, md: 5 },
-                              color: '#ffffff',
+                              color: colors.white,
                             }}
                           >
                             <Typography
                               sx={{
-                                fontSize: { xs: '0.95rem', md: '1.65rem' },
+                                fontSize: 'clamp(0.56rem, 2.08cqw, 1.65rem)',
                                 lineHeight: 1.24,
                                 letterSpacing: '0.01em',
                                 textAlign: 'center',
                                 fontWeight: 500,
                                 maxWidth: '84%',
                                 textWrap: 'balance',
-                                textShadow: '0 2px 6px rgba(0, 0, 0, 0.32)',
+                                textShadow: `0 2px 6px ${alpha(colors.black, 0.32)}`,
                               }}
                             >
                               {photoCoverTitle || 'Titulo de informe fotografico'}
@@ -6984,31 +7057,31 @@ export default function ManagementPage() {
                                 src={photoCoverLogoUrl || DEFAULT_PHOTO_REPORT_LOGO_URL}
                                 alt="Logo central"
                                 style={{
-                                  width: 'clamp(120px, 20vw, 210px)',
+                                  width: 'clamp(58px, 15.8cqw, 210px)',
                                   height: 'auto',
-                                  maxHeight: 'clamp(120px, 20vw, 210px)',
+                                  maxHeight: 'clamp(58px, 15.8cqw, 210px)',
                                   objectFit: 'contain',
-                                  filter: 'drop-shadow(0 10px 22px rgba(0, 0, 0, 0.2))',
+                                  filter: `drop-shadow(0 10px 22px ${alpha(colors.black, 0.2)})`,
                                 }}
                               />
 
-                              <Box sx={{ width: '56%', borderTop: '2px solid rgba(255, 255, 255, 0.9)' }} />
+                              <Box sx={{ width: '56%', borderTop: `2px solid ${alpha(colors.white, 0.9)}` }} />
 
-                              <Typography sx={{ fontSize: { xs: '1.02rem', md: '1.5rem' }, fontWeight: 500, letterSpacing: '0.01em', textAlign: 'center' }}>
+                              <Typography sx={{ fontSize: 'clamp(0.62rem, 1.9cqw, 1.5rem)', fontWeight: 500, letterSpacing: '0.01em', textAlign: 'center' }}>
                                 PRESENTACION FOTOGRAFICA
                               </Typography>
-                              <Typography sx={{ fontSize: { xs: '1.05rem', md: '1.8rem' }, fontWeight: 500, textAlign: 'center' }}>
+                              <Typography sx={{ fontSize: 'clamp(0.66rem, 2.15cqw, 1.8rem)', fontWeight: 500, textAlign: 'center' }}>
                                 {hasPhotoPeriodSelected ? `Informe N°${photoCoverReportNo}` : 'Informe sin rango'}
                               </Typography>
                             </Stack>
 
                             <Typography
                               sx={{
-                                fontSize: { xs: '1rem', md: '1.7rem' },
+                                fontSize: 'clamp(0.62rem, 2cqw, 1.7rem)',
                                 lineHeight: 1.2,
                                 textAlign: 'center',
                                 fontWeight: 500,
-                                textShadow: '0 2px 6px rgba(0, 0, 0, 0.32)',
+                                textShadow: `0 2px 6px ${alpha(colors.black, 0.32)}`,
                                 maxWidth: '90%',
                                 textWrap: 'balance',
                               }}
@@ -7021,7 +7094,7 @@ export default function ManagementPage() {
                             sx={{
                               width: `${100 / Math.max(1, totalPhotoSlides)}%`,
                               height: '100%',
-                              backgroundColor: '#0b3f84',
+                              backgroundColor: colors.managementNavy,
                               backgroundImage: `
                                 url(${photoPage2BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE2_BACKGROUND_URL})
                               `,
@@ -7036,13 +7109,13 @@ export default function ManagementPage() {
                                 position: 'absolute',
                                 right: { xs: '4.5%', md: '5%' },
                                 top: { xs: '52%', md: '49.8%' },
-                                color: '#ffffff',
+                                color: colors.white,
                                 textAlign: 'right',
-                                fontWeight: 800,
+                                fontWeight: 700,
                                 letterSpacing: '0.01em',
-                                fontSize: { xs: '0.86rem', md: '1.48rem' },
+                                fontSize: 'clamp(0.48rem, 1.82cqw, 1.48rem)',
                                 lineHeight: 1.15,
-                                textShadow: '0 2px 8px rgba(0, 0, 0, 0.42)',
+                                textShadow: `0 2px 8px ${alpha(colors.black, 0.42)}`,
                                 width: '56%',
                                 textTransform: 'uppercase',
                               }}
@@ -7057,7 +7130,7 @@ export default function ManagementPage() {
                               height: '100%',
                               position: 'relative',
                               overflow: 'hidden',
-                              backgroundColor: '#2F5EAA',
+                              backgroundColor: colors.managementPptBlue,
                               backgroundImage: `
                                 url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                               `,
@@ -7070,11 +7143,11 @@ export default function ManagementPage() {
                           >
                             <Typography
                               sx={{
-                                color: '#ffffff',
+                                color: colors.white,
                                 textAlign: 'center',
-                                fontWeight: 800,
+                                fontWeight: 700,
                                 letterSpacing: '0.02em',
-                                fontSize: { xs: '1.2rem', md: '3.5rem' },
+                                fontSize: 'clamp(0.82rem, 4.2cqw, 3.5rem)',
                                 lineHeight: 1.16,
                                 textTransform: 'uppercase',
                                 maxWidth: '52%',
@@ -7101,31 +7174,20 @@ export default function ManagementPage() {
                                   height: '100%',
                                   position: 'relative',
                                   overflow: 'hidden',
-                                  backgroundColor: '#2F5EAA',
+                                  backgroundColor: colors.managementPptBlue,
                                   backgroundImage: `
-                                    linear-gradient(0deg, rgba(47, 94, 170, 0.2), rgba(47, 94, 170, 0.2)),
+                                    linear-gradient(0deg, ${alpha(colors.managementPptBlue, 0.2)}, ${alpha(colors.managementPptBlue, 0.2)}),
                                     url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                                   `,
                                   backgroundSize: 'cover',
                                   backgroundPosition: 'center',
                                 }}
                               >
-                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: '#fff', fontSize: { xs: '0.82rem', md: '1.2rem' }, fontWeight: 800 }}>
+                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: colors.white, fontSize: 'clamp(0.42rem, 1.45cqw, 1.2rem)', fontWeight: 700 }}>
                                   {'"Contratos de Construcción GRPO 2025_2026"'}
                                 </Typography>
                                 {renderPhotoGroupTitleInput(group, photoPage3AreaTitle || 'ÁREA CANALETAS')}
-                                {group.layout === 'three' ? (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', left: '34.8%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(third, thirdUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                  </>
-                                ) : (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                  </>
-                                )}
+                                {renderPhotoPreviewGroupImages(group, [firstUrl, secondUrl, thirdUrl])}
                               </Box>
                             );
                           })}
@@ -7136,7 +7198,7 @@ export default function ManagementPage() {
                               height: '100%',
                               position: 'relative',
                               overflow: 'hidden',
-                              backgroundColor: '#2F5EAA',
+                              backgroundColor: colors.managementPptBlue,
                               backgroundImage: `
                                 url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                               `,
@@ -7149,11 +7211,11 @@ export default function ManagementPage() {
                           >
                             <Typography
                               sx={{
-                                color: '#ffffff',
+                                color: colors.white,
                                 textAlign: 'center',
-                                fontWeight: 800,
+                                fontWeight: 700,
                                 letterSpacing: '0.02em',
-                                fontSize: { xs: '1.2rem', md: '3.5rem' },
+                                fontSize: 'clamp(0.82rem, 4.2cqw, 3.5rem)',
                                 lineHeight: 1.16,
                                 textTransform: 'uppercase',
                                 maxWidth: '52%',
@@ -7180,31 +7242,20 @@ export default function ManagementPage() {
                                   height: '100%',
                                   position: 'relative',
                                   overflow: 'hidden',
-                                  backgroundColor: '#2F5EAA',
+                                  backgroundColor: colors.managementPptBlue,
                                   backgroundImage: `
-                                    linear-gradient(0deg, rgba(47, 94, 170, 0.2), rgba(47, 94, 170, 0.2)),
+                                    linear-gradient(0deg, ${alpha(colors.managementPptBlue, 0.2)}, ${alpha(colors.managementPptBlue, 0.2)}),
                                     url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                                   `,
                                   backgroundSize: 'cover',
                                   backgroundPosition: 'center',
                                 }}
                               >
-                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: '#fff', fontSize: { xs: '0.82rem', md: '1.2rem' }, fontWeight: 800 }}>
+                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: colors.white, fontSize: 'clamp(0.42rem, 1.45cqw, 1.2rem)', fontWeight: 700 }}>
                                   {'"Contratos de Construcción GRPO 2025_2026"'}
                                 </Typography>
                                 {renderPhotoGroupTitleInput(group, photoPiscinasAreaTitle || 'ÁREA PISCINAS')}
-                                {group.layout === 'three' ? (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', left: '34.8%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(third, thirdUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                  </>
-                                ) : (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                  </>
-                                )}
+                                {renderPhotoPreviewGroupImages(group, [firstUrl, secondUrl, thirdUrl])}
                               </Box>
                             );
                           })}
@@ -7215,7 +7266,7 @@ export default function ManagementPage() {
                               height: '100%',
                               position: 'relative',
                               overflow: 'hidden',
-                              backgroundColor: '#2F5EAA',
+                              backgroundColor: colors.managementPptBlue,
                               backgroundImage: `
                                 url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                               `,
@@ -7229,11 +7280,11 @@ export default function ManagementPage() {
                           >
                             <Typography
                               sx={{
-                                color: '#ffffff',
+                                color: colors.white,
                                 textAlign: 'center',
-                                fontWeight: 800,
+                                fontWeight: 700,
                                 letterSpacing: '0.02em',
-                                fontSize: { xs: '1.2rem', md: '3.2rem' },
+                                fontSize: 'clamp(0.82rem, 4cqw, 3.2rem)',
                                 lineHeight: 1.1,
                                 textTransform: 'uppercase',
                                 whiteSpace: 'pre-line',
@@ -7259,31 +7310,20 @@ export default function ManagementPage() {
                                   height: '100%',
                                   position: 'relative',
                                   overflow: 'hidden',
-                                  backgroundColor: '#2F5EAA',
+                                  backgroundColor: colors.managementPptBlue,
                                   backgroundImage: `
-                                    linear-gradient(0deg, rgba(47, 94, 170, 0.2), rgba(47, 94, 170, 0.2)),
+                                    linear-gradient(0deg, ${alpha(colors.managementPptBlue, 0.2)}, ${alpha(colors.managementPptBlue, 0.2)}),
                                     url(${photoPage3BackgroundUrl || DEFAULT_PHOTO_REPORT_PAGE3_BACKGROUND_URL})
                                   `,
                                   backgroundSize: 'cover',
                                   backgroundPosition: 'center',
                                 }}
                               >
-                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: '#fff', fontSize: { xs: '0.82rem', md: '1.2rem' }, fontWeight: 800 }}>
+                                <Typography sx={{ position: 'absolute', right: '3%', top: '2.1%', color: colors.white, fontSize: 'clamp(0.42rem, 1.45cqw, 1.2rem)', fontWeight: 700 }}>
                                   {'"Contratos de Construcción GRPO 2025_2026"'}
                                 </Typography>
                                 {renderPhotoGroupTitleInput(group, photoAdicionalesAreaTitle || 'ADICIONALES')}
-                                {group.layout === 'three' ? (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', left: '34.8%', top: '19%', width: '30.4%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(third, thirdUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '30.4%', height: '72%' })}
-                                  </>
-                                ) : (
-                                  <>
-                                    {renderPhotoPreviewSlot(first, firstUrl, { position: 'absolute', left: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                    {renderPhotoPreviewSlot(second, secondUrl, { position: 'absolute', right: '2.2%', top: '19%', width: '46.8%', height: '72%' })}
-                                  </>
-                                )}
+                                {renderPhotoPreviewGroupImages(group, [firstUrl, secondUrl, thirdUrl])}
                               </Box>
                             );
                           })}
@@ -7292,7 +7332,7 @@ export default function ManagementPage() {
                             sx={{
                               width: `${100 / Math.max(1, totalPhotoSlides)}%`,
                               height: '100%',
-                              backgroundColor: '#0b3f84',
+                              backgroundColor: colors.managementNavy,
                               backgroundImage: `
                                 url(${DEFAULT_PHOTO_REPORT_BACKGROUND_URL})
                               `,
@@ -7304,7 +7344,7 @@ export default function ManagementPage() {
                               justifyContent: 'flex-start',
                               pt: { xs: 12.2, md: 14.8 },
                               px: { xs: 2.25, md: 5 },
-                              color: '#ffffff',
+                              color: colors.white,
                             }}
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -7312,17 +7352,17 @@ export default function ManagementPage() {
                               src={photoCoverLogoUrl || DEFAULT_PHOTO_REPORT_LOGO_URL}
                               alt="Logo final"
                               style={{
-                                width: 'clamp(120px, 18vw, 200px)',
+                                width: 'clamp(58px, 14cqw, 200px)',
                                 height: 'auto',
                                 objectFit: 'contain',
-                                filter: 'drop-shadow(0 10px 22px rgba(0, 0, 0, 0.2))',
+                                filter: `drop-shadow(0 10px 22px ${alpha(colors.black, 0.2)})`,
                               }}
                             />
-                            <Box sx={{ mt: { xs: 3.1, md: 4.1 }, width: '82%', borderTop: '2px solid rgba(255, 255, 255, 0.9)' }} />
-                            <Typography sx={{ mt: 1.9, fontSize: { xs: '0.9rem', md: '1.35rem' }, textAlign: 'center', fontWeight: 500 }}>
+                            <Box sx={{ mt: { xs: 3.1, md: 4.1 }, width: '82%', borderTop: `2px solid ${alpha(colors.white, 0.9)}` }} />
+                            <Typography sx={{ mt: 1.9, fontSize: 'clamp(0.48rem, 1.65cqw, 1.35rem)', textAlign: 'center', fontWeight: 500 }}>
                               Badajoz 45, Piso 5 - Edificio los fundadores. Las Condes
                             </Typography>
-                            <Typography sx={{ mt: 0.65, fontSize: { xs: '1rem', md: '1.7rem' }, textAlign: 'center', fontWeight: 700 }}>
+                            <Typography sx={{ mt: 0.65, fontSize: 'clamp(0.58rem, 2cqw, 1.7rem)', textAlign: 'center', fontWeight: 700 }}>
                               www.pugamujica.cl
                             </Typography>
                             <Stack
@@ -7337,12 +7377,12 @@ export default function ManagementPage() {
                                 src={DEFAULT_PHOTO_REPORT_FINAL_COMPANY_LOGO_URL}
                                 alt="Logo Puga Mujica"
                                 style={{
-                                  width: 'clamp(18px, 2.2vw, 30px)',
-                                  height: 'clamp(18px, 2.2vw, 30px)',
+                                  width: 'clamp(12px, 2.2cqw, 30px)',
+                                  height: 'clamp(12px, 2.2cqw, 30px)',
                                   objectFit: 'contain',
                                 }}
                               />
-                              <Typography sx={{ fontSize: { xs: '0.95rem', md: '1.4rem' }, textAlign: 'left', fontWeight: 500 }}>
+                              <Typography sx={{ fontSize: 'clamp(0.5rem, 1.7cqw, 1.4rem)', textAlign: 'left', fontWeight: 500 }}>
                                 Puga, Mujica Asociados S.A.
                               </Typography>
                             </Stack>
@@ -7357,10 +7397,10 @@ export default function ManagementPage() {
                             left: 10,
                             top: '50%',
                             transform: 'translateY(-50%)',
-                            color: '#ffffff',
-                            bgcolor: 'rgba(15, 23, 42, 0.35)',
-                            border: '1px solid rgba(255,255,255,0.4)',
-                            '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.55)' },
+                            color: colors.white,
+                            bgcolor: alpha(colors.slate900, 0.35),
+                            border: `1px solid ${alpha(colors.white, 0.4)}`,
+                            '&:hover': { bgcolor: alpha(colors.slate900, 0.55) },
                           }}
                         >
                           <ChevronLeft />
@@ -7373,10 +7413,10 @@ export default function ManagementPage() {
                             right: 10,
                             top: '50%',
                             transform: 'translateY(-50%)',
-                            color: '#ffffff',
-                            bgcolor: 'rgba(15, 23, 42, 0.35)',
-                            border: '1px solid rgba(255,255,255,0.4)',
-                            '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.55)' },
+                            color: colors.white,
+                            bgcolor: alpha(colors.slate900, 0.35),
+                            border: `1px solid ${alpha(colors.white, 0.4)}`,
+                            '&:hover': { bgcolor: alpha(colors.slate900, 0.55) },
                           }}
                         >
                           <ChevronRight />
@@ -7390,8 +7430,8 @@ export default function ManagementPage() {
                   variant="outlined"
                   sx={{
                     p: { xs: 1.5, md: 2 },
-                    borderColor: '#d8dee9',
-                    background: '#ffffff',
+                    borderColor: colors.managementBorder,
+                    background: colors.white,
                   }}
                 >
                   {interferencesError ? (
@@ -7399,25 +7439,25 @@ export default function ManagementPage() {
                   ) : interferencesLoading ? (
                     <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                       <CircularProgress size={22} />
-                      <Typography sx={{ color: '#4b5563' }}>Cargando interferencias...</Typography>
+                      <Typography sx={{ color: colors.gray600 }}>Cargando interferencias...</Typography>
                     </Stack>
                   ) : interferences.length === 0 ? (
                     <Box sx={{ py: 4, textAlign: 'center' }}>
-                      <Typography sx={{ color: '#64748b' }}>No hay interferencias registradas.</Typography>
+                      <Typography sx={{ color: colors.slate500 }}>No hay interferencias registradas.</Typography>
                     </Box>
                   ) : (
-                    <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1 }}>
+                    <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1 }}>
                       <Table size="small">
                         <TableHead>
                           <TableRow>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Fecha</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Frente</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Tipo</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Detalle tipo</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Inicio</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Fin</TableCell>
-                            <TableCell sx={{ fontWeight: 900, background: '#eef2f7' }}>Nota</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 900, background: '#eef2f7' }}>Imágenes</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Fecha</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Frente</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Tipo</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Detalle tipo</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Inicio</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Fin</TableCell>
+                            <TableCell sx={{ fontWeight: 700, background: colors.managementTableHead }}>Nota</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHead }}>Imágenes</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
@@ -7468,7 +7508,7 @@ export default function ManagementPage() {
         <DialogTitle>Seleccionar imágenes del informe</DialogTitle>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {selectablePhotoCandidates.length === 0 ? (
-            <Typography sx={{ color: '#64748b' }}>No hay imágenes candidatas para este rango.</Typography>
+            <Typography sx={{ color: colors.slate500 }}>No hay imágenes candidatas para este rango.</Typography>
           ) : (
             <Stack spacing={1} sx={{ minHeight: 0, flex: 1 }}>
               <Alert severity="info" sx={{ py: 0.35 }}>
@@ -7567,7 +7607,7 @@ export default function ManagementPage() {
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Search sx={{ color: '#64748b', fontSize: 19 }} />
+                      <Search sx={{ color: colors.slate500, fontSize: 19 }} />
                     </InputAdornment>
                   ),
                   endAdornment: photoKeywordFilter ? (
@@ -7576,7 +7616,7 @@ export default function ManagementPage() {
                         size="small"
                         onClick={() => setPhotoKeywordFilter('')}
                         aria-label="Limpiar filtro fotográfico"
-                        sx={{ color: '#64748b' }}
+                        sx={{ color: colors.slate500 }}
                       >
                         <Clear fontSize="small" />
                       </IconButton>
@@ -7620,8 +7660,8 @@ export default function ManagementPage() {
                 variant="outlined"
                 sx={{
                   p: 1,
-                  borderColor: '#d8dee9',
-                  bgcolor: '#f8fbff',
+                  borderColor: colors.managementBorder,
+                  bgcolor: colors.managementPanelBgSoft,
                   borderRadius: 1.25,
                   flex: 1,
                   minHeight: 0,
@@ -7630,10 +7670,10 @@ export default function ManagementPage() {
               >
                 <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
                   <Box>
-                    <Typography sx={{ fontSize: 13, fontWeight: 900, color: '#0f172a' }}>
+                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate900 }}>
                       Actividades relevantes
                     </Typography>
-                    <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>
+                    <Typography sx={{ fontSize: 11.5, color: colors.slate500 }}>
                       Coincidencias frecuentes según las imágenes del rango y los filtros activos.
                     </Typography>
                   </Box>
@@ -7642,63 +7682,72 @@ export default function ManagementPage() {
                       size="small"
                       variant="text"
                       onClick={() => setPhotoSelectActivityFilter('')}
-                      sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                      sx={{ textTransform: 'none', fontWeight: 700, flexShrink: 0 }}
                     >
                       Ver todas
                     </Button>
                   ) : null}
                 </Stack>
                 {photoActivitySuggestionSections.length === 0 ? (
-                  <Typography sx={{ py: 1, fontSize: 12.5, color: '#64748b' }}>
+                  <Typography sx={{ py: 1, fontSize: 12.5, color: colors.slate500 }}>
                     No hay actividades para los filtros actuales.
                   </Typography>
                 ) : (
                   <Stack spacing={1}>
                     {photoActivitySuggestionSections.map((section) => (
                       <Box key={`photo-activity-section-${section.front}`} sx={{ minWidth: 0 }}>
-                        <Typography sx={{ mb: 0.5, fontSize: 11.5, color: '#475569', fontWeight: 900 }}>
+                        <Typography sx={{ mb: 0.5, fontSize: 11.5, color: colors.slate600, fontWeight: 700 }}>
                           {section.front}
                         </Typography>
-                        <Box
-                          sx={{
-                            display: 'grid',
-                            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: '1fr' },
-                            gap: 0.75,
-                          }}
-                        >
-                          {section.activities.map((activity) => {
-                            const selected = photoSelectActivityFilter === activity.key;
-                            return (
+                        <Stack spacing={0.8}>
+                          {section.groups.map((group) => (
+                            <Box key={`photo-activity-subgroup-${section.front}-${group.label}`} sx={{ minWidth: 0 }}>
+                              <Typography sx={{ mb: 0.45, fontSize: 10.8, color: colors.slate500, fontWeight: 700 }}>
+                                {group.label}
+                              </Typography>
                               <Box
-                                key={`photo-activity-${activity.key}`}
-                                component="button"
-                                type="button"
-                                onClick={() => setPhotoSelectActivityFilter(selected ? '' : activity.key)}
                                 sx={{
-                                  width: '100%',
-                                  minWidth: 0,
-                                  p: 0.85,
-                                  borderRadius: 1,
-                                  border: selected ? '1px solid #2563eb' : '1px solid #d8dee9',
-                                  bgcolor: selected ? '#dbeafe' : '#ffffff',
-                                  color: '#0f172a',
-                                  textAlign: 'left',
-                                  cursor: 'pointer',
-                                  boxShadow: selected ? '0 0 0 1px rgba(37, 99, 235, 0.16)' : 'none',
-                                  '&:hover': { borderColor: '#2563eb', bgcolor: selected ? '#dbeafe' : '#eff6ff' },
+                                  display: 'grid',
+                                  gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: '1fr' },
+                                  gap: 0.75,
                                 }}
                               >
-                                <Typography sx={{ fontSize: 12.5, fontWeight: 900 }} noWrap title={activity.label}>
-                                  {activity.label}
-                                </Typography>
-                                <Typography sx={{ mt: 0.25, fontSize: 11.5, color: '#475569' }}>
-                                  {activity.imageCount} img · {activity.reportCount} rep · {activity.crewCount} cuadr.
-                                  {activity.selectedCount ? ` · ${activity.selectedCount} sel.` : ''}
-                                </Typography>
+                                {group.activities.map((activity) => {
+                                  const selected = photoSelectActivityFilter === activity.key;
+                                  return (
+                                    <Box
+                                      key={`photo-activity-${activity.key}`}
+                                      component="button"
+                                      type="button"
+                                      onClick={() => setPhotoSelectActivityFilter(selected ? '' : activity.key)}
+                                      sx={{
+                                        width: '100%',
+                                        minWidth: 0,
+                                        p: 0.85,
+                                        borderRadius: 1,
+                                        border: selected ? `1px solid ${colors.blue600}` : `1px solid ${colors.managementBorder}`,
+                                        bgcolor: selected ? colors.blue100 : colors.white,
+                                        color: colors.slate900,
+                                        textAlign: 'left',
+                                        cursor: 'pointer',
+                                        boxShadow: selected ? `0 0 0 1px ${alpha(colors.blue600, 0.16)}` : 'none',
+                                        '&:hover': { borderColor: colors.blue600, bgcolor: selected ? colors.blue100 : colors.blue50 },
+                                      }}
+                                    >
+                                      <Typography sx={{ fontSize: 12.5, fontWeight: 700 }} noWrap title={activity.label}>
+                                        {activity.label}
+                                      </Typography>
+                                      <Typography sx={{ mt: 0.25, fontSize: 11.5, color: colors.slate600 }}>
+                                        {activity.imageCount} img · {activity.reportCount} rep · {activity.crewCount} cuadr.
+                                        {activity.selectedCount ? ` · ${activity.selectedCount} sel.` : ''}
+                                      </Typography>
+                                    </Box>
+                                  );
+                                })}
                               </Box>
-                            );
-                          })}
-                        </Box>
+                            </Box>
+                          ))}
+                        </Stack>
                       </Box>
                     ))}
                   </Stack>
@@ -7706,13 +7755,13 @@ export default function ManagementPage() {
               </Paper>
                 </Stack>
                 <Stack spacing={0.75} sx={{ minWidth: 0, minHeight: 0 }}>
-              <Typography sx={{ fontSize: 12, color: '#64748b' }}>
+              <Typography sx={{ fontSize: 12, color: colors.slate500 }}>
                 Seleccionadas visibles: {filteredSelectedPhotoCount} de {filteredSelectablePhotoCandidates.length}
                 {filteredSelectablePhotoCandidates.length !== selectablePhotoCandidates.length
                   ? ` | Total seleccionadas: ${Object.keys(photoRestoreSelection).filter((k) => photoRestoreSelection[k]).length} de ${selectablePhotoCandidates.length}`
                   : ''}
               </Typography>
-              <TableContainer sx={{ border: '1px solid #e5e7eb', borderRadius: 1, flex: 1, minHeight: 0 }}>
+              <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, flex: 1, minHeight: 0 }}>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -7727,7 +7776,7 @@ export default function ManagementPage() {
                   <TableBody>
                     {filteredSelectablePhotoCandidates.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} sx={{ py: 3, textAlign: 'center', color: '#64748b' }}>
+                        <TableCell colSpan={6} sx={{ py: 3, textAlign: 'center', color: colors.slate500 }}>
                           No hay imágenes que coincidan con el filtro.
                         </TableCell>
                       </TableRow>
@@ -7778,8 +7827,8 @@ export default function ManagementPage() {
                                   height: 92,
                                   objectFit: 'cover',
                                   borderRadius: 0.75,
-                                  border: '1px solid #cbd5e1',
-                                  bgcolor: '#e2e8f0',
+                                  border: `1px solid ${colors.slate300}`,
+                                  bgcolor: colors.slate200,
                                 }}
                               />
                               </Box>
@@ -7793,8 +7842,8 @@ export default function ManagementPage() {
                                   width: 140,
                                   height: 92,
                                   borderRadius: 0.75,
-                                  border: '1px solid #cbd5e1',
-                                  bgcolor: '#e2e8f0',
+                                  border: `1px solid ${colors.slate300}`,
+                                  bgcolor: colors.slate200,
                                   cursor: 'zoom-in',
                                 }}
                               />
@@ -7839,7 +7888,7 @@ export default function ManagementPage() {
         }}
       >
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-          <Typography sx={{ fontWeight: 900, color: '#0f172a' }}>
+          <Typography sx={{ fontWeight: 700, color: colors.slate900 }}>
             Vista ampliada
           </Typography>
           <Button onClick={() => setPhotoZoomEvidenceKey('')} sx={{ textTransform: 'none' }}>
@@ -7850,7 +7899,7 @@ export default function ManagementPage() {
           <Box
             sx={{
               minHeight: 0,
-              bgcolor: '#0f172a',
+              bgcolor: colors.slate900,
               borderRadius: 1,
               display: 'flex',
               alignItems: 'center',
@@ -7867,7 +7916,7 @@ export default function ManagementPage() {
                 sx={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             ) : (
-              <Typography sx={{ color: '#cbd5e1' }}>Cargando imagen...</Typography>
+              <Typography sx={{ color: colors.slate300 }}>Cargando imagen...</Typography>
             )}
             {zoomPhotoList.length > 1 ? (
               <>
@@ -7879,9 +7928,9 @@ export default function ManagementPage() {
                     left: 12,
                     top: '50%',
                     transform: 'translateY(-50%)',
-                    bgcolor: 'rgba(15, 23, 42, 0.62)',
-                    color: '#ffffff',
-                    '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.82)' },
+                    bgcolor: alpha(colors.slate900, 0.62),
+                    color: colors.white,
+                    '&:hover': { bgcolor: alpha(colors.slate900, 0.82) },
                   }}
                 >
                   <ChevronLeft />
@@ -7894,9 +7943,9 @@ export default function ManagementPage() {
                     right: 12,
                     top: '50%',
                     transform: 'translateY(-50%)',
-                    bgcolor: 'rgba(15, 23, 42, 0.62)',
-                    color: '#ffffff',
-                    '&:hover': { bgcolor: 'rgba(15, 23, 42, 0.82)' },
+                    bgcolor: alpha(colors.slate900, 0.62),
+                    color: colors.white,
+                    '&:hover': { bgcolor: alpha(colors.slate900, 0.82) },
                   }}
                 >
                   <ChevronRight />
@@ -7914,7 +7963,7 @@ export default function ManagementPage() {
               >
                 <ChevronLeft />
               </IconButton>
-              <Typography sx={{ fontSize: 12.5, color: '#64748b', fontWeight: 800 }}>
+              <Typography sx={{ fontSize: 12.5, color: colors.slate500, fontWeight: 700 }}>
                 {zoomPhotoIndex >= 0 ? `${zoomPhotoIndex + 1} de ${zoomPhotoList.length}` : `1 de ${Math.max(1, zoomPhotoList.length)}`}
               </Typography>
               <IconButton
@@ -7962,29 +8011,29 @@ export default function ManagementPage() {
 	                  return checked ? [...withoutKey, photoZoomEvidenceKey] : withoutKey;
 	                });
 	              }}
-              sx={{ textTransform: 'none', fontWeight: 800 }}
+              sx={{ textTransform: 'none', fontWeight: 700 }}
             >
               {photoRestoreSelection[photoZoomEvidenceKey] ? 'Quitar de selección' : 'Seleccionar imagen'}
             </Button>
-            <Box sx={{ borderTop: '1px solid #e2e8f0', pt: 1 }}>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontWeight: 800 }}>Frente</Typography>
-              <Typography sx={{ color: '#0f172a' }}>{zoomPhotoCandidate?.front || '-'}</Typography>
+            <Box sx={{ borderTop: `1px solid ${colors.slate200}`, pt: 1 }}>
+              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Frente</Typography>
+              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.front || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontWeight: 800 }}>Reporte</Typography>
-              <Typography sx={{ color: '#0f172a' }}>{zoomPhotoCandidate?.reportNo ? `N°${zoomPhotoCandidate.reportNo}` : (zoomPhotoCandidate?.reportId || '-')}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Reporte</Typography>
+              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.reportNo ? `N°${zoomPhotoCandidate.reportNo}` : (zoomPhotoCandidate?.reportId || '-')}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontWeight: 800 }}>Fecha</Typography>
-              <Typography sx={{ color: '#0f172a' }}>{formatDate(zoomPhotoCandidate?.date || '') || '-'}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Fecha</Typography>
+              <Typography sx={{ color: colors.slate900 }}>{formatDate(zoomPhotoCandidate?.date || '') || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontWeight: 800 }}>Cuadrilla</Typography>
-              <Typography sx={{ color: '#0f172a' }}>{zoomPhotoCandidate?.crew || '-'}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Cuadrilla</Typography>
+              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.crew || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: '#64748b', fontWeight: 800 }}>Resumen</Typography>
-              <Typography sx={{ color: '#0f172a', whiteSpace: 'pre-wrap' }}>
+              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Resumen</Typography>
+              <Typography sx={{ color: colors.slate900, whiteSpace: 'pre-wrap' }}>
                 {zoomPhotoCandidate?.activitySummary || zoomPhotoCandidate?.reportTitle || '-'}
               </Typography>
             </Box>
@@ -8006,7 +8055,7 @@ export default function ManagementPage() {
           },
         }}
       >
-        <DialogTitle sx={{ fontWeight: 900, color: '#0f172a', pb: 0.9, px: { xs: 2, sm: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: colors.slate900, pb: 0.9, px: { xs: 2, sm: 3 } }}>
           Seleccionar período
         </DialogTitle>
         <DialogContent dividers sx={{ pt: 0.9, pb: 0.75, px: { xs: 1, sm: 2 } }}>
@@ -8057,7 +8106,7 @@ export default function ManagementPage() {
             }}
             disabled={!photoTempStartDate || !photoTempEndDate}
             variant="contained"
-            sx={{ fontWeight: 800, textTransform: 'none', px: 2.25 }}
+            sx={{ fontWeight: 700, textTransform: 'none', px: 2.25 }}
           >
             Aplicar
           </Button>
@@ -8072,7 +8121,7 @@ export default function ManagementPage() {
         fullWidth
         maxWidth="md"
       >
-        <DialogTitle sx={{ fontWeight: 900, color: '#111827' }}>
+        <DialogTitle sx={{ fontWeight: 700, color: colors.gray900 }}>
           Crear interferencia
         </DialogTitle>
         <DialogContent dividers>
@@ -8165,10 +8214,10 @@ export default function ManagementPage() {
 
             <Box
               sx={{
-                border: '1px dashed #94a3b8',
+                border: `1px dashed ${colors.slate400}`,
                 borderRadius: 1.5,
                 p: 1.5,
-                background: '#f8fafc',
+                background: colors.slate50,
               }}
             >
               <Stack spacing={1}>
@@ -8191,7 +8240,7 @@ export default function ManagementPage() {
                     }}
                   />
                 </Button>
-                <Typography variant="caption" sx={{ color: '#64748b' }}>
+                <Typography variant="caption" sx={{ color: colors.slate500 }}>
                   {interferenceFiles.length > 0
                     ? `${interferenceFiles.length} imagen(es) seleccionada(s): ${interferenceFiles.map((file) => file.name).join(', ')}`
                     : 'Sin imágenes seleccionadas.'}
@@ -8220,7 +8269,7 @@ export default function ManagementPage() {
         <DialogContent sx={{ pt: 1 }}>
           <Stack spacing={1.5} sx={{ mt: 0.5 }}>
             <Box>
-              <Typography sx={{ mb: 0.6, fontSize: 12, fontWeight: 700, color: '#64748b' }}>
+              <Typography sx={{ mb: 0.6, fontSize: 12, fontWeight: 700, color: colors.slate500 }}>
                 Tipo
               </Typography>
               <TextField
@@ -8234,8 +8283,8 @@ export default function ManagementPage() {
                   setEquipmentNameCustomMode(false);
                 }}
                 sx={{
-                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#cbd5e1' },
-                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#94a3b8' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate300 },
+                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate400 },
                   '& .Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: colors.blue6 },
                 }}
               >
@@ -8260,9 +8309,9 @@ export default function ManagementPage() {
                   setEquipmentDraft((prev) => prev ? { ...prev, equipment_name: next.toUpperCase() } : prev);
                 }}
                 sx={{
-                  '& .MuiOutlinedInput-notchedOutline': { borderColor: '#cbd5e1' },
-                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#94a3b8' },
-                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#1e3a8a' },
+                  '& .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate300 },
+                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate400 },
+                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: colors.blue900 },
                 }}
               >
                 <MenuItem value="" disabled>Selecciona un equipo</MenuItem>
@@ -8325,12 +8374,12 @@ export default function ManagementPage() {
                   px: 0.5,
                   justifyContent: 'center',
                   borderRadius: 1,
-                  bgcolor: Boolean(equipmentDraft?.is_operational) ? '#eef7ff' : 'transparent',
+                  bgcolor: Boolean(equipmentDraft?.is_operational) ? colors.managementFlagSoft : 'transparent',
                 }}
                 control={
                   <Checkbox
                     checked={Boolean(equipmentDraft?.is_operational)}
-                    sx={{ color: '#7c8ca1', '&.Mui-checked': { color: colors.blue10 } }}
+                    sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }}
                     onChange={(e) => setEquipmentDraft((prev) => prev ? {
                       ...prev,
                       is_operational: e.target.checked,
@@ -8349,9 +8398,9 @@ export default function ManagementPage() {
                   px: 0.5,
                   justifyContent: 'center',
                   borderRadius: 1,
-                  bgcolor: Boolean(equipmentDraft?.in_maintenance) ? '#eef7ff' : 'transparent',
+                  bgcolor: Boolean(equipmentDraft?.in_maintenance) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: '#7c8ca1', '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_maintenance)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: true, in_accreditation: false, in_breakdown: false } : prev)} />}
+                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_maintenance)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: true, in_accreditation: false, in_breakdown: false } : prev)} />}
                 label="Mantención"
               />
               <FormControlLabel
@@ -8361,9 +8410,9 @@ export default function ManagementPage() {
                   px: 0.5,
                   justifyContent: 'center',
                   borderRadius: 1,
-                  bgcolor: Boolean(equipmentDraft?.in_accreditation) ? '#eef7ff' : 'transparent',
+                  bgcolor: Boolean(equipmentDraft?.in_accreditation) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: '#7c8ca1', '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_accreditation)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: true, in_breakdown: false } : prev)} />}
+                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_accreditation)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: true, in_breakdown: false } : prev)} />}
                 label="Acreditación"
               />
               <FormControlLabel
@@ -8373,9 +8422,9 @@ export default function ManagementPage() {
                   px: 0.5,
                   justifyContent: 'center',
                   borderRadius: 1,
-                  bgcolor: Boolean(equipmentDraft?.in_breakdown) ? '#eef7ff' : 'transparent',
+                  bgcolor: Boolean(equipmentDraft?.in_breakdown) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: '#7c8ca1', '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_breakdown)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: false, in_breakdown: true } : prev)} />}
+                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_breakdown)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: false, in_breakdown: true } : prev)} />}
                 label="Panne"
               />
             </Box>

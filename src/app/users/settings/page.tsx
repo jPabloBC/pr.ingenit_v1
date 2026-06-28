@@ -366,7 +366,7 @@ export default function SettingsPage() {
                                     title="Desactivar"
                                     onClick={() => void patchAsset(asset.id, 'deactivate')}
                                   >
-                                    <Trash2 size={17} />
+                                    <Trash2 size={16} />
                                   </IconButton>
                                 </Stack>
                               ) : null}

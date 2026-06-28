@@ -161,6 +161,141 @@ const fetchRoleHistoryByCollaborator = async (
   return byId
 }
 
+const getAuditOwnedCrewIds = async (
+  supabaseAdminClient: any,
+  session: any,
+  crewIds: string[]
+) => {
+  const owned = new Set<string>()
+  const ids = Array.from(new Set((crewIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
+  const userId = String(session?.user?.id || '').trim()
+  const userEmail = normalizeText(String(session?.user?.email || ''))
+  if (!ids.length || (!userId && !userEmail)) return owned
+
+  try {
+    for (const chunk of chunkArray(ids, 75)) {
+      const { data, error } = await supabaseAdminClient
+        .from('pr_platform_audit_logs')
+        .select('resource_id, actor_user_id, actor_email')
+        .eq('company_id', session.user.companyId)
+        .eq('resource_type', 'crew')
+        .eq('action', 'create')
+        .in('resource_id', chunk)
+
+      if (error) {
+        if (isMissingTableError(error) || isMissingColumnError(error)) return owned
+        continue
+      }
+
+      ;(data || []).forEach((row: any) => {
+        const resourceId = String(row?.resource_id || '').trim()
+        if (!resourceId) return
+        const actorUserId = String(row?.actor_user_id || '').trim()
+        const actorEmail = normalizeText(String(row?.actor_email || ''))
+        if ((userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)) {
+          owned.add(resourceId)
+        }
+      })
+    }
+  } catch {
+    return owned
+  }
+
+  return owned
+}
+
+const parseCrewIdsFromFieldReport = (value: any) => {
+  if (Array.isArray(value)) return value.map((id) => String(id || '').trim()).filter(Boolean)
+  if (value == null || value === '') return []
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.map((id) => String(id || '').trim()).filter(Boolean)
+    } catch {}
+    return raw
+      .replace(/^\{|\}$/g, '')
+      .split(',')
+      .map((id) => id.trim().replace(/^"|"$/g, ''))
+      .filter(Boolean)
+  }
+  return [String(value || '').trim()].filter(Boolean)
+}
+
+const getFieldReportUsageByCrewIds = async (
+  supabaseAdminClient: any,
+  companyId: string,
+  crewIds: string[]
+) => {
+  const ids = Array.from(new Set((crewIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
+  const usage = new Map<string, { reportIds: Set<string>; samples: any[] }>()
+  if (!companyId || ids.length === 0) return usage
+
+  const ensure = (crewId: string) => {
+    if (!usage.has(crewId)) usage.set(crewId, { reportIds: new Set<string>(), samples: [] })
+    return usage.get(crewId)!
+  }
+
+  const register = (crewId: string, row: any) => {
+    const id = String(crewId || '').trim()
+    if (!id) return
+    const reportId = String(row?.id || '').trim()
+    if (!reportId) return
+    const slot = ensure(id)
+    if (slot.reportIds.has(reportId)) return
+    slot.reportIds.add(reportId)
+    if (slot.samples.length < 5) {
+      slot.samples.push({
+        id: reportId,
+        date: row?.date || null,
+        report_sequence_no: row?.report_sequence_no || null,
+      })
+    }
+  }
+
+  const applyRows = (rows: any[], chunkSet: Set<string>) => {
+    ;(rows || []).forEach((row: any) => {
+      const directCrewId = String(row?.crew_id || '').trim()
+      if (directCrewId && chunkSet.has(directCrewId)) register(directCrewId, row)
+      parseCrewIdsFromFieldReport(row?.crew_ids).forEach((crewId) => {
+        if (chunkSet.has(crewId)) register(crewId, row)
+      })
+    })
+  }
+
+  for (const chunk of chunkArray(ids, 50)) {
+    const chunkSet = new Set(chunk.map(String))
+    let directQuery = await supabaseAdminClient
+      .from('pr_field_reports')
+      .select('id, date, report_sequence_no, crew_id, crew_ids')
+      .eq('company_id', companyId)
+      .in('crew_id', chunk)
+      .limit(1000)
+
+    if (directQuery.error && isMissingColumnError(directQuery.error)) {
+      directQuery = await supabaseAdminClient
+        .from('pr_field_reports')
+        .select('id, date, report_sequence_no, crew_id')
+        .eq('company_id', companyId)
+        .in('crew_id', chunk)
+        .limit(1000)
+    }
+    if (!directQuery.error) applyRows(directQuery.data || [], chunkSet)
+
+    const arrayQuery = await supabaseAdminClient
+      .from('pr_field_reports')
+      .select('id, date, report_sequence_no, crew_id, crew_ids')
+      .eq('company_id', companyId)
+      .overlaps('crew_ids', chunk)
+      .limit(1000)
+
+    if (!arrayQuery.error) applyRows(arrayQuery.data || [], chunkSet)
+  }
+
+  return usage
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
@@ -297,8 +432,24 @@ export async function GET(req: NextRequest) {
           r.has_activities = false
         })
 
+        const fieldReportUsageByCrewId = await getFieldReportUsageByCrewIds(
+          supabaseAdminClient,
+          String(session.user.companyId || ''),
+          crewIds
+        )
+        rows.forEach((r: any) => {
+          const crewId = String(r?.id || '')
+          const usage = fieldReportUsageByCrewId.get(crewId)
+          const count = usage?.reportIds?.size || 0
+          r.field_report_count = count
+          r.has_field_reports = count > 0
+          r.is_locked_by_field_report = count > 0
+          r.field_report_lock_samples = usage?.samples || []
+        })
+
         const sessionUserId = String(session?.user?.id || '').trim()
         const sessionUserEmail = normalizeText(String(session?.user?.email || ''))
+        const auditOwnedCrewIds = await getAuditOwnedCrewIds(supabaseAdminClient, session, crewIds)
         rows.forEach((r: any) => {
           const creatorCandidates = [
             r?.created_by_user_id,
@@ -316,7 +467,9 @@ export async function GET(req: NextRequest) {
           ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
           r.created_by_current_user = Boolean(
             (sessionUserId && creatorCandidates.some((value) => value === sessionUserId)) ||
-            (sessionUserEmail && creatorEmailCandidates.some((value) => value === sessionUserEmail))
+            (sessionUserEmail && creatorCandidates.some((value) => normalizeText(value) === sessionUserEmail)) ||
+            (sessionUserEmail && creatorEmailCandidates.some((value) => value === sessionUserEmail)) ||
+            auditOwnedCrewIds.has(String(r?.id || ''))
           )
         })
 
@@ -560,6 +713,50 @@ export async function GET(req: NextRequest) {
       }
       return String(val)
     }
+    const fieldReportUsageByCrewId = await getFieldReportUsageByCrewIds(
+      supabaseAdminClient,
+      String(session.user.companyId || ''),
+      rows.map((row: any) => String(row?.id || '')).filter(Boolean)
+    )
+    rows.forEach((row: any) => {
+      const crewId = String(row?.id || '')
+      const usage = fieldReportUsageByCrewId.get(crewId)
+      const count = usage?.reportIds?.size || 0
+      row.field_report_count = count
+      row.has_field_reports = count > 0
+      row.is_locked_by_field_report = count > 0
+      row.field_report_lock_samples = usage?.samples || []
+    })
+
+    const sessionUserIdForOwnership = String(session?.user?.id || '').trim()
+    const sessionUserEmailForOwnership = normalizeText(String(session?.user?.email || ''))
+    const isCrewOwnedByCurrentUser = (crew: any) => {
+      const creatorCandidates = [
+        crew?.created_by_user_id,
+        crew?.created_by,
+        crew?.created_by_id,
+        crew?.creator_user_id,
+        crew?.user_id,
+        crew?.owner_user_id,
+        crew?.auth_id,
+      ].map((value: any) => String(value || '').trim()).filter(Boolean)
+      if (sessionUserIdForOwnership && creatorCandidates.some((value) => value === sessionUserIdForOwnership)) return true
+      if (sessionUserEmailForOwnership && creatorCandidates.some((value) => normalizeText(value) === sessionUserEmailForOwnership)) return true
+      const creatorEmailCandidates = [
+        crew?.created_by_email,
+        crew?.owner_email,
+        crew?.email,
+      ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+      return Boolean(sessionUserEmailForOwnership && creatorEmailCandidates.some((value) => value === sessionUserEmailForOwnership))
+    }
+    const auditOwnedCrewIds = await getAuditOwnedCrewIds(
+      supabaseAdminClient,
+      session,
+      rows.map((row: any) => String(row?.id || '')).filter(Boolean)
+    )
+    rows.forEach((row: any) => {
+      row.created_by_current_user = isCrewOwnedByCurrentUser(row) || auditOwnedCrewIds.has(String(row?.id || ''))
+    })
 
     // Return all crews for every role (including user). Filtering by crew specialty
     // caused crews to disappear when specialty changed.
@@ -595,6 +792,7 @@ export async function GET(req: NextRequest) {
         crew?.auth_id,
       ].map((v: any) => String(v || '').trim()).filter(Boolean)
       if (userId && creatorCandidates.some((v) => v === userId)) return true
+      if (userEmail && creatorCandidates.some((v) => normalizeText(v) === userEmail)) return true
       const creatorEmailCandidates = [
         crew?.created_by_email,
         crew?.owner_email,
@@ -623,6 +821,7 @@ export async function GET(req: NextRequest) {
     const filtered = rows.filter(r => {
       if (memberCrewIds.has(String(r?.id || ''))) return true
       if (isLinkedByLegacyCrewFields(r)) return true
+      if (r?.created_by_current_user === true) return true
       if (isCreatedByLoggedUser(r)) return true
       return true
     })
@@ -722,6 +921,29 @@ export async function POST(req: NextRequest) {
         const isMissingColumn = code === '42703' || msg.includes('Could not find the') || msg.includes('column')
         if (!isMissingColumn) break
       }
+    }
+    if (crew?.id && session?.user?.email) {
+      const creatorEmailColumns = ['created_by_email', 'owner_email']
+      for (const col of creatorEmailColumns) {
+        const { error } = await supabaseAdmin
+          .from('pr_crews')
+          .update({ [col]: String(session.user.email) })
+          .eq('company_id', session.user.companyId)
+          .eq('id', crew.id)
+        if (!error) {
+          crew = { ...crew, [col]: String(session.user.email) }
+          break
+        }
+        const msg = String((error as any)?.message || '')
+        const code = String((error as any)?.code || '')
+        const isMissingColumn = code === '42703' || msg.includes('Could not find the') || msg.includes('column')
+        if (!isMissingColumn) break
+      }
+    }
+    if (crew) {
+      crew.created_by_current_user = true
+      if (session?.user?.id && !crew.created_by_user_id) crew.created_by_user_id = String(session.user.id)
+      if (session?.user?.email && !crew.created_by_email) crew.created_by_email = String(session.user.email)
     }
 
     // Assign members if provided — include role per assignment (supervisor/foreman/member)

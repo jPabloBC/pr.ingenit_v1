@@ -6,9 +6,9 @@ import { Box, Container, Typography, Paper, Button, Dialog, DialogTitle, DialogC
 import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import KeyboardArrowLeftRoundedIcon from '@mui/icons-material/KeyboardArrowLeftRounded'
 import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
+import { Trash2 } from 'lucide-react'
 import UserHeader from '../../../components/layout/UserHeader'
 import { colors } from '../../../theme/theme'
 
@@ -1093,7 +1093,7 @@ export default function ProgramPage() {
                               </Tooltip>
                               <Tooltip title="Eliminar">
                                 <IconButton size="small" color="error" aria-label="Eliminar actividad" onClick={() => handleDelete(a.id)}>
-                                  <DeleteOutlineIcon fontSize="small" />
+                                  <Trash2 size={16} />
                                 </IconButton>
                               </Tooltip>
                             </Box>

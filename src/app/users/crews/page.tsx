@@ -6,10 +6,9 @@ import { DateCalendar } from '@mui/x-date-pickers'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AssignmentTurnedInOutlinedIcon from '@mui/icons-material/AssignmentTurnedInOutlined'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Trash2 } from 'lucide-react'
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
 import { normalizeText } from "../../../lib/normalize"
@@ -79,6 +78,12 @@ const formatYmdDisplay = (ymd: string) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return ymd
   const [y, m, d] = String(ymd).split('-')
   return `${d}-${m}-${y}`
+}
+
+const formatYmdDisplaySlash = (ymd: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return ymd
+  const [y, m, d] = String(ymd).split('-')
+  return `${d}/${m}/${y}`
 }
 
 export default function CrewsPage() {
@@ -541,6 +546,7 @@ export default function CrewsPage() {
       crew?.auth_id,
     ].map((value: any) => String(value || '').trim()).filter(Boolean)
     if (userId && creatorCandidates.some((value) => value === userId)) return true
+    if (userEmail && creatorCandidates.some((value) => normalizeText(value) === userEmail)) return true
     const creatorEmailCandidates = [
       crew?.created_by_email,
       crew?.owner_email,
@@ -553,6 +559,52 @@ export default function CrewsPage() {
     if (canDeleteAnyCrew) return true
     if (role !== 'user') return false
     return isCrewCreatedByLoggedUser(crew)
+  }
+
+  function getCrewFieldReportLockCount(crew: any): number {
+    const count = Number(crew?.field_report_count ?? crew?.field_reports_count ?? 0)
+    if (Number.isFinite(count) && count > 0) return count
+    return crew?.is_locked_by_field_report === true || crew?.has_field_reports === true ? 1 : 0
+  }
+
+  function renderDeleteCrewButton(crew: any) {
+    const crewId = String(crew?.id || '')
+    const lockCount = getCrewFieldReportLockCount(crew)
+    const isLocked = lockCount > 0
+    const disabled = showCreateForm || deletingCrewId === crewId || isLocked
+    const tooltipTitle = isLocked
+      ? `Bloqueada: tiene ${lockCount} reporte${lockCount === 1 ? '' : 's'} de terreno asociado${lockCount === 1 ? '' : 's'}`
+      : 'Eliminar'
+
+    return (
+      <Tooltip title={tooltipTitle} arrow>
+        <span>
+          <IconButton
+            type="button"
+            size="small"
+            color="error"
+            disabled={disabled}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (isLocked) return
+              handleDelete(crewId)
+            }}
+            sx={{
+              border: '1px solid',
+              borderColor: isLocked ? colors.gray8 : colors.red500,
+              borderRadius: 1.5,
+              bgcolor: isLocked ? colors.gray10 : colors.rose50,
+              width: { xs: 30, sm: 34 },
+              height: { xs: 30, sm: 34 },
+              '&:hover': { bgcolor: isLocked ? colors.gray10 : colors.rose100 }
+            }}
+          >
+            <Trash2 size={16} />
+          </IconButton>
+        </span>
+      </Tooltip>
+    )
   }
 
   function crewHasAssignedActivities(crew: any): boolean {
@@ -948,8 +1000,8 @@ export default function CrewsPage() {
               px: 0.5,
               py: 0.5,
               fontSize: 13,
-              bgcolor: idx % 2 === 0 ? '#ffffff' : '#eef3f8',
-              borderBottom: idx === list.length - 1 ? 'none' : '1px solid #eef2f7'
+              bgcolor: idx % 2 === 0 ? colors.white : colors.slate100,
+              borderBottom: idx === list.length - 1 ? 'none' : `1px solid ${colors.managementTableHead}`
             }}
           >
             {t}
@@ -1010,7 +1062,7 @@ export default function CrewsPage() {
       : getWeekRangeFromYmd(addDaysToYmd(crewWeekRange.start, 7) || crewWeekRange.start)
   const isViewingLatestCrewWeek = Boolean(crewWeekRange.start && latestCrewWeek.start && crewWeekRange.start === latestCrewWeek.start)
   const crewWeekLabel = crewWeekRange.start && crewWeekRange.end
-    ? `Semana ${getProjectWeekNumber(crewWeekRange.start)}: ${formatYmdDisplay(crewWeekRange.start)} al ${formatYmdDisplay(crewWeekRange.end)}`
+    ? `Semana ${getProjectWeekNumber(crewWeekRange.start)}: ${formatYmdDisplaySlash(crewWeekRange.start)} al ${formatYmdDisplaySlash(crewWeekRange.end)}`
     : 'Semana de cuadrillas'
 
   const loadCrewAvailableDates = useCallback(async () => {
@@ -1937,7 +1989,7 @@ export default function CrewsPage() {
       const groups = groupCandidatesByDiscipline(items)
       return groups.map((group, gIdx) => (
         <Box key={`${keyPrefix}-group-${group.key}-${gIdx}`} sx={{ mb: 1.25 }}>
-          <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#475569', mb: 0.5 }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, color: colors.slate600, mb: 0.5 }}>
             {toDisplayUpper(group.key)}
           </Typography>
           {group.items.map((c: any, idx: number) => {
@@ -1961,7 +2013,7 @@ export default function CrewsPage() {
                   my: 0,
                   px: 0.5,
                   py: 0.75,
-                  borderBottom: idx < group.items.length - 1 ? '1px solid #e5e7eb' : 'none',
+                  borderBottom: idx < group.items.length - 1 ? `1px solid ${colors.gray200}` : 'none',
                   '.MuiFormControlLabel-label': { width: '100%', minWidth: 0 }
                 }}
                 control={<Checkbox checked={checked} disabled={lockedByOtherCrew && !checked && !isOverrideEnabled} onChange={() => onToggle(idStr)} />}
@@ -1982,7 +2034,7 @@ export default function CrewsPage() {
                     </span>
                     <small
                       style={{
-                        color: '#666',
+                        color: colors.gray4,
                         marginTop: 2,
                         width: '100%',
                         whiteSpace: 'nowrap',
@@ -1997,7 +2049,7 @@ export default function CrewsPage() {
                     {assignmentMsg ? (
                       <small
                         style={{
-                          color: '#b45309',
+                          color: colors.amber700,
                           marginTop: 2,
                           width: '100%',
                           whiteSpace: 'pre-line',
@@ -2027,7 +2079,7 @@ export default function CrewsPage() {
                           />
                         }
                         label={
-                          <span style={{ fontSize: 12, color: '#92400e' }}>
+                          <span style={{ fontSize: 12, color: colors.amber800 }}>
                             Permitir en esta cuadrilla
                           </span>
                         }
@@ -2223,7 +2275,7 @@ export default function CrewsPage() {
     // No cross-role filtering - each role is completely independent
 
     return (
-      <Box sx={{ mb: 2, p: 2, border: "1px solid #eee", borderRadius: 1 }}>
+      <Box sx={{ mb: 2, p: 2, border: `1px solid ${colors.gray9}`, borderRadius: 1 }}>
         <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" }, mt: 1 }}>
           <FormControl fullWidth required={!isEdit} error={!isEdit && createFieldBossAttempted && !fieldBossId}>
             <InputLabel id={`field-boss-label-${mode}`}>Jefe de Terreno</InputLabel>
@@ -2307,7 +2359,7 @@ export default function CrewsPage() {
             />
           ) : (
             <Box>
-              <Typography sx={{ mb: 0.5, fontSize: 12, fontWeight: 600, color: '#475569' }}>
+              <Typography sx={{ mb: 0.5, fontSize: 12, fontWeight: 600, color: colors.slate600 }}>
                 Fecha de trabajo
               </Typography>
               <Button
@@ -2319,14 +2371,14 @@ export default function CrewsPage() {
                   justifyContent: 'flex-start',
                   minHeight: 56,
                   px: 1.75,
-                  borderColor: '#cbd5e1',
-                  color: workDate ? '#0f172a' : '#64748b',
+                  borderColor: colors.slate300,
+                  color: workDate ? colors.slate900 : colors.slate500,
                   fontSize: '1rem',
                   fontWeight: 400,
                   lineHeight: 1.4375,
                   textAlign: 'left',
                   textTransform: 'none',
-                  '&:hover': { borderColor: colors.blue6, bgcolor: '#f8fbff' }
+                  '&:hover': { borderColor: colors.blue6, bgcolor: colors.managementPanelBgSoft }
                 }}
               >
                 <span>{attendanceDatesLoading ? 'Cargando fechas...' : (workDate ? formatDateLabel(workDate) : 'Sin fechas de asistencia')}</span>
@@ -2352,7 +2404,7 @@ export default function CrewsPage() {
               </Popover>
             </Box>
           )}
-          <Typography sx={{ gridColumn: '1/-1', fontSize: 12, color: '#64748b' }}>
+          <Typography sx={{ gridColumn: '1/-1', fontSize: 12, color: colors.slate500 }}>
             {isTurnoLoading
               ? 'Cargando colaboradores en turno para la fecha seleccionada...'
               : hasValidCreateWorkDate
@@ -3437,23 +3489,23 @@ export default function CrewsPage() {
                 height: 52,
                 borderRadius: '50%',
                 bgcolor: colors.blue1,
-                color: '#ffffff',
-                border: '2px solid #7dd3fc',
+                color: colors.white,
+                border: `2px solid ${colors.sky300}`,
                 boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
                 transition: 'border-color 160ms ease, box-shadow 160ms ease',
                 '&:hover': {
                   bgcolor: colors.blue1,
-                  borderColor: '#bae6fd',
+                  borderColor: colors.sky100,
                   boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
                   '& .plus-icon': {
-                    color: '#7dd3fc',
+                    color: colors.sky300,
                     transform: 'scale(1.18)',
                   },
                 },
                 '&.Mui-disabled': {
-                  bgcolor: '#93c5fd',
-                  color: '#e0f2fe',
-                  borderColor: '#bae6fd',
+                  bgcolor: colors.blue300,
+                  color: colors.sky50,
+                  borderColor: colors.sky100,
                 },
               }}
             >
@@ -3483,12 +3535,12 @@ export default function CrewsPage() {
                   mb: 1,
                   px: 1.5,
                   py: 1,
-                  bgcolor: '#991b1b',
-                  color: '#fff',
-                  border: '2px solid #fca5a5',
+                  bgcolor: colors.red800,
+                  color: colors.white,
+                  border: `2px solid ${colors.red300}`,
                   borderRadius: 1,
                   fontSize: 13,
-                  fontWeight: 800,
+                  fontWeight: 700,
                   boxShadow: '0 8px 20px rgba(0,0,0,0.18)'
                 }}
               >
@@ -3499,97 +3551,105 @@ export default function CrewsPage() {
             <Paper
               variant="outlined"
               sx={{
-                mb: 1,
+                mb: { xs: 1.5, sm: 2 },
                 mx: 'auto',
-                p: { xs: 0.75, md: 1 },
+                px: { xs: 1, sm: 1.25 },
+                py: 1,
                 width: { xs: '100%', lg: '70%' },
                 maxWidth: 1400,
                 borderColor: colors.blue15,
-                display: 'grid',
-                gridTemplateColumns: { xs: '1fr', md: 'auto minmax(240px, 1fr) auto' },
-                alignItems: { xs: 'stretch', md: 'center' },
-                gap: 0.75,
+                borderRadius: 1.5,
                 bgcolor: colors.white,
               }}
             >
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={crewAvailableDatesLoading || !previousCrewWeek}
-                onClick={() => previousCrewWeek && setCrewWeekRange(previousCrewWeek)}
-                startIcon={<ChevronLeft size={16} />}
-                sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
-              >
-                Semana anterior
-              </Button>
-              <Typography
+              <Box
                 sx={{
-                  color: colors.gray1,
-                  fontWeight: 800,
-                  textAlign: 'center',
-                  minWidth: 0,
-                  whiteSpace: { md: 'nowrap' },
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  flexWrap: { xs: 'wrap', md: 'nowrap' }
                 }}
               >
-                {crewWeekLabel}
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 0.75, justifyContent: { xs: 'stretch', md: 'flex-end' }, flexWrap: { xs: 'wrap', md: 'nowrap' } }}>
-                <TextField
-                  select
-                  size="small"
-                  value={crewWeekRange.start || ''}
-                  disabled={crewAvailableDatesLoading}
-                  SelectProps={{
-                    renderValue: (value) => {
-                      const selected = crewAvailableWeeks.find((range) => range.start === value)
-                      return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
-                    },
-                  }}
-                  onChange={(event) => {
-                    const selected = crewAvailableWeeks.find((range) => range.start === event.target.value)
-                    if (selected) setCrewWeekRange(selected)
-                  }}
-                  sx={{
-                    width: { xs: '100%', sm: 142, md: 142 },
-                    minWidth: { xs: '100%', sm: 142, md: 142 },
-                    flex: { xs: '1 1 100%', sm: '0 0 142px' },
-                    '& .MuiInputBase-root': { height: 32 },
-                    '& .MuiSelect-select': {
-                      py: 0.55,
-                      fontWeight: 700,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    },
-                  }}
-                >
-                  {crewAvailableWeeks.map((range) => (
-                    <MenuItem key={`crew-week-${range.start}`} value={range.start}>
-                      {`Semana ${getProjectWeekNumber(range.start)} (${formatYmdDisplay(range.start)} - ${formatYmdDisplay(range.end)})`}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <Button
-                  variant="contained"
-                  size="small"
-                  disabled={crewAvailableDatesLoading || isViewingLatestCrewWeek}
-                  onClick={() => setCrewWeekRange(latestCrewWeek)}
-                  sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
-                >
-                  Última semana
-                </Button>
                 <Button
                   variant="outlined"
                   size="small"
-                  disabled={crewAvailableDatesLoading || !nextCrewWeek}
-                  onClick={() => nextCrewWeek && setCrewWeekRange(nextCrewWeek)}
-                  endIcon={<ChevronRight size={16} />}
-                  sx={{ height: 32, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
+                  disabled={crewAvailableDatesLoading || !previousCrewWeek}
+                  onClick={() => previousCrewWeek && setCrewWeekRange(previousCrewWeek)}
+                  startIcon={<ChevronLeft size={16} />}
+                  sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
                 >
-                  Semana siguiente
+                  Semana anterior
                 </Button>
+                <Typography
+                  sx={{
+                    flex: '1 1 auto',
+                    minWidth: { xs: '100%', md: 260 },
+                    textAlign: 'center',
+                    fontSize: { xs: 14, sm: 16 },
+                    fontWeight: 500,
+                    color: colors.gray4,
+                    order: { xs: -1, md: 0 }
+                  }}
+                >
+                  {crewWeekLabel}
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', md: 'flex-end' }, gap: 1, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
+                  <TextField
+                    select
+                    size="small"
+                    value={crewWeekRange.start || ''}
+                    disabled={crewAvailableDatesLoading}
+                    SelectProps={{
+                      renderValue: (value) => {
+                        const selected = crewAvailableWeeks.find((range) => range.start === value)
+                        return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
+                      },
+                    }}
+                    onChange={(event) => {
+                      const selected = crewAvailableWeeks.find((range) => range.start === event.target.value)
+                      if (selected) setCrewWeekRange(selected)
+                    }}
+                    sx={{
+                      width: { xs: '100%', sm: 142, md: 142 },
+                      minWidth: { xs: '100%', sm: 142, md: 142 },
+                      flex: { xs: '1 1 100%', sm: '0 0 142px' },
+                      '& .MuiInputBase-root': { height: 32 },
+                      '& .MuiSelect-select': {
+                        py: 0.55,
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      },
+                    }}
+                  >
+                    {crewAvailableWeeks.map((range) => (
+                      <MenuItem key={`crew-week-${range.start}`} value={range.start}>
+                        {`Semana ${getProjectWeekNumber(range.start)} (${formatYmdDisplaySlash(range.start)} - ${formatYmdDisplaySlash(range.end)})`}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    disabled={crewAvailableDatesLoading || isViewingLatestCrewWeek}
+                    onClick={() => setCrewWeekRange(latestCrewWeek)}
+                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
+                  >
+                    Última semana
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    disabled={crewAvailableDatesLoading || !nextCrewWeek}
+                    onClick={() => nextCrewWeek && setCrewWeekRange(nextCrewWeek)}
+                    endIcon={<ChevronRight size={16} />}
+                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
+                  >
+                    Semana siguiente
+                  </Button>
+                </Box>
               </Box>
             </Paper>
             <Paper elevation={0} sx={{ p: 0, m: 0, minWidth: 0, overflow: 'visible', bgcolor: 'transparent', boxShadow: 'none' }}>
@@ -3603,11 +3663,11 @@ export default function CrewsPage() {
                     disabled={openingCreateForm}
                     sx={{
                       ...(openingCreateForm ? {
-                        bgcolor: '#93c5fd',
-                        color: '#0ea5e9',
+                        bgcolor: colors.blue300,
+                        color: colors.sky500,
                         '&.Mui-disabled': {
-                          bgcolor: '#93c5fd',
-                          color: '#0ea5e9',
+                          bgcolor: colors.blue300,
+                          color: colors.sky500,
                           opacity: 1,
                           cursor: 'not-allowed'
                         }
@@ -3627,9 +3687,9 @@ export default function CrewsPage() {
                 <Box
                   sx={{
                     overflowX: "hidden",
-                    border: '1px solid #dbe6f7',
+                    border: `1px solid ${colors.blue100}`,
                     borderRadius: 2.5,
-                    bgcolor: '#fff',
+                    bgcolor: colors.white,
                     boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
                     '& table': { width: '100%', minWidth: 0, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 },
                     '& thead th': {
@@ -3638,27 +3698,27 @@ export default function CrewsPage() {
                       fontSize: 12,
                       letterSpacing: '0.04em',
                       textTransform: 'uppercase',
-                      color: '#334155',
-                      background: '#f1f5ff',
-                      borderBottom: '1px solid #dbe6f7',
+                      color: colors.slate700,
+                      background: colors.slate100,
+                      borderBottom: `1px solid ${colors.blue100}`,
                       padding: '12px 12px',
                       position: 'sticky',
                       top: 0,
                       zIndex: 2
                     },
                     '& tbody td': {
-                      borderBottom: '1px solid #eef2f7',
+                      borderBottom: `1px solid ${colors.managementTableHead}`,
                       padding: { xs: '5px 5px', sm: '6px 6px' },
                       verticalAlign: 'top'
                     },
                     '& thead th, & tbody td': {
-                      borderRight: '1px solid #eef2f7'
+                      borderRight: `1px solid ${colors.managementTableHead}`
                     },
                     '& thead th:last-of-type, & tbody td:last-of-type': {
                       borderRight: 'none'
                     },
                     '& tbody tr:hover td': {
-                      background: '#f8fbff'
+                      background: colors.managementPanelBgSoft
                     }
                   }}
                 >
@@ -3682,12 +3742,12 @@ export default function CrewsPage() {
                               style={{
                                 padding: '9px 12px',
                                 background: colors.blue6,
-                                borderBottom: '2px solid #0078ff',
+                                borderBottom: `2px solid ${colors.blue8}`,
                                 cursor: 'pointer',
                                 transition: 'background 160ms ease, filter 160ms ease'
                               }}
                               onMouseEnter={(e) => {
-                                e.currentTarget.style.background = '#003c80'
+                                e.currentTarget.style.background = colors.blue4
                                 e.currentTarget.style.filter = 'brightness(1.08)'
                               }}
                               onMouseLeave={(e) => {
@@ -3726,9 +3786,9 @@ export default function CrewsPage() {
                                         py: 0.25,
                                         fontSize: { xs: 10, sm: 11 },
                                         textTransform: 'none',
-                                        bgcolor: '#0ea5e9',
-                                        color: '#fff',
-                                        '&:hover': { bgcolor: '#0284c7' }
+                                        bgcolor: colors.sky500,
+                                        color: colors.white,
+                                        '&:hover': { bgcolor: colors.sky600 }
                                       }}
                                     >
                                       {canManageCrews ? 'Disponibles y nota' : 'Ver notas'}
@@ -3738,9 +3798,9 @@ export default function CrewsPage() {
                                         <Box
                                           component="span"
                                           sx={{
-                                            bgcolor: '#dc2626',
-                                            color: '#fff',
-                                            fontWeight: 800,
+                                            bgcolor: colors.red600,
+                                            color: colors.white,
+                                            fontWeight: 700,
                                             minWidth: 22,
                                             height: 22,
                                             px: 0.6,
@@ -3762,9 +3822,9 @@ export default function CrewsPage() {
                                         <Box
                                           component="span"
                                           sx={{
-                                            bgcolor: '#16a34a',
-                                            color: '#fff',
-                                            fontWeight: 800,
+                                            bgcolor: colors.green600,
+                                            color: colors.white,
+                                            fontWeight: 700,
                                             minWidth: 22,
                                             height: 22,
                                             px: 0.6,
@@ -3896,7 +3956,7 @@ export default function CrewsPage() {
                         }) : []
                         const crewRows: React.ReactNode[] = [
                           <tr key={crewId}>
-                            <td colSpan={5} style={{ padding: '8px 10px', background: '#f8fbff', maxWidth: 0 }}>
+                            <td colSpan={5} style={{ padding: '8px 10px', background: colors.managementPanelBgSoft, maxWidth: 0 }}>
                               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: { xs: 0.5, sm: 0.75, md: 1 }, minWidth: 0, width: '100%', overflow: 'hidden', flexDirection: 'row', flexWrap: 'nowrap' }}>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 0.75, md: 1 }, minWidth: 0, flex: '1 1 auto', overflow: 'hidden', flexDirection: 'row', width: 'auto' }}>
                                   <Box
@@ -3904,7 +3964,7 @@ export default function CrewsPage() {
                                     sx={{
                                       display: 'block',
                                       fontWeight: 700,
-                                      color: '#0f172a',
+                                      color: colors.slate900,
                                       minWidth: 0,
                                       flex: '0 1 auto',
                                       maxWidth: { xs: '52%', sm: '45%', md: '36%', lg: '42%' },
@@ -3923,7 +3983,7 @@ export default function CrewsPage() {
                                         display: 'flex',
                                         flexDirection: 'column',
                                         gap: 0.25,
-                                        color: '#94a3b8',
+                                        color: colors.slate400,
                                         fontSize: { xs: 11, sm: 12 },
                                         fontWeight: 600,
                                         minWidth: 0,
@@ -3952,13 +4012,13 @@ export default function CrewsPage() {
                                   ) : null}
                                 </Box>
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.35, sm: 0.5, md: 0.75 }, flexWrap: 'nowrap', justifyContent: 'flex-end', flex: '0 0 auto', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }}>
-                                  <Box component="span" sx={{ color: '#374151', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', minWidth: { xs: 36, sm: 42 }, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  <Box component="span" sx={{ color: colors.gray700, background: colors.gray100, border: `1px solid ${colors.gray300}`, borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', minWidth: { xs: 36, sm: 42 }, textAlign: 'center', whiteSpace: 'nowrap' }}>
                                     S: {supIds.length}
                                   </Box>
-                                  <Box component="span" sx={{ color: '#374151', background: '#e5e7eb', border: '1px solid #cbd5e1', borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', minWidth: { xs: 36, sm: 42 }, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                                  <Box component="span" sx={{ color: colors.gray700, background: colors.gray200, border: `1px solid ${colors.slate300}`, borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', minWidth: { xs: 36, sm: 42 }, textAlign: 'center', whiteSpace: 'nowrap' }}>
                                     C: {frmIds.length}
                                   </Box>
-                                  <Box component="span" sx={{ color: '#374151', background: '#f9fafb', border: '1px solid #d1d5db', borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', maxWidth: { xs: 112, sm: 150, md: 'none' }, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  <Box component="span" sx={{ color: colors.gray700, background: colors.gray50, border: `1px solid ${colors.gray300}`, borderRadius: 999, fontSize: { xs: 11, sm: 12 }, fontWeight: 700, px: { xs: 0.75, sm: 1 }, py: '2px', maxWidth: { xs: 112, sm: 150, md: 'none' }, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     c: {memIds.length} (DIR {directCount} / IND {indirectCount})
                                   </Box>
                                   <Box sx={{ display: 'inline-flex', flexWrap: 'nowrap', gap: { xs: 0.35, sm: 0.5, md: 0.75 }, alignItems: 'center', justifyContent: 'flex-end', ml: { xs: 0, sm: 0.25, md: 0.5 }, flex: '0 0 auto', maxWidth: '100%' }}>
@@ -3966,7 +4026,7 @@ export default function CrewsPage() {
                                       <>
                                         <Tooltip title="Ver" arrow>
                                           <span>
-                                            <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                            <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: colors.blue100, borderRadius: 1.5, bgcolor: colors.white, color: colors.slate700, width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: colors.slate50 } }}>
                                               <VisibilityOutlinedIcon fontSize="small" />
                                             </IconButton>
                                           </span>
@@ -3974,7 +4034,7 @@ export default function CrewsPage() {
                                         {canEditCrews ? (
                                           <Tooltip title="Editar" arrow>
                                             <span>
-                                              <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                              <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: colors.blue100, borderRadius: 1.5, bgcolor: colors.white, color: colors.slate700, width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: colors.slate50 } }}>
                                                 <EditOutlinedIcon fontSize="small" />
                                               </IconButton>
                                             </span>
@@ -4001,22 +4061,14 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
-                                        {canDeleteCrew(c) ? (
-                                          <Tooltip title="Eliminar" arrow>
-                                            <span>
-                                              <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
-                                                <DeleteOutlineIcon fontSize="small" />
-                                              </IconButton>
-                                            </span>
-                                          </Tooltip>
-                                        ) : null}
+                                        {canDeleteCrew(c) ? renderDeleteCrewButton(c) : null}
                                       </>
                                     ) : (
                                       <>
                                         {isUserRole && (
                                           <Tooltip title="Ver" arrow>
                                             <span>
-                                              <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                              <IconButton type="button" size="small" disabled={showCreateForm} onClick={(e) => { e.preventDefault(); e.stopPropagation(); openView(String(c.id)) }} sx={{ border: '1px solid', borderColor: colors.blue100, borderRadius: 1.5, bgcolor: colors.white, color: colors.slate700, width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: colors.slate50 } }}>
                                                 <VisibilityOutlinedIcon fontSize="small" />
                                               </IconButton>
                                             </span>
@@ -4024,7 +4076,7 @@ export default function CrewsPage() {
                                         )}
                                         <Tooltip title="Editar" arrow>
                                           <span>
-                                            <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: '#d7e2f0', borderRadius: 1.5, bgcolor: '#fff', color: '#334155', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#f8fafc' } }}>
+                                            <IconButton type="button" size="small" disabled={showCreateForm || editLoadingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(c) }} sx={{ border: '1px solid', borderColor: colors.blue100, borderRadius: 1.5, bgcolor: colors.white, color: colors.slate700, width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: colors.slate50 } }}>
                                               <EditOutlinedIcon fontSize="small" />
                                             </IconButton>
                                           </span>
@@ -4050,15 +4102,7 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
-                                        {canDeleteCrew(c) ? (
-                                          <Tooltip title="Eliminar" arrow>
-                                            <span>
-                                              <IconButton type="button" size="small" color="error" disabled={showCreateForm || deletingCrewId === String(c.id)} onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(c.id) }} sx={{ border: '1px solid', borderColor: '#ef4444', borderRadius: 1.5, bgcolor: '#fff5f5', width: { xs: 30, sm: 34 }, height: { xs: 30, sm: 34 }, '&:hover': { bgcolor: '#ffe4e6' } }}>
-                                                <DeleteOutlineIcon fontSize="small" />
-                                              </IconButton>
-                                            </span>
-                                          </Tooltip>
-                                        ) : null}
+                                        {canDeleteCrew(c) ? renderDeleteCrewButton(c) : null}
                                       </>
                                     )}
                                   </Box>
@@ -4070,20 +4114,20 @@ export default function CrewsPage() {
                         if (debugCrewRoles) {
                           crewRows.push(
                             <tr key={`${crewId}-debug`}>
-                              <td colSpan={5} style={{ padding: '8px 10px', background: '#fff7ed', borderBottom: '2px solid #f97316' }}>
+                              <td colSpan={5} style={{ padding: '8px 10px', background: colors.orange50, borderBottom: `2px solid ${colors.orange500}` }}>
                                 <Box
                                   sx={{
                                     p: 1,
-                                    border: '2px dashed #f97316',
+                                    border: `2px dashed ${colors.orange500}`,
                                     borderRadius: 1,
-                                    bgcolor: '#fff',
-                                    color: '#0f172a',
+                                    bgcolor: colors.white,
+                                    color: colors.slate900,
                                     fontSize: 11,
                                     lineHeight: 1.35,
                                     overflowX: 'auto'
                                   }}
                                 >
-                                  <Box sx={{ fontWeight: 900, mb: 0.5, color: '#9a3412' }}>
+                                  <Box sx={{ fontWeight: 700, mb: 0.5, color: colors.orange800 }}>
                                     DBG roles v4 | crew {crewId.slice(0, 8)} | supIds [{supIds.join(', ') || '-'}] | capIds [{frmIds.join(', ') || '-'}] | memIds [{memIds.join(', ') || '-'}]
                                   </Box>
                                   <Box>leadSummary: {leadSummary || '(vacio)'}</Box>
@@ -4149,9 +4193,9 @@ export default function CrewsPage() {
                       <Typography variant="body2" sx={{ color: colors.gray4, mb: 0.75, fontWeight: 700 }}>
                         Sup.: {counts.sup} | Capa.: {counts.capa} | Directos: {counts.colab}
                       </Typography>
-                      <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 1.5, flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
+                      <Box sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1.5, flex: 1, minHeight: 0, overflowY: 'auto', p: 1 }}>
                         {available.length === 0 ? (
-                          <Typography sx={{ p: 1.5, color: '#64748b' }}>No hay colaboradores para registrar notas.</Typography>
+                          <Typography sx={{ p: 1.5, color: colors.slate500 }}>No hay colaboradores para registrar notas.</Typography>
                         ) : (
                           <Box
                             sx={{
@@ -4170,13 +4214,13 @@ export default function CrewsPage() {
                                   key={`note-${cid}-${idx}`}
                                   sx={{
                                     p: 1.25,
-                                    border: hasNote ? '1px solid #334155' : '1px solid #ef4444',
+                                    border: hasNote ? `1px solid ${colors.slate700}` : `1px solid ${colors.red500}`,
                                     borderRadius: 1,
-                                    bgcolor: hasNote ? '#e2e8f0' : '#fef2f2'
+                                    bgcolor: hasNote ? colors.slate200 : colors.red100
                                   }}
                                 >
-                                  <Typography sx={{ fontSize: 13, fontWeight: 700, color: hasNote ? '#0f172a' : '#991b1b' }}>{name || `ID:${cid}`}</Typography>
-                                  <Typography sx={{ fontSize: 12, color: hasNote ? '#334155' : '#b91c1c', mb: 0.75 }}>{pos || 'Sin cargo'}</Typography>
+                                  <Typography sx={{ fontSize: 13, fontWeight: 700, color: hasNote ? colors.slate900 : colors.red800 }}>{name || `ID:${cid}`}</Typography>
+                                  <Typography sx={{ fontSize: 12, color: hasNote ? colors.slate700 : colors.red700, mb: 0.75 }}>{pos || 'Sin cargo'}</Typography>
                                   <TextField
                                     size="small"
                                     fullWidth
@@ -4268,7 +4312,7 @@ export default function CrewsPage() {
                   {editLoadingCrewId ? (
                     <Typography sx={{ py: 3, color: colors.gray4 }}>Cargando cuadrilla...</Typography>
                   ) : editLoadError ? (
-                    <Typography sx={{ py: 3, color: '#b91c1c' }}>{editLoadError}</Typography>
+                    <Typography sx={{ py: 3, color: colors.red700 }}>{editLoadError}</Typography>
                   ) : (
                     renderFormFields('edit')
                   )}
@@ -4297,7 +4341,7 @@ export default function CrewsPage() {
             <Dialog open={crewCloseConfirmOpen} onClose={() => setCrewCloseConfirmOpen(false)} maxWidth="xs" fullWidth>
               <DialogTitle>¿Cerrar sin guardar?</DialogTitle>
               <DialogContent>
-                <Typography sx={{ color: '#475569', fontSize: 14 }}>
+                <Typography sx={{ color: colors.slate600, fontSize: 14 }}>
                   Si cierras ahora, perderás los cambios realizados.
                 </Typography>
               </DialogContent>
@@ -4358,7 +4402,7 @@ export default function CrewsPage() {
                   </Box>
                 ) : programLoadError ? (
                   <Box sx={{ py: 4 }}>
-                    <Typography sx={{ color: '#b91c1c' }}>{programLoadError}</Typography>
+                    <Typography sx={{ color: colors.red700 }}>{programLoadError}</Typography>
                   </Box>
                 ) : (
                 <Box
@@ -4409,15 +4453,15 @@ export default function CrewsPage() {
                       return (
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
                           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: '#f8fafc' }}>
+                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
                               <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Supervisores</Typography>
                               {renderList(roleIds.supervisors)}
                             </Paper>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: '#f8fafc' }}>
+                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
                               <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Capataces</Typography>
                               {renderList(roleIds.foremen)}
                             </Paper>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: '#f8fafc' }}>
+                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
                               <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Colaboradores</Typography>
                               {renderList(roleIds.members)}
                             </Paper>
@@ -4428,8 +4472,8 @@ export default function CrewsPage() {
                     })()
                   )}
                 </Box>
-                <Box sx={{ mb: 2, p: 2, border: '1px solid #dbe6f7', borderRadius: 2, bgcolor: '#f8fbff' }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 0.5, color: colors.gray3 }}>Crear actividad rápida</Typography>
+                <Box sx={{ mb: 2, p: 2, border: `1px solid ${colors.blue100}`, borderRadius: 2, bgcolor: colors.managementPanelBgSoft }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Crear actividad rápida</Typography>
                   <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: '1fr' } }}>
                     <TextField
                       size="small"
@@ -4710,28 +4754,28 @@ export default function CrewsPage() {
                   {programAssignedActivities.length === 0 ? (
                     <Typography variant="body2" color="text.secondary">Sin actividades asignadas</Typography>
                   ) : (
-                    <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 1.5, overflow: 'hidden' }}>
+                    <Box sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1.5, overflow: 'hidden' }}>
                       <Box sx={{ maxHeight: 360, overflowX: 'auto', overflowY: 'auto' }}>
                       <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr style={{ background: '#f8fafc', position: 'sticky', top: 0, zIndex: 1 }}>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Orden</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '22%' }}>Actividad</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Origen</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '23%' }}>Descripción</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '18%' }}>Descripción adicional</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Área</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Cant.</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Unidad</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '11%' }}>Disciplina</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Asignada</th>
-                            <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '12%' }}>Acción</th>
+                          <tr style={{ background: colors.slate50, position: 'sticky', top: 0, zIndex: 1 }}>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Orden</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '22%' }}>Actividad</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Origen</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '23%' }}>Descripción</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '18%' }}>Descripción adicional</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Área</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Cant.</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Unidad</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '11%' }}>Disciplina</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '10%' }}>Asignada</th>
+                            <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '12%' }}>Acción</th>
                           </tr>
                         </thead>
                         <tbody>
                           {programAssignedActivities.map((a: any, idx: number) => (
-                            <tr key={String(a.id || idx)} style={{ background: idx % 2 === 0 ? '#fff' : '#fafbff' }}>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700 }}>
+                            <tr key={String(a.id || idx)} style={{ background: idx % 2 === 0 ? colors.white : colors.slate50 }}>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700 }}>
                                 <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
                                   <span>{idx + 1}</span>
                                   <IconButton
@@ -4748,7 +4792,7 @@ export default function CrewsPage() {
                                       })
                                       setProgramDirty(true)
                                     }}
-                                    sx={{ border: '1px solid #dbe6f7', borderRadius: 1, p: 0.25 }}
+                                    sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, p: 0.25 }}
                                   >
                                     <ArrowUpwardIcon fontSize="inherit" />
                                   </IconButton>
@@ -4766,18 +4810,18 @@ export default function CrewsPage() {
                                       })
                                       setProgramDirty(true)
                                     }}
-                                    sx={{ border: '1px solid #dbe6f7', borderRadius: 1, p: 0.25 }}
+                                    sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, p: 0.25 }}
                                   >
                                     <ArrowDownwardIcon fontSize="inherit" />
                                   </IconButton>
                                 </Box>
                               </td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13 }}>{a.activity || a.name || a.id}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, color: String(a.activity_origin || '').toLowerCase() === 'crew_created' ? '#b45309' : '#1d4ed8' }}>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13 }}>{a.activity || a.name || a.id}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, color: String(a.activity_origin || '').toLowerCase() === 'crew_created' ? colors.amber700 : colors.blue700 }}>
                                 {String(a.activity_origin || '').toLowerCase() === 'crew_created' ? 'Creada' : 'Programa'}
                               </td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13 }}>{formatNa(a.description || 'S/D')}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13 }}>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13 }}>{formatNa(a.description || 'S/D')}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13 }}>
                                 <TextField
                                   size="small"
                                   value={String(a.user_detail || '')}
@@ -4790,19 +4834,19 @@ export default function CrewsPage() {
                                   fullWidth
                                 />
                               </td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.area || ''}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{formatNa(a.quantity)}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.unit || ''}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(a.discipline || a.Disciplina || ''))}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.assigned_at ? new Date(a.assigned_at).toLocaleDateString() : ''}</td>
-                              <td style={{ borderBottom: '1px solid #eef2f7', padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.area || ''}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{formatNa(a.quantity)}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.unit || ''}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(a.discipline || a.Disciplina || ''))}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.assigned_at ? new Date(a.assigned_at).toLocaleDateString() : ''}</td>
+                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>
                                 <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'center' }}>
                                   {String(a.activity_origin || '').toLowerCase() === 'crew_created' && (
                                     <Tooltip title="Editar actividad" arrow>
                                       <IconButton
                                         size="small"
                                         onClick={() => openQuickEditDialog(a)}
-                                        sx={{ border: '1px solid #cbd5e1', borderRadius: 1 }}
+                                        sx={{ border: `1px solid ${colors.slate300}`, borderRadius: 1 }}
                                       >
                                         <EditOutlinedIcon fontSize="small" />
                                       </IconButton>
@@ -4820,9 +4864,9 @@ export default function CrewsPage() {
                                           return next
                                         })
                                       }}
-                                      sx={{ border: '1px solid #fecaca', borderRadius: 1 }}
+                                      sx={{ border: `1px solid ${colors.red200}`, borderRadius: 1 }}
                                     >
-                                      <DeleteOutlineIcon fontSize="small" />
+                                      <Trash2 size={16} />
                                     </IconButton>
                                   </Tooltip>
                                 </Box>
@@ -4879,25 +4923,25 @@ export default function CrewsPage() {
                       const isCrewCreated = String(p.activity_origin || '').toLowerCase() === 'crew_created'
                       return (
                         <tr key={p.id}>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{formatActivityId(p.item_id, p.id)}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8 }}>{p.activity}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center', fontWeight: 700, color: String(p.activity_origin || '').toLowerCase() === 'crew_created' ? '#b45309' : '#1d4ed8' }}>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatActivityId(p.item_id, p.id)}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8 }}>{p.activity}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center', fontWeight: 700, color: String(p.activity_origin || '').toLowerCase() === 'crew_created' ? colors.amber700 : colors.blue700 }}>
                             {String(p.activity_origin || '').toLowerCase() === 'crew_created' ? 'Creada' : 'Programa'}
                           </td>
-                          <td style={{ border: '1px solid #eee', padding: 8 }}>{formatNa(p.description || 'S/D')}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{p.area || ''}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{formatNa(p.package)}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{formatNa(p.quantity)}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{p.unit || ''}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(p.discipline || p.Disciplina || ''))}</td>
-                          <td style={{ border: '1px solid #eee', padding: 8, textAlign: 'center' }}>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8 }}>{formatNa(p.description || 'S/D')}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{p.area || ''}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatNa(p.package)}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatNa(p.quantity)}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{p.unit || ''}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(p.discipline || p.Disciplina || ''))}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>
                             <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'center', flexWrap: 'wrap' }}>
                               {String(p.activity_origin || '').toLowerCase() === 'crew_created' && (
                                 <Tooltip title="Editar actividad" arrow>
                                   <IconButton
                                     size="small"
                                     onClick={() => openQuickEditDialog(p)}
-                                    sx={{ border: '1px solid #cbd5e1', borderRadius: 1 }}
+                                    sx={{ border: `1px solid ${colors.slate300}`, borderRadius: 1 }}
                                   >
                                     <EditOutlinedIcon fontSize="small" />
                                   </IconButton>
@@ -4924,7 +4968,7 @@ export default function CrewsPage() {
                               }}>
                                 {alreadyAssigned && isCrewCreated ? (
                                   <Tooltip title="Quitar actividad" arrow>
-                                    <DeleteOutlineIcon fontSize="small" />
+                                    <Trash2 size={16} />
                                   </Tooltip>
                                 ) : (alreadyAssigned ? 'Quitar' : 'Asignar')}
                               </Button>
@@ -4938,22 +4982,22 @@ export default function CrewsPage() {
                       <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>ID</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Actividad</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Origen</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Descripción</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Área</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Paquete</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Cantidad</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Unidad</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Disciplina</th>
-                        <th style={{ border: '1px solid #1e40af', padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: '#1d4ed8', color: '#fff', fontWeight: 400, zIndex: 1 }}>Acción</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>ID</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Actividad</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Origen</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Descripción</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Área</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Paquete</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Cantidad</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Unidad</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Disciplina</th>
+                        <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>Acción</th>
                       </tr>
                     </thead>
                     <tbody>
                       {programRows.length > 0 && (
                         <tr>
-                          <td colSpan={10} style={{ border: '1px solid #dbeafe', padding: '8px 10px', background: '#eff6ff', color: '#1d4ed8', fontWeight: 700 }}>
+                          <td colSpan={10} style={{ border: `1px solid ${colors.blue100}`, padding: '8px 10px', background: colors.blue50, color: colors.blue700, fontWeight: 700 }}>
                             Actividades del Programa
                           </td>
                         </tr>
@@ -4961,7 +5005,7 @@ export default function CrewsPage() {
                       {programRows.map((p: any) => renderRow(p))}
                       {crewCreatedRows.length > 0 && (
                         <tr>
-                          <td colSpan={10} style={{ border: '1px solid #fde68a', padding: '8px 10px', background: '#fffbeb', color: '#b45309', fontWeight: 700 }}>
+                          <td colSpan={10} style={{ border: `1px solid ${colors.amber100}`, padding: '8px 10px', background: colors.amber50, color: colors.amber700, fontWeight: 700 }}>
                             Actividades creadas en Cuadrillas
                           </td>
                         </tr>
@@ -5222,9 +5266,9 @@ export default function CrewsPage() {
                         minWidth: 0,
                         px: 1,
                         py: 0.5,
-                        border: '1px solid #cbd5e1',
+                        border: `1px solid ${colors.slate300}`,
                         borderRadius: 999,
-                        bgcolor: '#f8fafc'
+                        bgcolor: colors.slate50
                       }}
                     >
                       <Tooltip title="Cuadrilla anterior de la misma fecha" arrow>
@@ -5233,7 +5277,7 @@ export default function CrewsPage() {
                             size="small"
                             disabled={viewLoading || !canViewPreviousCrew}
                             onClick={() => openAdjacentViewCrew(-1)}
-                            sx={{ color: '#0f2d5c' }}
+                            sx={{ color: colors.blue4 }}
                           >
                             <ChevronLeft size={18} />
                           </IconButton>
@@ -5254,7 +5298,7 @@ export default function CrewsPage() {
                           flex: '1 1 auto',
                           '& .MuiOutlinedInput-root': {
                             borderRadius: 999,
-                            bgcolor: '#ffffff'
+                            bgcolor: colors.white
                           },
                           '& .MuiOutlinedInput-input': {
                             textAlign: 'center',
@@ -5280,7 +5324,7 @@ export default function CrewsPage() {
                             size="small"
                             disabled={viewLoading || !canViewNextCrew}
                             onClick={() => openAdjacentViewCrew(1)}
-                            sx={{ color: '#0f2d5c' }}
+                            sx={{ color: colors.blue4 }}
                           >
                             <ChevronRight size={18} />
                           </IconButton>
@@ -5295,7 +5339,7 @@ export default function CrewsPage() {
                   <Typography>Cargando...</Typography>
                 ) : (
                   <>
-                    <Box sx={{ mb: 2, pb: 1, borderBottom: '1px solid #eef2f7' }}>
+                    <Box sx={{ mb: 2, pb: 1, borderBottom: `1px solid ${colors.managementTableHead}` }}>
                       <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25 }}>
                         {formatCrewName(viewCrew?.name || '')}
                       </Typography>
@@ -5311,7 +5355,7 @@ export default function CrewsPage() {
                       const renderList = (ids: string[], showHeader: boolean, showPhone: boolean) => {
                         if (!ids.length) return <Typography variant="body2" color="text.secondary">—</Typography>
                         return (
-                          <Box sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflow: 'hidden' }}>
+                          <Box sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, overflow: 'hidden' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                               <colgroup>
                                 <col style={{ width: showPhone ? '40%' : '50%' }} />
@@ -5320,7 +5364,7 @@ export default function CrewsPage() {
                               </colgroup>
                               {showHeader && (
                                 <thead>
-                                  <tr style={{ background: '#f8fafc' }}>
+                                  <tr style={{ background: colors.slate50 }}>
                                     <th style={{ textAlign: 'left', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Nombre</th>
                                     <th style={{ textAlign: 'center', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Cargo</th>
                                     {showPhone ? <th style={{ textAlign: 'center', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Teléfono</th> : null}
@@ -5333,10 +5377,10 @@ export default function CrewsPage() {
                                   const name = c ? formatCollaboratorName(c.first_name, c.last_name) : `ID:${id}`
                                   const pos = c?.position ? formatPositionLabel(c.position) : ''
                                   const phone = (c && (c.phone || c.phone_number || c.telefono || c.telefono_movil)) ? String(c.phone || c.phone_number || c.telefono || c.telefono_movil) : ''
-                                  const bg = idx % 2 === 0 ? '#fff' : '#fafbff'
+                                  const bg = idx % 2 === 0 ? colors.white : colors.slate50
                                   return (
                                     <tr key={id} style={{ background: bg }}>
-                                      <td style={{ padding: '8px 10px', borderBottom: '1px solid #eef2f7' }}>
+                                      <td style={{ padding: '8px 10px', borderBottom: `1px solid ${colors.managementTableHead}` }}>
                                         <span
                                           style={{
                                             fontSize: 13,
@@ -5351,7 +5395,7 @@ export default function CrewsPage() {
                                           {name}
                                         </span>
                                       </td>
-                                      <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #eef2f7' }}>
+                                      <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: `1px solid ${colors.managementTableHead}` }}>
                                         <span
                                           style={{
                                             fontSize: 13,
@@ -5368,7 +5412,7 @@ export default function CrewsPage() {
                                         </span>
                                       </td>
                                       {showPhone ? (
-                                        <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: '1px solid #eef2f7' }}>
+                                        <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: `1px solid ${colors.managementTableHead}` }}>
                                           <span style={{ fontSize: 13, color: colors.gray4 }}>{phone || '—'}</span>
                                         </td>
                                       ) : null}
@@ -5382,15 +5426,15 @@ export default function CrewsPage() {
                       }
                       return (
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 2, mb: 2 }}>
-                          <Box sx={{ borderRadius: 1.5, background: '#fff', p: 0 }}>
+                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0 }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Supervisores</Typography>
                             {renderList(roleIds.supervisors, true, false)}
                           </Box>
-                          <Box sx={{ borderRadius: 1.5, background: '#fff', p: 0 }}>
+                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0 }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Capataces</Typography>
                             {renderList(roleIds.foremen, true, false)}
                           </Box>
-                          <Box sx={{ borderRadius: 1.5, background: '#fff', p: 0, gridColumn: { xs: '1 / -1', sm: '1 / -1' } }}>
+                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0, gridColumn: { xs: '1 / -1', sm: '1 / -1' } }}>
                             <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Miembros</Typography>
                             {renderList(roleIds.members, true, true)}
                           </Box>
@@ -5402,26 +5446,26 @@ export default function CrewsPage() {
                       Actividades asignadas
                     </Typography>
                     {viewAssignedActivities.length === 0 ? (
-                      <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, bgcolor: '#f8fafc' }}>
+                      <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, bgcolor: colors.slate50 }}>
                         <Typography variant="body2" color="text.secondary">—</Typography>
                       </Paper>
                     ) : (
-                      <Paper variant="outlined" sx={{ p: 0, borderRadius: 1.5, overflow: 'hidden', borderColor: '#e5e7eb' }}>
+                      <Paper variant="outlined" sx={{ p: 0, borderRadius: 1.5, overflow: 'hidden', borderColor: colors.gray200 }}>
                         <Box sx={{ overflowX: 'auto' }}>
                           <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse' }}>
                             <thead>
-                              <tr style={{ background: '#f8fafc' }}>
-                                <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Actividad</th>
-                                <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Área</th>
-                                <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Cant.</th>
-                                <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Unidad</th>
-                                <th style={{ borderBottom: '1px solid #eee', padding: '8px 10px', textAlign: 'center', width: 140, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Disciplina</th>
+                              <tr style={{ background: colors.slate50 }}>
+                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Actividad</th>
+                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Área</th>
+                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Cant.</th>
+                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Unidad</th>
+                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 140, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Disciplina</th>
                               </tr>
                             </thead>
                             <tbody>
                               {viewAssignedActivities.slice(0, 50).map((a: any, idx: number) => (
                                 <tr key={String(a?.activityId || a?.id || idx)}>
-                                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: 10 }}>
+                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: 10 }}>
                                   <span style={{ fontSize: 13 }}>{a?.activity || a?.name || '—'}</span>
                                   {a?.assigned_at ? (
                                     <div style={{ color: colors.gray4, fontSize: 13, marginTop: 2 }}>
@@ -5429,10 +5473,10 @@ export default function CrewsPage() {
                                     </div>
                                   ) : null}
                                   </td>
-                                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '8px 10px', fontSize: 13 }}>{a?.area ? String(a.area) : ''}</td>
-                                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.quantity ?? ''}</td>
-                                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.unit || ''}</td>
-                                  <td style={{ borderBottom: '1px solid #f1f5f9', padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{formatDisciplineLabel(a?.discipline || a?.Disciplina || '')}</td>
+                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', fontSize: 13 }}>{a?.area ? String(a.area) : ''}</td>
+                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.quantity ?? ''}</td>
+                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.unit || ''}</td>
+                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{formatDisciplineLabel(a?.discipline || a?.Disciplina || '')}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -5490,9 +5534,9 @@ export default function CrewsPage() {
                           <span data-overflow-label="true" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {u.name || u.email}
                           </span>
-                          <span style={{ marginLeft: 8, color: checked ? '#7dd3fc' : colors.gray4, whiteSpace: 'nowrap' }}>({u.role || 'user'})</span>
+                          <span style={{ marginLeft: 8, color: checked ? colors.sky300 : colors.gray4, whiteSpace: 'nowrap' }}>({u.role || 'user'})</span>
                           {specialty ? (
-                            <span style={{ marginLeft: 8, color: checked ? '#7dd3fc' : colors.gray4, whiteSpace: 'nowrap' }}>{formatDisciplineLabel(specialty)}</span>
+                            <span style={{ marginLeft: 8, color: checked ? colors.sky300 : colors.gray4, whiteSpace: 'nowrap' }}>{formatDisciplineLabel(specialty)}</span>
                           ) : null}
                           <span style={{ marginLeft: 8, fontWeight: 700, whiteSpace: 'nowrap' }}>{checked ? 'Activo' : 'Inactivo'}</span>
                         </Button>

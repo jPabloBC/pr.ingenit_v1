@@ -45,7 +45,6 @@ import {
 import {
   Add,
   Edit,
-  Delete,
   Upload,
   Search,
   FilterList,
@@ -57,6 +56,7 @@ import {
   ViewModule,
   EventNote
 } from '@mui/icons-material'
+import { Trash2 } from 'lucide-react'
 import { colors } from '../../../theme/theme'
 import { getSuggestedPositions, findSimilarPositions, isStandardPosition, validateCustomPosition, addCustomPosition } from '../../../lib/positionStandards'
 import { IndustryType } from '../../../types'
@@ -3638,11 +3638,11 @@ export default function CollaboratorsPage() {
                   mb={{ xs: 2, md: 1.25 }}
                   sx={{
                     display: 'grid',
-                    rowGap: { xs: 0.45, md: 0.3, xl: 0.4 },
+                    rowGap: { xs: 0.65, md: 0.5, xl: 0.6 },
                     '& .collaborator-data-row': {
                       color: colors.gray6,
                       fontSize: { md: '0.72rem', lg: '0.74rem', xl: '0.8rem' },
-                      lineHeight: 1.2,
+                      lineHeight: 1.35,
                       overflowWrap: 'anywhere'
                     }
                   }}
@@ -3756,7 +3756,7 @@ export default function CollaboratorsPage() {
                     <Button
                       variant="outlined"
                       size="small"
-                      startIcon={<Delete />}
+                      startIcon={<Trash2 size={16} />}
                       sx={{
                         textTransform: 'none',
                         borderColor: colors.gray4,
@@ -4160,7 +4160,7 @@ export default function CollaboratorsPage() {
                               }}
                               onClick={() => handleDeactivateCollaborator(collaborator)}
                             >
-                              <Delete fontSize="small" />
+                              <Trash2 size={16} />
                             </IconButton>
                           ) : (
                             <IconButton 

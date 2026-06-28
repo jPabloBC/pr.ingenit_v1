@@ -46,11 +46,11 @@ import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew'
 import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos'
 import CloseIcon from '@mui/icons-material/Close'
 import EditIcon from '@mui/icons-material/Edit'
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import SaveIcon from '@mui/icons-material/Save'
 import SendIcon from '@mui/icons-material/Send'
+import { Trash2 } from 'lucide-react'
 import UserHeader from '@/components/layout/UserHeader'
 import { colors } from '@/theme/theme'
 import { format } from 'date-fns'
@@ -2524,7 +2524,7 @@ export default function StaffingActivitiesPage() {
                         borderRadius: 1,
                       }}
                     >
-                      <DeleteOutlineIcon fontSize="small" />
+                      <Trash2 size={16} />
                     </IconButton>
 
                   </Stack>
@@ -2615,7 +2615,7 @@ export default function StaffingActivitiesPage() {
                     variant="outlined"
                     color="error"
                     size="small"
-                    startIcon={deletingId === '__bulk__' ? <CircularProgress size={16} color="inherit" /> : <DeleteOutlineIcon fontSize="small" />}
+                    startIcon={deletingId === '__bulk__' ? <CircularProgress size={16} color="inherit" /> : <Trash2 size={16} />}
                     disabled={Boolean(deletingId)}
                     onClick={() => void deleteAvailableDrafts()}
                     sx={{ textTransform: 'none' }}
@@ -2714,7 +2714,7 @@ export default function StaffingActivitiesPage() {
                               disabled={!canDeleteActivity || !activityId || deletingActivityId === activityId}
                               onClick={() => void deleteActivity(session, activity)}
                             >
-                              {deletingActivityId === activityId ? <CircularProgress size={18} /> : <DeleteOutlineIcon fontSize="small" />}
+                              {deletingActivityId === activityId ? <CircularProgress size={18} /> : <Trash2 size={16} />}
                             </IconButton>
                           </span>
                         </Tooltip>
@@ -2829,7 +2829,7 @@ export default function StaffingActivitiesPage() {
                                   disabled={!canDeleteActivity || !activityId || deletingActivityId === activityId}
                                   onClick={() => void deleteActivity(session, activity)}
                                 >
-                                  {deletingActivityId === activityId ? <CircularProgress size={18} /> : <DeleteOutlineIcon />}
+                                  {deletingActivityId === activityId ? <CircularProgress size={18} /> : <Trash2 size={16} />}
                                 </IconButton>
                               </span>
                             </Tooltip>

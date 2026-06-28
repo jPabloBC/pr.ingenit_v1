@@ -407,6 +407,7 @@ export async function PUT(request: NextRequest) {
     const isDev = role === 'dev'
     const companyId = String(session.user.companyId || '').trim()
     if (!isDev && !companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await request.json()
     const date = normalizeDate(body?.date)

@@ -88,6 +88,15 @@ interface FieldReport {
   report_sequence_no?: number | null
   report_title?: string | null
   created_by?: string | null
+  created_by_current_user?: boolean
+  created_by_user_id?: string | null
+  created_by_id?: string | null
+  created_by_email?: string | null
+  owner_email?: string | null
+  daily_report_count?: number
+  has_daily_reports?: boolean
+  is_locked_by_daily_report?: boolean
+  daily_report_lock_samples?: any[]
 }
 
 interface ReportFrontOption {
@@ -615,12 +624,38 @@ export default function FieldReportsPage() {
   const router = useRouter()
   const role = String((session?.user as any)?.role || '').toLowerCase()
   const currentUserId = String((session?.user as any)?.id || '')
+  const currentUserEmail = normalizeText(String((session?.user as any)?.email || ''))
   const isUserRole = role === 'user'
   const isAdminRole = role === 'admin'
   const isDevRole = role === 'dev'
   const isViewerRole = role === 'viewer'
   const isDailyReportMode = false
   const isReadOnlyRole = isViewerRole || isDailyReportMode
+  const isFieldReportCreatedByLoggedUser = (report: any): boolean => {
+    if (report?.created_by_current_user === true) return true
+    const creatorCandidates = [
+      report?.created_by,
+      report?.created_by_user_id,
+      report?.created_by_id,
+      report?.creator_user_id,
+      report?.user_id,
+      report?.owner_user_id,
+      report?.auth_id,
+    ].map((value: any) => String(value || '').trim()).filter(Boolean)
+    if (currentUserId && creatorCandidates.some((value) => value === currentUserId)) return true
+    if (currentUserEmail && creatorCandidates.some((value) => normalizeText(value) === currentUserEmail)) return true
+    const creatorEmailCandidates = [
+      report?.created_by_email,
+      report?.owner_email,
+      report?.email,
+    ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+    return Boolean(currentUserEmail && creatorEmailCandidates.some((value) => value === currentUserEmail))
+  }
+  const getFieldReportDailyReportLockCount = (report: any): number => {
+    const count = Number(report?.daily_report_count ?? report?.daily_reports_count ?? 0)
+    if (Number.isFinite(count) && count > 0) return count
+    return report?.is_locked_by_daily_report === true || report?.has_daily_reports === true ? 1 : 0
+  }
   const [reports, setReports] = useState<FieldReport[]>([])
   const [fieldReportDetailsById, setFieldReportDetailsById] = useState<Record<string, any>>({})
   const [reportResponsibleFallbacks, setReportResponsibleFallbacks] = useState<Record<string, string>>({})
@@ -1460,6 +1495,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
 
   const confirmDeleteReport = (id: string) => {
     if (isReadOnlyRole) return
+    const report = reports.find((r) => String(r?.id || '') === String(id))
+    const lockCount = getFieldReportDailyReportLockCount(report)
+    if (lockCount > 0) {
+      showSnackbar('No se puede eliminar: este reporte de terreno ya fue usado en un reporte diario.', 'warning')
+      return
+    }
     setReportToDelete(id)
     setDeleteDialogOpen(true)
   }
@@ -1486,7 +1527,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][flow]', {
       fetchReports({ force: true })
     } catch (e) {
       console.error('Error deleting report', e)
-      showSnackbar('Error al eliminar el reporte', 'error')
+      showSnackbar(e instanceof Error ? e.message : 'Error al eliminar el reporte', 'error')
     }
   }
 
@@ -5922,10 +5963,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][modal][switch]', {
   }, [open, isUserRole, selectedReport, editMode, reportCrewIds, reportDate, availableCrewIdsForDate, availableCrewIdSet, crewsForDate])
 
   // Shared styles for tables and section titles to keep uniform appearance
-  const sectionTitleSx = { fontSize: '1rem', mb: 1, color: colors.blue1, textTransform: 'uppercase', letterSpacing: '0.02em', fontWeight: 700 }
+  const sectionTitleSx = { fontSize: '1rem', mb: 1, color: colors.blue1, textTransform: 'uppercase', letterSpacing: '0.02em', fontWeight: 600 }
   const tableContainerStyle: React.CSSProperties = { overflowX: 'auto', border: '1px solid #ddd' }
   const tableStyle: React.CSSProperties = { borderCollapse: 'collapse', width: '100%', minWidth: 900 }
-  const thStyle: React.CSSProperties = { border: '1px solid #ccc', padding: '8px 10px', background: '#f5f5f5', fontWeight: 700, fontSize: 13, textAlign: 'center' }
+  const thStyle: React.CSSProperties = { border: '1px solid #ccc', padding: '8px 10px', background: '#f5f5f5', fontWeight: 600, fontSize: 13, textAlign: 'center' }
   const tdStyle: React.CSSProperties = { border: '1px solid #eee', padding: '8px 10px', fontSize: 13, verticalAlign: 'middle' }
   const activityThStyle: React.CSSProperties = { ...thStyle, width: 90 }
   const activityTdStyle: React.CSSProperties = { ...tdStyle, textAlign: 'center' }
@@ -9965,15 +10006,26 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 
   const reportsGroupedByReportDate = useMemo(() => {
     const groups = new Map<string, FieldReport[]>()
+    const selectedWeekStart = String(fieldReportWeekRange?.start || '').slice(0, 10)
+    const selectedWeekEnd = String(fieldReportWeekRange?.end || '').slice(0, 10)
+    const hasSelectedWeek = isDateKey(selectedWeekStart) && isDateKey(selectedWeekEnd)
+    const isInSelectedWeek = (dateKey: string) => {
+      if (!hasSelectedWeek) return true
+      return dateKey >= selectedWeekStart && dateKey <= selectedWeekEnd
+    }
     ;(reports || []).forEach((r) => {
       const dateKey = String(r?.date || '').slice(0, 10)
-      const key = /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey : 'sin-fecha'
+      const hasValidDate = isDateKey(dateKey)
+      if (hasValidDate && !isInSelectedWeek(dateKey)) return
+      if (!hasValidDate && hasSelectedWeek) return
+      const key = hasValidDate ? dateKey : 'sin-fecha'
       if (!groups.has(key)) groups.set(key, [])
       groups.get(key)!.push(r)
     })
     ;(Array.isArray(crews) ? crews : []).forEach((crew: any) => {
       const dateKey = String(crew?.work_date || '').slice(0, 10) || String(crew?.created_at || '').slice(0, 10)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return
+      if (!isDateKey(dateKey)) return
+      if (!isInSelectedWeek(dateKey)) return
       if (!pendingCrewContextDates.has(dateKey)) return
       if (!groups.has(dateKey)) groups.set(dateKey, [])
     })
@@ -9990,7 +10042,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         })(),
         items: items.sort(compareReportsByCrewLabel)
       }))
-  }, [crews, reports, pendingCrewContextDates])
+  }, [crews, fieldReportWeekRange, reports, pendingCrewContextDates])
 
   const pendingCrewsByDate = useMemo(() => {
     const out = new Map<string, {
@@ -10001,6 +10053,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
       pendingCrews: Array<{ id: string; name: string; specialty: string; supervisor: string; capataz: string }>
     }>()
     const crewsByDate = new Map<string, Array<{ id: string; name: string; specialty: string; supervisor: string; capataz: string }>>()
+    const selectedWeekStart = String(fieldReportWeekRange?.start || '').slice(0, 10)
+    const selectedWeekEnd = String(fieldReportWeekRange?.end || '').slice(0, 10)
+    const hasSelectedWeek = isDateKey(selectedWeekStart) && isDateKey(selectedWeekEnd)
+    const isInSelectedWeek = (dateKey: string) => {
+      if (!hasSelectedWeek) return true
+      return dateKey >= selectedWeekStart && dateKey <= selectedWeekEnd
+    }
     const readIds = (...values: any[]) => values.flatMap((value) => {
       if (Array.isArray(value)) return value
       if (value == null || value === '') return []
@@ -10027,7 +10086,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
       const id = String(crew?.id || '').trim()
       if (!id) return
       const dateKey = String(crew?.work_date || '').slice(0, 10) || String(crew?.created_at || '').slice(0, 10)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return
+      if (!isDateKey(dateKey)) return
+      if (!isInSelectedWeek(dateKey)) return
       if (!pendingCrewContextDates.has(dateKey)) return
       const name = formatCrewNameLabel(crew?.name || id) || id
       const memberIds = readIds(crew?.members)
@@ -10050,7 +10110,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     const reportCrewIdsByDate = new Map<string, Set<string>>()
     ;(Array.isArray(reports) ? reports : []).forEach((report: any) => {
       const dateKey = String(report?.date || report?.report_date || '').slice(0, 10)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return
+      if (!isDateKey(dateKey)) return
+      if (!isInSelectedWeek(dateKey)) return
       if (!reportCrewIdsByDate.has(dateKey)) reportCrewIdsByDate.set(dateKey, new Set<string>())
       const set = reportCrewIdsByDate.get(dateKey)!
       if (report?.crew_id) set.add(String(report.crew_id))
@@ -10070,7 +10131,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     })
 
     return out
-  }, [crews, reports, collaboratorMap, collaboratorNameById, formatCrewNameLabel, pendingCrewContextDates])
+  }, [crews, fieldReportWeekRange, reports, collaboratorMap, collaboratorNameById, formatCrewNameLabel, pendingCrewContextDates])
 
   const selectedReportIdForHydration = String(selectedReport?.id || '')
   const hydrationPendingForSelectedReport = Boolean(
@@ -10196,6 +10257,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     () => availableReportWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || availableReportWeeks[0] || currentCalendarWeekRange,
     [availableReportWeeks, currentCalendarWeekRange]
   )
+  const fieldReportWeekOptions = useMemo(() => {
+    const baseWeeks = availableReportWeeks.length > 0 ? availableReportWeeks : [currentCalendarWeekRange]
+    if (!fieldReportWeekRange?.start) return baseWeeks
+    const hasSelectedWeek = baseWeeks.some((range) => range.start === fieldReportWeekRange.start)
+    if (hasSelectedWeek) return baseWeeks
+    return [fieldReportWeekRange, ...baseWeeks].sort((a, b) => b.start.localeCompare(a.start))
+  }, [availableReportWeeks, currentCalendarWeekRange, fieldReportWeekRange])
   const selectedReportWeekIndex = fieldReportWeekRange
     ? availableReportWeeks.findIndex((range) => range.start === fieldReportWeekRange.start)
     : -1
@@ -10472,9 +10540,9 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   py: 1,
                   width: { xs: '100%', lg: '70%' },
                   maxWidth: 1400,
-                  borderColor: '#bfdbfe',
+                  borderColor: colors.blue15,
                   borderRadius: 1.5,
-                  bgcolor: '#ffffff'
+                  bgcolor: colors.white
                 }}
               >
                 <Box
@@ -10492,7 +10560,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                     onClick={() => loadFieldReportWeek(previousReportWeek)}
                     disabled={reportsLoading || !previousReportWeek}
                     startIcon={<ChevronLeft size={16} />}
-                    sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
                   >
                     Semana anterior
                   </Button>
@@ -10502,20 +10570,55 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       minWidth: { xs: '100%', md: 260 },
                       textAlign: 'center',
                       fontSize: { xs: 14, sm: 16 },
-                      fontWeight: 900,
-                      color: '#0f172a',
+                      fontWeight: 500,
+                      color: colors.gray4,
                       order: { xs: -1, md: 0 }
                     }}
                   >
                     {fieldReportWeekLabel}
                   </Typography>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', md: 'flex-end' }, gap: 1, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
+                    <TextField
+                      select
+                      size="small"
+                      value={fieldReportWeekRange?.start || ''}
+                      disabled={reportsLoading || fieldReportWeekOptions.length === 0}
+                      SelectProps={{
+                        renderValue: (value) => {
+                          const selected = fieldReportWeekOptions.find((range) => range.start === value)
+                          return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
+                        }
+                      }}
+                      onChange={(event) => {
+                        const selected = fieldReportWeekOptions.find((range) => range.start === event.target.value)
+                        if (selected) loadFieldReportWeek(selected)
+                      }}
+                      sx={{
+                        width: { xs: '100%', sm: 142, md: 142 },
+                        minWidth: { xs: '100%', sm: 142, md: 142 },
+                        flex: { xs: '1 1 100%', sm: '0 0 142px' },
+                        '& .MuiInputBase-root': { height: 32 },
+                        '& .MuiSelect-select': {
+                          py: 0.55,
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        },
+                      }}
+                    >
+                      {fieldReportWeekOptions.map((range) => (
+                        <MenuItem key={`field-report-week-${range.start}`} value={range.start}>
+                          {`Semana ${getProjectWeekNumber(range.start)} (${formatDateKeyCl(range.start)} - ${formatDateKeyCl(range.end)})`}
+                        </MenuItem>
+                      ))}
+                    </TextField>
                     <Button
                       variant="contained"
                       size="small"
                       onClick={loadLatestFieldReportWeek}
                       disabled={reportsLoading || isViewingLatestReportWeek}
-                      sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                      sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
                     >
                       Última semana
                     </Button>
@@ -10525,7 +10628,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       onClick={() => loadFieldReportWeek(nextReportWeek)}
                       disabled={reportsLoading || !nextReportWeek}
                       endIcon={<ChevronRight size={16} />}
-                      sx={{ textTransform: 'none', fontWeight: 800, flexShrink: 0 }}
+                      sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
                     >
                       Semana siguiente
                     </Button>
@@ -10547,11 +10650,11 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         justifyContent: 'center',
                         flexDirection: 'column',
                         gap: 1.25,
-                        color: '#64748b'
+                        color: colors.gray4
                       }}
                     >
                       <CircularProgress size={26} />
-                      <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
+                      <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
                         Cargando reportes...
                       </Typography>
                     </Box>
@@ -10568,10 +10671,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         color: '#991b1b'
                       }}
                     >
-                      <Typography sx={{ fontSize: 15, fontWeight: 800 }}>
+                      <Typography sx={{ fontSize: 15, fontWeight: 600 }}>
                         No se pudieron cargar los reportes
                       </Typography>
-                      <Typography sx={{ fontSize: 13, color: '#64748b', maxWidth: 520 }}>
+                      <Typography sx={{ fontSize: 13, color: colors.gray4, maxWidth: 520 }}>
                         {reportsLoadError}
                       </Typography>
                     </Box>
@@ -10583,10 +10686,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         alignItems: 'center',
                         justifyContent: 'center',
                         textAlign: 'center',
-                        color: '#64748b'
+                        color: colors.gray4
                       }}
                     >
-                      <Typography sx={{ fontSize: 14, fontWeight: 700 }}>
+                      <Typography sx={{ fontSize: 14, fontWeight: 600 }}>
                         No hay reportes creados.
                       </Typography>
                     </Box>
@@ -10633,7 +10736,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               }
                             }}
                           >
-                            <Typography sx={{ fontWeight: 700, color: '#ffffff', fontSize: 16, lineHeight: 1.1, minWidth: 0, flex: '1 1 160px', overflowWrap: 'anywhere' }}>
+                            <Typography sx={{ fontWeight: 600, color: '#ffffff', fontSize: 16, lineHeight: 1.1, minWidth: 0, flex: '1 1 160px', overflowWrap: 'anywhere' }}>
                               {group.label}
                             </Typography>
                             {(() => {
@@ -10660,7 +10763,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       bgcolor: '#dc2626',
                                       color: '#ffffff',
                                       fontSize: 11,
-                                      fontWeight: 700,
+                                      fontWeight: 600,
                                       textTransform: 'none',
                                       whiteSpace: 'nowrap',
                                       '&:hover': {
@@ -10692,7 +10795,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       px: 0.75,
                                       py: 0.25,
                                       color: '#e0f2fe',
-                                      fontWeight: 800,
+                                      fontWeight: 600,
                                       textTransform: 'none',
                                       border: 'none',
                                       bgcolor: 'transparent',
@@ -10723,7 +10826,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       px: 0.75,
                                       py: 0.25,
                                       color: '#e0f2fe',
-                                      fontWeight: 800,
+                                      fontWeight: 600,
                                       textTransform: 'none',
                                       border: 'none',
                                       bgcolor: 'transparent',
@@ -10812,13 +10915,17 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                             }
                             const supervisorParts = splitNameRole(supervisorDisplay)
                             const capatazParts = splitNameRole(capatazDisplay)
-                            const canDeleteReport =
+                            const dailyReportLockCount = getFieldReportDailyReportLockCount(r)
+                            const canDeleteReportByRole =
                               !isReadOnlyRole &&
                               (
                                 isAdminRole ||
                                 isDevRole ||
-                                (isUserRole && !!currentUserId && String(r?.created_by || '') === currentUserId)
+                                (isUserRole && isFieldReportCreatedByLoggedUser(r))
                               )
+                            const deleteTooltip = dailyReportLockCount > 0
+                              ? `Bloqueado: usado en ${dailyReportLockCount} reporte${dailyReportLockCount === 1 ? '' : 's'} diario${dailyReportLockCount === 1 ? '' : 's'}`
+                              : 'Eliminar'
                             return (
                               <ListItem
                                 key={r.id}
@@ -10850,7 +10957,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               >
                                 <Box sx={{ minWidth: 0, flex: '1 1 0%', width: '100%', maxWidth: '100%' }}>
                                   <Box sx={{ mb: 0.5, minWidth: 0, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1.5 }}>
-                                    <Typography sx={{ fontWeight: 700, color: '#0f172a', fontSize: 14, lineHeight: 1.2, textTransform: 'uppercase', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    <Typography sx={{ fontWeight: 600, color: '#0f172a', fontSize: 14, lineHeight: 1.2, textTransform: 'uppercase', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                       {r.area && r.area !== '' ? r.area : 'Sin área'}
                                     </Typography>
                                     <Typography
@@ -10983,11 +11090,18 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       </IconButton>
                                     </Tooltip>
                                   ) : null}
-                                  {canDeleteReport ? (
-                                    <Tooltip title="Eliminar">
-                                      <IconButton size="small" color="error" onClick={() => confirmDeleteReport(r.id)}>
-                                        <Trash2 size={16} />
-                                      </IconButton>
+                                  {canDeleteReportByRole ? (
+                                    <Tooltip title={deleteTooltip}>
+                                      <span>
+                                        <IconButton
+                                          size="small"
+                                          color="error"
+                                          disabled={dailyReportLockCount > 0}
+                                          onClick={() => confirmDeleteReport(r.id)}
+                                        >
+                                          <Trash2 size={16} />
+                                        </IconButton>
+                                      </span>
                                     </Tooltip>
                                   ) : null}
                                 </Stack>
@@ -11028,7 +11142,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
             >
               <Box sx={{ bgcolor: '#fff', borderRadius: 1.5, px: 3, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.5, boxShadow: 3 }}>
                 <CircularProgress size={24} />
-                <Typography sx={{ fontWeight: 700, color: '#0f2d5c' }}>Cargando reporte...</Typography>
+                <Typography sx={{ fontWeight: 600, color: '#0f2d5c' }}>Cargando reporte...</Typography>
               </Box>
             </Box>
           ) : null}
@@ -11046,7 +11160,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         >
           <DialogTitle sx={{ px: 3, pt: 2, pb: 0.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-              <Typography component="span" sx={{ fontSize: 20, fontWeight: 700 }}>
+              <Typography component="span" sx={{ fontSize: 20, fontWeight: 600 }}>
                 {editMode ? 'Editar Reporte de Terreno' : ((selectedReport || reportHydrating) ? 'Ver Reporte de Terreno' : 'Nuevo Reporte de Terreno')}
               </Typography>
               {!editMode && selectedReport?.id && sameDateReportNavigation.currentIndex >= 0 && sameDateReportNavigation.items.length > 1 ? (
@@ -11088,7 +11202,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       },
                       '& .MuiOutlinedInput-input': {
                         textAlign: 'center',
-                        fontWeight: 700,
+                        fontWeight: 600,
                         fontSize: 13,
                         py: 0.6
                       }
@@ -11148,7 +11262,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   color: '#0f2d5c'
                 }}
               >
-                <Typography sx={{ fontWeight: 700 }}>No se pudo cargar el reporte completo</Typography>
+                <Typography sx={{ fontWeight: 600 }}>No se pudo cargar el reporte completo</Typography>
                 <Typography variant="body2" color="text.secondary">
                   {selectedReportHydrationError || 'Ocurrió un error al hidratar el reporte.'}
                 </Typography>
@@ -11165,7 +11279,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   color: '#0f2d5c'
                 }}
               >
-                <Typography sx={{ fontWeight: 700 }}>No se pudo preparar el reporte. Cierre e intente nuevamente.</Typography>
+                <Typography sx={{ fontWeight: 600 }}>No se pudo preparar el reporte. Cierre e intente nuevamente.</Typography>
                 <Typography variant="body2" color="text.secondary">
                   Estado de hidratación inválido para el reporte seleccionado.
                 </Typography>
@@ -12515,7 +12629,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           <TextField size="small" label="Item ID" value={inputs.item_id ?? a.item_id ?? ''} onChange={(e) => setActivityInputs(prev => ({ ...prev, [String(a.id)]: { ...(prev[String(a.id)] || {}), item_id: e.target.value } }))} />
                           <TextField size="small" label="Sub-ID" value={inputs.sub_id ?? a.sub_id ?? ''} onChange={(e) => setActivityInputs(prev => ({ ...prev, [String(a.id)]: { ...(prev[String(a.id)] || {}), sub_id: e.target.value } }))} />
                           <Box>
-                            <Typography variant="body1" sx={{ fontWeight: 700 }}>{a.activity}</Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 600 }}>{a.activity}</Typography>
                             <Typography variant="caption" sx={{ color: '#666' }}>{a.area || ''} {a.package ? `— Paq. ${a.package}` : ''}</Typography>
                           </Box>
                           <TextField size="small" label="Cantidad" value={inputs.quantity ?? a.quantity ?? ''} onChange={(e) => setActivityInputs(prev => ({ ...prev, [String(a.id)]: { ...(prev[String(a.id)] || {}), quantity: e.target.value } }))} sx={{ width: 100 }} />
@@ -12567,7 +12681,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       pr: 0,
                       py: 0.75,
                       fontSize: 13,
-                      fontWeight: 700,
+                      fontWeight: 600,
                       columnGap: 0.75,
                       boxSizing: 'border-box'
                     }}
@@ -12766,7 +12880,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       bgcolor: '#d32f2f',
                                       color: '#fff',
                                       fontSize: 10,
-                                      fontWeight: 700,
+                                      fontWeight: 600,
                                       display: 'flex',
                                       alignItems: 'center',
                                       justifyContent: 'center',
@@ -12901,7 +13015,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   <Box sx={{ overflowX: 'auto', border: '1px solid #ddd' }}>
                     <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1000 }}>
                       <thead>
-                        <tr style={{ background: '#f5f5f5', fontWeight: 700 }}>
+                        <tr style={{ background: '#f5f5f5', fontWeight: 600 }}>
                           <th style={{ border: '1px solid #ccc', padding: '6px 8px', width: 40 }}>N°</th>
                           <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 140 }}>Código equipo</th>
                           <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 260 }}>Descripción equipos</th>
@@ -13165,7 +13279,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
               }
             }}
           >
-            <DialogTitle sx={{ pb: 1, color: '#0f2d5c', fontWeight: 800 }}>
+            <DialogTitle sx={{ pb: 1, color: '#0f2d5c', fontWeight: 600 }}>
               {hourCellActivityIndex < 0 ? 'Horas Extras' : `Hora Actividad ${hourCellActivityIndex + 1}`}
               {hourCellPersonName ? ` - ${hourCellPersonName}` : ''}
             </DialogTitle>
@@ -13183,7 +13297,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                     gap: 1
                   }}
                 >
-                  <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700 }}>
+                  <Typography variant="caption" sx={{ color: '#475569', fontWeight: 600 }}>
                     {hourCellActivityIndex < 0 ? 'Horas Extras' : `Actividad ${hourCellActivityIndex + 1}`}
                   </Typography>
                 <TextField
@@ -13211,7 +13325,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                     },
                     '& input': {
                       textAlign: 'center',
-                      fontWeight: 700,
+                      fontWeight: 600,
                       fontSize: 22,
                       py: 0.8
                     }
@@ -13222,7 +13336,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   Jornada completa: {activePersonWorkdayHours} h. Máximo con horas extras: {MAX_PERSON_HOURS_WITH_OVERTIME} h.
                 </Typography>
                 <Box sx={{ mt: 1.75, p: 1.25, border: '1px solid #e2e8f0', borderRadius: 2, bgcolor: '#ffffff' }}>
-                  <Typography variant="caption" sx={{ color: '#334155', fontWeight: 700, display: 'block', mb: 0.5 }}>Aplicar a</Typography>
+                  <Typography variant="caption" sx={{ color: '#334155', fontWeight: 600, display: 'block', mb: 0.5 }}>Aplicar a</Typography>
                   <RadioGroup
                     value={hourApplyMode}
                     onChange={(e) => setHourApplyMode(String(e.target.value) as 'single' | 'all' | 'selected')}
@@ -13288,7 +13402,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	              }
 	            }}
 	          >
-	            <DialogTitle sx={{ pb: 1, color: '#0f2d5c', fontWeight: 800 }}>
+	            <DialogTitle sx={{ pb: 1, color: '#0f2d5c', fontWeight: 600 }}>
 	              Hora Maquinaria - Actividad {equipHourCellActivityIndex + 1}
 	            </DialogTitle>
 	            <DialogContent sx={{ pt: 0.75 }}>
@@ -13305,7 +13419,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	                    gap: 1
 	                  }}
 	                >
-	                  <Typography variant="caption" sx={{ color: '#475569', fontWeight: 700 }}>
+	                  <Typography variant="caption" sx={{ color: '#475569', fontWeight: 600 }}>
 	                    Actividad {equipHourCellActivityIndex + 1}
 	                  </Typography>
 	                  <TextField
@@ -13333,7 +13447,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	                      },
 	                      '& input': {
 	                        textAlign: 'center',
-	                        fontWeight: 700,
+	                        fontWeight: 600,
 	                        fontSize: 22,
 	                        py: 0.8
 	                      }
@@ -13378,7 +13492,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 
 	          <Dialog open={dailyExcelPreviewOpen} onClose={() => setDailyExcelPreviewOpen(false)} fullWidth maxWidth={false} PaperProps={{ sx: { width: '95vw', maxWidth: '1500px' } }}>
 	            <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-	              <Typography component="span" sx={{ fontWeight: 800 }}>
+	              <Typography component="span" sx={{ fontWeight: 600 }}>
 	                Vista previa Excel diario
 	              </Typography>
 	              <Typography component="span" sx={{ color: '#64748b', fontSize: 13 }}>
@@ -13389,7 +13503,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 	              {dailyExcelPreviewLoading ? (
 	                <Stack direction="row" spacing={1.5} alignItems="center" justifyContent="center" sx={{ py: 6 }}>
 	                  <CircularProgress size={24} />
-	                  <Typography sx={{ fontWeight: 700, color: '#0f2d5c' }}>
+	                  <Typography sx={{ fontWeight: 600, color: '#0f2d5c' }}>
 	                    Cargando datos completos de la fecha...
 	                  </Typography>
 	                </Stack>
@@ -13622,7 +13736,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                   {dailyExcelExporting ? (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, color: '#163B82' }}>
                       <CircularProgress size={18} />
-                      <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
+                      <Typography sx={{ fontSize: 13, fontWeight: 600 }}>
                         {dailyExcelExportProgressLabel || 'Exportando Excel...'}
                       </Typography>
                     </Box>
@@ -13721,7 +13835,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                 return (
                   <Box sx={{ mb: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 0.5 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
                         Imagenes ya registradas ({uploaded.length})
                       </Typography>
                       {uploaded.length > 0 ? (
@@ -13805,7 +13919,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               <Button
                                 size="small"
                                 color="error"
-                                startIcon={<Trash2 size={14} />}
+                                startIcon={<Trash2 size={16} />}
                                 onClick={() => removeUploadedEvidenceFromRow(idx, i)}
                                 sx={{ mt: 0.25, minWidth: 'auto', px: 0.75 }}
                               >
@@ -13821,7 +13935,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       </Typography>
                     )}
 
-                    <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
                       Imagenes agregadas (pendientes de guardar) ({pending.length})
                     </Typography>
                     {pending.length > 0 ? (
@@ -13857,7 +13971,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               <Button
                                 size="small"
                                 color="error"
-                                startIcon={<Trash2 size={14} />}
+                                startIcon={<Trash2 size={16} />}
                                 onClick={() => removePendingEvidenceFromRow(rowKey, i)}
                                 sx={{ mt: 0.25, minWidth: 'auto', px: 0.75 }}
                               >
@@ -13948,7 +14062,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                           display: 'block'
                         }}
                       >
-                        <Typography sx={{ fontWeight: 700 }}>
+                        <Typography sx={{ fontWeight: 600 }}>
                           Versión {row.version_no} - {createdLabel}
                         </Typography>
                         <Typography variant="caption" sx={{ color: '#64748b', display: 'block', mb: 1 }}>
@@ -13987,7 +14101,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                         {isExpanded && (
                           <Box sx={{ mt: 1.5, display: 'grid', gap: 1.25 }}>
                             <Box>
-                              <Typography variant="caption" sx={{ fontWeight: 700, color: '#334155', display: 'block', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: '#334155', display: 'block', mb: 0.5 }}>
                                 Estado anterior (JSON)
                               </Typography>
                               <Box
@@ -14010,7 +14124,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               </Box>
                             </Box>
                             <Box>
-                              <Typography variant="caption" sx={{ fontWeight: 700, color: '#334155', display: 'block', mb: 0.5 }}>
+                              <Typography variant="caption" sx={{ fontWeight: 600, color: '#334155', display: 'block', mb: 0.5 }}>
                                 Estado nuevo (JSON)
                               </Typography>
                               <Box

@@ -6397,6 +6397,7 @@ export default function DailyReportPage() {
   const [reportTemplate, setReportTemplate] = useState<ReportTemplateKey>("daily_v2")
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editSourceMode, setEditSourceMode] = useState<EditSourceMode>("snapshot")
+  const [editModeChoiceRecord, setEditModeChoiceRecord] = useState<DailyReportRecord | null>(null)
   const [viewRecord, setViewRecord] = useState<DailyReportRecord | null>(null)
   const [exporting, setExporting] = useState(false)
   const [activeActionRecordId, setActiveActionRecordId] = useState<string | null>(null)
@@ -6814,6 +6815,13 @@ export default function DailyReportPage() {
     () => dailyReportWeeks.find((range) => range.start <= currentCalendarWeekRange.start) || dailyReportWeeks[0] || currentCalendarWeekRange,
     [currentCalendarWeekRange, dailyReportWeeks]
   )
+  const dailyReportWeekOptions = useMemo(() => {
+    const baseWeeks = dailyReportWeeks.length > 0 ? dailyReportWeeks : [currentCalendarWeekRange]
+    if (!dailyReportWeekRange?.start) return baseWeeks
+    const hasSelectedWeek = baseWeeks.some((range) => range.start === dailyReportWeekRange.start)
+    if (hasSelectedWeek) return baseWeeks
+    return [dailyReportWeekRange, ...baseWeeks].sort((a, b) => b.start.localeCompare(a.start))
+  }, [currentCalendarWeekRange, dailyReportWeekRange, dailyReportWeeks])
 
   useEffect(() => {
     if (dailyReportWeeks.length === 0) {
@@ -11600,9 +11608,11 @@ export default function DailyReportPage() {
     }
   }
 
-  const openEdit = async (recordSummary: DailyReportRecord) => {
+  const openEdit = async (recordSummary: DailyReportRecord, sourceMode: EditSourceMode = "snapshot") => {
     editHydrationLockRef.current = true
     setHistoryViewMeta(null)
+    setDetailVisibleTotals(null)
+    setDetailVisibleRows(null)
     setActiveActionRecordId(String(recordSummary.id || ""))
     try {
     await loadCollaborators(true)
@@ -11610,7 +11620,20 @@ export default function DailyReportPage() {
     const inferredTemplate = inferTemplateFromRecord(record)
     setReportTemplate(inferredTemplate)
     setEditingId(record.id)
-    setEditSourceMode("snapshot")
+    setEditSourceMode(sourceMode)
+    let liveSourceIdsForEdit: string[] = []
+    if (sourceMode === "field_reports") {
+      const day = String(record.report_date || "").slice(0, 10)
+      if (day) {
+        const res = await fetch(`/api/field-reports?date=${encodeURIComponent(day)}&summary=1&include_calc=1&limit=50`, { cache: "no-store" })
+        const json = await res.json().catch(() => [])
+        if (!res.ok) throw new Error(String((json as any)?.error || "No se pudieron cargar los reportes de terreno."))
+        const rows = Array.isArray(json) ? json : []
+        fieldReportsByDateCacheRef.current[day] = rows
+        setFieldReportsForDate(rows)
+        liveSourceIdsForEdit = sourceFieldReportIdsFromRows(rows)
+      }
+    }
     const normalized = normalizeRecordToForm(record)
     const toNum = (value: unknown) => {
       if (value == null || String(value).trim() === "") return 0
@@ -11640,7 +11663,17 @@ export default function DailyReportPage() {
       if (detail <= 0) return persisted
       return Math.abs(persistedNum - detail) > 0.01 ? String(detail) : persisted
     }
-    const normalizedSafe: DailyForm = hydrateVisibleFormFromRecord(record)
+    const normalizedSafeBase: DailyForm = hydrateVisibleFormFromRecord(record)
+    const applyEditSourceModeToDraft = (draft: DailyForm): DailyForm =>
+      sourceMode === "field_reports"
+        ? {
+            ...draft,
+            source_field_report_ids: liveSourceIdsForEdit.length > 0 ? liveSourceIdsForEdit : draft.source_field_report_ids,
+            v2_front_distribution_overrides: {},
+            v2_equipment_front_distribution_overrides: {}
+          }
+        : draft
+    const normalizedSafe: DailyForm = applyEditSourceModeToDraft(normalizedSafeBase)
     if (false) console.log("[daily-report][edit-open-source]", {
       recordId: record.id,
       inferredTemplate,
@@ -11672,7 +11705,7 @@ export default function DailyReportPage() {
     } as Record<"CANALETAS" | "PISCINAS", DailyReportRecord | null>)
     setFrontDraftForms({
       [currentFront]: normalizedSafe,
-      [oppositeFront]: oppositeDetail ? normalizeRecordToForm(oppositeDetail) : null
+      [oppositeFront]: oppositeDetail ? applyEditSourceModeToDraft(normalizeRecordToForm(oppositeDetail)) : null
     } as Record<"CANALETAS" | "PISCINAS", DailyForm | null>)
     setFrontBaselineHashes({
       [currentFront]: formHash(normalizedSafe),
@@ -11754,97 +11787,12 @@ export default function DailyReportPage() {
     }
   }
 
-  const getLiveFieldReportsForCurrentDate = async (force = false) => {
-    const day = String(form.report_date || "").slice(0, 10)
-    if (!day) return []
-    const cached = fieldReportsByDateCacheRef.current[day]
-    if (!force && cached) {
-      setFieldReportsForDate(cached)
-      return cached
-    }
-    const res = await fetch(`/api/field-reports?date=${encodeURIComponent(day)}&summary=1&include_calc=1&limit=50`, { cache: "no-store" })
-    const json = await res.json().catch(() => [])
-    if (!res.ok) throw new Error(String((json as any)?.error || "No se pudieron cargar los reportes de terreno."))
-    const rows = Array.isArray(json) ? json : []
-    fieldReportsByDateCacheRef.current[day] = rows
-    setFieldReportsForDate(rows)
-    return rows
-  }
-
   const sourceFieldReportIdsFromRows = (rows: any[]) =>
     Array.from(new Set(
       (rows || [])
         .map((report: any) => String(report?.id || "").trim())
         .filter(Boolean)
     ))
-
-  const changeEditSourceMode = async (mode: EditSourceMode) => {
-    if (!editingId) return
-    const currentFront = frontFromForm(form)
-
-    if (mode === "snapshot") {
-      if (editSourceMode === "snapshot") return
-      const original = editSessionOriginalByFront[currentFront]
-      if (!original) {
-        showToast(`No hay snapshot guardado para ${currentFront}.`, "error")
-        return
-      }
-      const restored = hydrateVisibleFormFromRecord(original)
-      const indirectSettings = getSavedIndirectHoursSettings(original)
-      setEditSourceMode("snapshot")
-      setDetailVisibleTotals(null)
-      setDetailVisibleRows(null)
-      setForm(restored)
-      setIndirectHoursOverrides(indirectSettings.overrides)
-      setIndirectHoursOverridesDraft(indirectSettings.overrides)
-      setIndirectHoursFrontOverrides(indirectSettings.frontOverrides)
-      setIndirectHoursFrontOverridesDraft(indirectSettings.frontOverrides)
-      setIndirectHoursFrontApplyScope(indirectSettings.frontApplyScope)
-      setSavedIndirectHoursSettingsKey(stableIndirectHoursSettingsKey(indirectSettings.overrides, indirectSettings.frontApplyScope, indirectSettings.frontOverrides))
-      setFrontDraftForms((prev) => ({ ...prev, [currentFront]: restored }))
-      setFrontBaselineHashes((prev) => ({ ...prev, [currentFront]: formHash(restored) }))
-      showToast("Editando el snapshot guardado.", "info")
-      return
-    }
-
-    const shouldContinue = window.confirm(
-      `Se reformulará ${currentFront} leyendo nuevamente los reportes de terreno actuales. Los cambios no guardados de este frente se reemplazarán. ¿Deseas continuar?`
-    )
-    if (!shouldContinue) return
-
-    setBootstrapping(true)
-    try {
-      const liveRows = await getLiveFieldReportsForCurrentDate(true)
-      const liveSourceIds = sourceFieldReportIdsFromRows(liveRows)
-      setEditSourceMode("field_reports")
-      setDetailVisibleTotals(null)
-      setDetailVisibleRows(null)
-      setForm((prev) => ({
-        ...prev,
-        source_field_report_ids: liveSourceIds.length > 0 ? liveSourceIds : prev.source_field_report_ids,
-        v2_front_distribution_overrides: {},
-        v2_equipment_front_distribution_overrides: {}
-      }))
-      setFrontDraftForms((prev) => {
-        const currentDraft = prev[currentFront] || form
-        return {
-          ...prev,
-          [currentFront]: {
-            ...currentDraft,
-            source_field_report_ids: liveSourceIds.length > 0 ? liveSourceIds : currentDraft.source_field_report_ids,
-            v2_front_distribution_overrides: {},
-            v2_equipment_front_distribution_overrides: {}
-          }
-        }
-      })
-      setFrontSavedStatus((prev) => ({ ...prev, [currentFront]: false }))
-      showToast("Reformulado desde reportes de terreno. Revisa y guarda para actualizar el reporte.", "info")
-    } catch (err: any) {
-      showToast(err?.message || "No se pudo reformular desde reportes de terreno.", "error")
-    } finally {
-      setBootstrapping(false)
-    }
-  }
 
   const getRecordFront = (record?: DailyReportRecord | null): "CANALETAS" | "PISCINAS" => {
     if (!record) return "CANALETAS"
@@ -13565,11 +13513,11 @@ export default function DailyReportPage() {
                 width: 52,
                 height: 52,
                 borderRadius: "50%",
-                bgcolor: "#1d4ed8",
-                color: "#fff",
+                bgcolor: colors.blue6,
+                color: colors.white,
                 boxShadow: "0 8px 22px rgba(29, 78, 216, 0.35)",
-                border: "1px solid #1e40af",
-                "&:hover": { bgcolor: "#1e40af" }
+                border: `1px solid ${colors.blue4}`,
+                "&:hover": { bgcolor: colors.blue4 }
               }}
             >
               <RefreshCw size={20} />
@@ -13588,23 +13536,23 @@ export default function DailyReportPage() {
                 height: 52,
                 borderRadius: "50%",
                 bgcolor: colors.blue1,
-                color: "#ffffff",
-                border: "2px solid #7dd3fc",
+                color: colors.white,
+                border: `2px solid ${colors.blue14}`,
                 boxShadow: "0 10px 24px rgba(0, 26, 51, 0.32)",
                 transition: "border-color 160ms ease, box-shadow 160ms ease",
                 "&:hover": {
                   bgcolor: colors.blue1,
-                  borderColor: "#bae6fd",
+                  borderColor: colors.blue15,
                   boxShadow: "0 10px 28px rgba(125, 211, 252, 0.55)",
                   "& .plus-icon": {
-                    color: "#7dd3fc",
+                    color: colors.blue14,
                     transform: "scale(1.18)",
                   },
                 },
                 "&.Mui-disabled": {
-                  bgcolor: "#93c5fd",
-                  color: "#e0f2fe",
-                  borderColor: "#bae6fd",
+                  bgcolor: colors.blue14,
+                  color: colors.blue15,
+                  borderColor: colors.blue15,
                 },
               }}
             >
@@ -13629,9 +13577,9 @@ export default function DailyReportPage() {
               py: 1,
               width: { xs: "100%", lg: "70%" },
               maxWidth: 1400,
-              borderColor: "#bfdbfe",
+              borderColor: colors.blue15,
               borderRadius: 1.5,
-              bgcolor: "#ffffff"
+              bgcolor: colors.white
             }}
           >
             <Box
@@ -13649,7 +13597,7 @@ export default function DailyReportPage() {
                 disabled={!previousDailyReportWeek}
                 onClick={() => previousDailyReportWeek && setDailyReportWeekRange(previousDailyReportWeek)}
                 startIcon={<ChevronLeft size={16} />}
-                sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+                sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
               >
                 Semana anterior
               </Button>
@@ -13659,20 +13607,55 @@ export default function DailyReportPage() {
                   minWidth: { xs: "100%", md: 260 },
                   textAlign: "center",
                   fontSize: { xs: 14, sm: 16 },
-                  fontWeight: 900,
-                  color: "#0f172a",
+                  fontWeight: 500,
+                  color: colors.gray4,
                   order: { xs: -1, md: 0 }
                 }}
               >
                 {dailyReportWeekLabel}
               </Typography>
               <Box sx={{ display: "flex", alignItems: "center", justifyContent: { xs: "space-between", md: "flex-end" }, gap: 1, flex: { xs: "1 1 100%", md: "0 0 auto" } }}>
+                <TextField
+                  select
+                  size="small"
+                  value={dailyReportWeekRange?.start || ""}
+                  disabled={dailyReportWeekOptions.length === 0}
+                  SelectProps={{
+                    renderValue: (value) => {
+                      const selected = dailyReportWeekOptions.find((range) => range.start === value)
+                      return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : "Semana"
+                    }
+                  }}
+                  onChange={(event) => {
+                    const selected = dailyReportWeekOptions.find((range) => range.start === event.target.value)
+                    if (selected) setDailyReportWeekRange(selected)
+                  }}
+                  sx={{
+                    width: { xs: "100%", sm: 142, md: 142 },
+                    minWidth: { xs: "100%", sm: 142, md: 142 },
+                    flex: { xs: "1 1 100%", sm: "0 0 142px" },
+                    "& .MuiInputBase-root": { height: 32 },
+                    "& .MuiSelect-select": {
+                      py: 0.55,
+                      fontWeight: 600,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap"
+                    }
+                  }}
+                >
+                  {dailyReportWeekOptions.map((range) => (
+                    <MenuItem key={`daily-report-week-${range.start}`} value={range.start}>
+                      {`Semana ${getProjectWeekNumber(range.start)} (${formatDateDisplaySlash(range.start)} - ${formatDateDisplaySlash(range.end)})`}
+                    </MenuItem>
+                  ))}
+                </TextField>
                 <Button
                   variant="contained"
                   size="small"
                   disabled={isViewingLatestDailyReportWeek}
                   onClick={() => setDailyReportWeekRange(latestDailyReportWeek)}
-                  sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+                  sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
                 >
                   Última semana
                 </Button>
@@ -13682,7 +13665,7 @@ export default function DailyReportPage() {
                   disabled={!nextDailyReportWeek}
                   onClick={() => nextDailyReportWeek && setDailyReportWeekRange(nextDailyReportWeek)}
                   endIcon={<ChevronRight size={16} />}
-                  sx={{ textTransform: "none", fontWeight: 800, flexShrink: 0 }}
+                  sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
                 >
                   Semana siguiente
                 </Button>
@@ -13690,7 +13673,7 @@ export default function DailyReportPage() {
             </Box>
           </Paper>
           <Box sx={{ overflowX: "auto" }}>
-                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900, border: "1px solid #cbd5e1" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900, border: `1px solid ${colors.blue13}` }}>
                   <colgroup>
                     <col style={{ width: "1%" }} />
                     <col style={{ width: "1%" }} />
@@ -13705,16 +13688,16 @@ export default function DailyReportPage() {
                   </colgroup>
                   <thead>
                     <tr>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>Reporte N°</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>Fecha</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1" }}>Contratista</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1" }}>Frente</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1" }}>Proyecto</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>HH Dir.</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>HH Ind.</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>HH Total</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>Ver</th>
-                      <th style={{ ...laborBlueBandSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>Acciones</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Reporte N°</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Fecha</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}` }}>Contratista</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}` }}>Frente</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}` }}>Proyecto</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>HH Dir.</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>HH Ind.</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>HH Total</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Ver</th>
+                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -13722,8 +13705,8 @@ export default function DailyReportPage() {
                       const rowFront = detectRecordFrontStrict(r) || getRecordFront(r)
                       const reportBlockChanged = idx > 0 && Number(visibleDailyRecords[idx - 1]?.report_no || 0) !== Number(r?.report_no || 0)
                       const rowBg = rowFront === "PISCINAS"
-                        ? "#e0f2fe"
-                        : "#f0f9ff"
+                        ? colors.blue15
+                        : colors.gray10
                       const asNum = (v: unknown) => {
                         const n = Number(v)
                         return Number.isFinite(n) ? n : 0
@@ -13745,18 +13728,18 @@ export default function DailyReportPage() {
                       const showDateActions = deleteActionRecordIdByDate.get(reportDateKey) === String(r?.id || "")
                       const dateActionsRowSpan = reportCountByDate.get(reportDateKey) || 1
                       return (
-                      <tr key={r.id} style={{ background: rowBg, borderTop: reportBlockChanged ? "3px solid #ffffff" : undefined }}>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>{r.report_no}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>{r.report_date || "-"}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1" }}>{r.contractor_name || "-"}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1" }}>
+                      <tr key={r.id} style={{ background: rowBg, borderTop: reportBlockChanged ? `3px solid ${colors.white}` : undefined }}>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{r.report_no}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>{r.report_date || "-"}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}` }}>{r.contractor_name || "-"}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}` }}>
                           {rowFront || "-"}
                         </td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1" }}>{r.project_name || "-"}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhDir}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhInd}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{hhTotal}</td>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center", whiteSpace: "nowrap" }}>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}` }}>{r.project_name || "-"}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhDir}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhInd}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{hhTotal}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>
                           <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                             <Tooltip title="Ver">
                               <span>
@@ -13776,11 +13759,11 @@ export default function DailyReportPage() {
                             rowSpan={dateActionsRowSpan}
                             style={{
                               ...valueCellSx,
-                              border: "1px solid #cbd5e1",
+                              border: `1px solid ${colors.blue13}`,
                               textAlign: "center",
                               whiteSpace: "nowrap",
                               verticalAlign: "middle",
-                              background: "#f8fafc"
+                              background: colors.gray10
                             }}
                           >
                             <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
@@ -13792,7 +13775,7 @@ export default function DailyReportPage() {
                                     disabled={saving || exporting || activeActionRecordId === String(r.id || "")}
                                     onClick={() => {
                                       if (exporting || saving) return
-                                      openEdit(r)
+                                      setEditModeChoiceRecord(r)
                                     }}
                                   >
                                     <Pencil size={16} />
@@ -13834,7 +13817,7 @@ export default function DailyReportPage() {
                     )})}
                     {visibleDailyRecords.length === 0 ? (
                       <tr>
-                        <td style={{ ...valueCellSx, border: "1px solid #cbd5e1", textAlign: "center" }} colSpan={10}>No hay informes diarios guardados para esta semana.</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center" }} colSpan={10}>No hay informes diarios guardados para esta semana.</td>
                       </tr>
                     ) : null}
                   </tbody>
@@ -13842,6 +13825,45 @@ export default function DailyReportPage() {
           </Box>
         </Box>
       </Box>
+
+      <Dialog
+        open={!!editModeChoiceRecord}
+        onClose={() => setEditModeChoiceRecord(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Editar Reporte Diario</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ color: colors.gray4, fontSize: 14 }}>
+            Elige el origen de edición.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button variant="outlined" onClick={() => setEditModeChoiceRecord(null)}>
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const record = editModeChoiceRecord
+              setEditModeChoiceRecord(null)
+              if (record) void openEdit(record, "snapshot")
+            }}
+          >
+            Guardado
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const record = editModeChoiceRecord
+              setEditModeChoiceRecord(null)
+              if (record) void openEdit(record, "field_reports")
+            }}
+          >
+            Reformular
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={formOpen}
@@ -13860,7 +13882,7 @@ export default function DailyReportPage() {
       >
         <DialogTitle sx={{ pt: 2.4, pb: 1.8, pr: 2, overflow: "visible" }}>
           <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1.5 }}>
-            <Typography sx={{ fontSize: 24, fontWeight: 700, color: "#0f172a", whiteSpace: "nowrap" }}>
+            <Typography sx={{ fontSize: 24, fontWeight: 600, color: colors.gray1, whiteSpace: "nowrap" }}>
               {editingId ? "Editar Reporte Diario" : "Nuevo Reporte Diario"}
             </Typography>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1.2, overflowX: "auto", overflowY: "visible", pb: 0.25, pt: 0.6 }}>
@@ -13933,28 +13955,6 @@ export default function DailyReportPage() {
                   ? "Edición"
                   : ((form.work_front === "PISCINAS" ? frontSavedStatus.PISCINAS : frontSavedStatus.CANALETAS) ? "Guardado" : "No guardado")}
               </Button>
-              {editingId ? (
-                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-                  <Button
-                    size="small"
-                    variant={editSourceMode === "snapshot" ? "contained" : "outlined"}
-                    onClick={() => void changeEditSourceMode("snapshot")}
-                    disabled={saving || bootstrapping}
-                    sx={{ minWidth: 88, whiteSpace: "nowrap", textTransform: "none", fontWeight: 700 }}
-                  >
-                    Guardado
-                  </Button>
-                  <Button
-                    size="small"
-                    variant={editSourceMode === "field_reports" ? "contained" : "outlined"}
-                    onClick={() => void changeEditSourceMode("field_reports")}
-                    disabled={saving || bootstrapping}
-                    sx={{ minWidth: 104, whiteSpace: "nowrap", textTransform: "none", fontWeight: 700 }}
-                  >
-                    Reformular
-                  </Button>
-                </Stack>
-              ) : null}
               <Button
                 variant="outlined"
                 disabled
@@ -14348,16 +14348,16 @@ export default function DailyReportPage() {
               </Button>
             ) : null}
           </Box>
-          <Typography sx={{ color: "#475569", mt: 1, mb: 1 }}>
+          <Typography sx={{ color: colors.gray4, mt: 1, mb: 1 }}>
             Ajustes activos: {Object.keys(indirectHoursOverridesDraft).length}
           </Typography>
-          <Box sx={{ border: "1px solid #cbd5e1", borderRadius: 1.5, mb: 1.2, overflow: "hidden", bgcolor: "#fff" }}>
-            <Box sx={{ px: 1.2, py: 0.8, borderBottom: "1px solid #e2e8f0", bgcolor: "#f8fafc" }}>
-              <Typography sx={{ fontSize: 12, fontWeight: 700 }}>Ajustes asignados con horas</Typography>
+          <Box sx={{ border: `1px solid ${colors.blue13}`, borderRadius: 1.5, mb: 1.2, overflow: "hidden", bgcolor: colors.white }}>
+            <Box sx={{ px: 1.2, py: 0.8, borderBottom: `1px solid ${colors.gray9}`, bgcolor: colors.gray10 }}>
+              <Typography sx={{ fontSize: 12, fontWeight: 600 }}>Ajustes asignados con horas</Typography>
             </Box>
             {appliedIndirectWorkers.length === 0 ? (
               <Box sx={{ px: 1.2, py: 1.2 }}>
-                <Typography sx={{ fontSize: 12, color: "#64748b" }}>Sin ajustes asignados.</Typography>
+                <Typography sx={{ fontSize: 12, color: colors.gray4 }}>Sin ajustes asignados.</Typography>
               </Box>
             ) : (
               <Box sx={{ px: 1, py: 1, display: "flex", flexWrap: "wrap", gap: 0.8, maxHeight: 180, overflowY: "auto", justifyContent: "center" }}>
@@ -14365,26 +14365,26 @@ export default function DailyReportPage() {
                   <Box
                     key={`applied-${worker.workerId}`}
                     sx={{
-                      border: "1px solid #dbe3ee",
+                      border: `1px solid ${colors.blue13}`,
                       borderRadius: 999,
                       px: 1,
                       py: 0.45,
                       display: "flex",
                       alignItems: "center",
                       gap: 0.7,
-                      bgcolor: "#f8fafc"
+                      bgcolor: colors.gray10
                     }}
                   >
-                    <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#334155" }}>
+                    <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>
                       {String(worker.workerId || "").split("-")[0] || worker.workerId}
                     </Typography>
-                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 600, color: colors.gray1 }}>
                       {worker.fullName}
                     </Typography>
-                    <Typography sx={{ fontSize: 11, color: "#64748b" }}>
+                    <Typography sx={{ fontSize: 11, color: colors.gray4 }}>
                       {worker.roleOrSpecialty || "-"}
                     </Typography>
-                    <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#0f766e" }}>
+                    <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.blue4 }}>
                       {String(indirectHoursOverridesDraft[worker.workerId] ?? "0")}h
                     </Typography>
                   </Box>
@@ -14399,26 +14399,26 @@ export default function DailyReportPage() {
               gap: 0.8,
               px: 1,
               py: 0.8,
-              border: "1px solid #dbe3ee",
+              border: `1px solid ${colors.blue13}`,
               borderRadius: 1.5,
-              bgcolor: "#f8fafc",
+              bgcolor: colors.gray10,
               mb: 0.8
             }}
           >
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>ID</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>NOMBRE</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>CARGO</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>ESTADO</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>HORAS</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155", textAlign: "center" }}>ACCIÓN</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>ID</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>NOMBRE</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>CARGO</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>ESTADO</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>HORAS</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3, textAlign: "center" }}>ACCIÓN</Typography>
           </Box>
           <Box sx={{ display: "grid", gap: 1 }}>
             {!String(indirectHoursSearch || "").trim() ? (
-              <Typography sx={{ color: "#64748b", fontSize: 14 }}>
+              <Typography sx={{ color: colors.gray4, fontSize: 14 }}>
                 Escribe en el buscador para mostrar coincidencias y agregar horas.
               </Typography>
             ) : filteredIndirectWorkers.length === 0 ? (
-              <Typography sx={{ color: "#64748b", fontSize: 14 }}>
+              <Typography sx={{ color: colors.gray4, fontSize: 14 }}>
                 Sin coincidencias disponibles (o ya asignadas).
               </Typography>
             ) : (
@@ -14432,18 +14432,18 @@ export default function DailyReportPage() {
                       gridTemplateColumns: { xs: "1fr", md: "160px 1fr 1fr 120px 170px auto" },
                       gap: 0.8,
                       alignItems: "center",
-                      border: "1px solid #dbe3ee",
+                      border: `1px solid ${colors.blue13}`,
                       borderRadius: 1.5,
                       p: 1,
-                      bgcolor: currentValue == null ? "#fff" : "#f0f9ff"
+                      bgcolor: currentValue == null ? colors.white : colors.blue15
                     }}
                   >
-                    <Typography sx={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>
+                    <Typography sx={{ fontSize: 11, color: colors.gray4, fontWeight: 600 }}>
                       {String(worker.workerId || "").split("-")[0] || worker.workerId}
                     </Typography>
-                    <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{worker.fullName}</Typography>
-                    <Typography sx={{ fontSize: 12, color: "#64748b" }}>{worker.roleOrSpecialty || "-"}</Typography>
-                    <Typography sx={{ fontSize: 11, color: "#0f766e", fontWeight: 700 }}>{worker.statusLabel}</Typography>
+                    <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{worker.fullName}</Typography>
+                    <Typography sx={{ fontSize: 12, color: colors.gray4 }}>{worker.roleOrSpecialty || "-"}</Typography>
+                    <Typography sx={{ fontSize: 11, color: colors.blue4, fontWeight: 600 }}>{worker.statusLabel}</Typography>
                     <TextField
                       size="small"
                       type="number"
@@ -14519,16 +14519,16 @@ export default function DailyReportPage() {
               fullWidth
             />
           </Box>
-          <Typography sx={{ color: "#475569", mt: 1, mb: 1 }}>
+          <Typography sx={{ color: colors.gray4, mt: 1, mb: 1 }}>
             Asignaciones activas: {Object.keys(indirectHoursFrontOverridesDraft).length}
           </Typography>
-          <Box sx={{ border: "1px solid #cbd5e1", borderRadius: 1.5, mb: 1.2, overflow: "hidden", bgcolor: "#fff" }}>
-            <Box sx={{ px: 1.2, py: 0.8, borderBottom: "1px solid #e2e8f0", bgcolor: "#f8fafc" }}>
-              <Typography sx={{ fontSize: 12, fontWeight: 700 }}>Asignados</Typography>
+          <Box sx={{ border: `1px solid ${colors.blue13}`, borderRadius: 1.5, mb: 1.2, overflow: "hidden", bgcolor: colors.white }}>
+            <Box sx={{ px: 1.2, py: 0.8, borderBottom: `1px solid ${colors.gray9}`, bgcolor: colors.gray10 }}>
+              <Typography sx={{ fontSize: 12, fontWeight: 600 }}>Asignados</Typography>
             </Box>
             {appliedIndirectFrontWorkers.length === 0 ? (
               <Box sx={{ px: 1.2, py: 1.2 }}>
-                <Typography sx={{ fontSize: 12, color: "#64748b" }}>Sin asignaciones.</Typography>
+                <Typography sx={{ fontSize: 12, color: colors.gray4 }}>Sin asignaciones.</Typography>
               </Box>
             ) : (
               <Box sx={{ px: 1, py: 1, display: "grid", gap: 0.8, maxHeight: 260, overflowY: "auto" }}>
@@ -14536,7 +14536,7 @@ export default function DailyReportPage() {
                   <Box
                     key={`front-applied-${worker.workerId}`}
                     sx={{
-                      border: "1px solid #dbe3ee",
+                      border: `1px solid ${colors.blue13}`,
                       borderRadius: 1.5,
                       px: 1,
                       py: 0.7,
@@ -14544,11 +14544,11 @@ export default function DailyReportPage() {
                       gridTemplateColumns: { xs: "1fr", md: "1fr 1fr 220px auto" },
                       gap: 0.8,
                       alignItems: "center",
-                      bgcolor: "#f8fafc"
+                      bgcolor: colors.gray10
                     }}
                   >
-                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{worker.fullName}</Typography>
-                    <Typography sx={{ fontSize: 11, color: "#64748b" }}>{worker.roleOrSpecialty || "-"}</Typography>
+                    <Typography sx={{ fontSize: 12, fontWeight: 600, color: colors.gray1 }}>{worker.fullName}</Typography>
+                    <Typography sx={{ fontSize: 11, color: colors.gray4 }}>{worker.roleOrSpecialty || "-"}</Typography>
                     <FormControl size="small" fullWidth>
                       <InputLabel id={`front-applied-select-${worker.workerId}`}>Frente</InputLabel>
                       <Select
@@ -14583,24 +14583,24 @@ export default function DailyReportPage() {
               </Box>
             )}
           </Box>
-          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "160px 1fr 1fr 200px auto" }, gap: 0.8, px: 1, py: 0.8, border: "1px solid #dbe3ee", borderRadius: 1.5, bgcolor: "#f8fafc", mb: 0.8 }}>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>ID</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>NOMBRE</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>CARGO</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>FRENTE MANUAL</Typography>
-            <Typography sx={{ fontSize: 11, fontWeight: 800, color: "#334155", textAlign: "center" }}>ACCIÓN</Typography>
+          <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "160px 1fr 1fr 200px auto" }, gap: 0.8, px: 1, py: 0.8, border: `1px solid ${colors.blue13}`, borderRadius: 1.5, bgcolor: colors.gray10, mb: 0.8 }}>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>ID</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>NOMBRE</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>CARGO</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3 }}>FRENTE MANUAL</Typography>
+            <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.gray3, textAlign: "center" }}>ACCIÓN</Typography>
           </Box>
           <Box sx={{ display: "grid", gap: 1 }}>
             {!String(indirectFrontSearch || "").trim() ? (
-              <Typography sx={{ color: "#64748b", fontSize: 14 }}>Escribe en el buscador para asignar frente manual por unidad.</Typography>
+              <Typography sx={{ color: colors.gray4, fontSize: 14 }}>Escribe en el buscador para asignar frente manual por unidad.</Typography>
             ) : filteredIndirectFrontWorkers.length === 0 ? (
-              <Typography sx={{ color: "#64748b", fontSize: 14 }}>Sin coincidencias disponibles (o ya asignadas).</Typography>
+              <Typography sx={{ color: colors.gray4, fontSize: 14 }}>Sin coincidencias disponibles (o ya asignadas).</Typography>
             ) : (
               filteredIndirectFrontWorkers.map((worker) => (
-                <Box key={`front-${worker.workerId}`} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "160px 1fr 1fr 200px auto" }, gap: 0.8, alignItems: "center", border: "1px solid #dbe3ee", borderRadius: 1.5, p: 1, bgcolor: "#fff" }}>
-                  <Typography sx={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>{String(worker.workerId || "").split("-")[0] || worker.workerId}</Typography>
-                  <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{worker.fullName}</Typography>
-                  <Typography sx={{ fontSize: 12, color: "#64748b" }}>{worker.roleOrSpecialty || "-"}</Typography>
+                <Box key={`front-${worker.workerId}`} sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "160px 1fr 1fr 200px auto" }, gap: 0.8, alignItems: "center", border: `1px solid ${colors.blue13}`, borderRadius: 1.5, p: 1, bgcolor: colors.white }}>
+                  <Typography sx={{ fontSize: 11, color: colors.gray4, fontWeight: 600 }}>{String(worker.workerId || "").split("-")[0] || worker.workerId}</Typography>
+                  <Typography sx={{ fontSize: 13, fontWeight: 600 }}>{worker.fullName}</Typography>
+                  <Typography sx={{ fontSize: 12, color: colors.gray4 }}>{worker.roleOrSpecialty || "-"}</Typography>
                     <FormControl size="small" fullWidth>
                       <InputLabel id={`front-only-${worker.workerId}`}>Frente</InputLabel>
                       <Select
@@ -14892,7 +14892,7 @@ export default function DailyReportPage() {
         </DialogContent>
         <DialogActions>
           {isViewingHistoryVersion ? (
-            <Typography sx={{ mr: "auto", fontSize: 13, color: "#475569", fontWeight: 700 }}>
+            <Typography sx={{ mr: "auto", fontSize: 13, color: colors.gray4, fontWeight: 600 }}>
               Versión histórica solo lectura
               {historyViewMeta?.createdAt ? ` · ${new Date(historyViewMeta.createdAt).toLocaleString("es-CL")}` : ""}
             </Typography>
@@ -14932,15 +14932,15 @@ export default function DailyReportPage() {
                   void uploadDailyActivityEvidence(activityEvidenceModalLineKey, files)
                 }}
                 sx={{
-                  border: "2px dashed #93c5fd",
+                  border: `2px dashed ${colors.blue14}`,
                   borderRadius: 2,
                   p: 2,
                   textAlign: "center",
-                  bgcolor: "#f8fbff",
+                  bgcolor: colors.gray10,
                   mb: 2
                 }}
               >
-                <Typography sx={{ fontSize: 13, color: "#1e40af", mb: 1 }}>
+                <Typography sx={{ fontSize: 13, color: colors.blue4, mb: 1 }}>
                   Arrastrar y soltar imágenes aquí
                 </Typography>
                 <Button variant="outlined" size="small" component="label" sx={{ textTransform: "none" }}>
@@ -14963,7 +14963,7 @@ export default function DailyReportPage() {
                 ? dailyActivityEvidenceByLineKey[activityEvidenceModalLineKey]
                 : []
               if (files.length === 0) {
-                return <Typography sx={{ fontSize: 13, color: "#64748b" }}>Sin imágenes cargadas.</Typography>
+                return <Typography sx={{ fontSize: 13, color: colors.gray4 }}>Sin imágenes cargadas.</Typography>
               }
               return (
                 <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, gap: 1 }}>
@@ -14971,15 +14971,15 @@ export default function DailyReportPage() {
                     const key = String(f?.key || "")
                     const url = evidenceViewUrls[key] || ""
                     return (
-                      <Box key={`${key}-${idx}`} sx={{ border: "1px solid #dbeafe", borderRadius: 1.5, p: 1, bgcolor: "#fff" }}>
-                        <Box sx={{ width: "100%", height: 110, borderRadius: 1, overflow: "hidden", bgcolor: "#f1f5f9", mb: 0.75, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Box key={`${key}-${idx}`} sx={{ border: `1px solid ${colors.blue15}`, borderRadius: 1.5, p: 1, bgcolor: colors.white }}>
+                        <Box sx={{ width: "100%", height: 110, borderRadius: 1, overflow: "hidden", bgcolor: colors.gray10, mb: 0.75, display: "flex", alignItems: "center", justifyContent: "center" }}>
                           {url ? (
                             <img src={url} alt={String(f?.name || `imagen_${idx + 1}`)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                           ) : (
-                            <Typography sx={{ fontSize: 12, color: "#64748b" }}>Cargando...</Typography>
+                            <Typography sx={{ fontSize: 12, color: colors.gray4 }}>Cargando...</Typography>
                           )}
                         </Box>
-                        <Typography sx={{ fontSize: 12, color: "#334155", mb: 0.5 }} noWrap title={String(f?.name || `imagen_${idx + 1}`)}>
+                        <Typography sx={{ fontSize: 12, color: colors.gray3, mb: 0.5 }} noWrap title={String(f?.name || `imagen_${idx + 1}`)}>
                           {String(f?.name || `imagen_${idx + 1}`)}
                         </Typography>
                         <Box sx={{ display: "flex", justifyContent: "space-between", gap: 0.5 }}>
@@ -15004,7 +15004,7 @@ export default function DailyReportPage() {
       <Dialog open={historyOpen} onClose={() => setHistoryOpen(false)} fullWidth maxWidth="md">
         <DialogTitle>Historial</DialogTitle>
         <DialogContent dividers>
-          <Typography sx={{ fontSize: 13, color: "#475569", mb: 2 }}>
+          <Typography sx={{ fontSize: 13, color: colors.gray4, mb: 2 }}>
             {historyReportLabel || "Reporte diario"}
           </Typography>
           {historyLoading ? (
@@ -15014,11 +15014,11 @@ export default function DailyReportPage() {
           ) : (
             <Stack spacing={2}>
               <Box>
-                <Typography sx={{ fontSize: 14, fontWeight: 800, color: colors.blue1, mb: 1 }}>
+                <Typography sx={{ fontSize: 14, fontWeight: 600, color: colors.blue1, mb: 1 }}>
                   Versiones
                 </Typography>
                 {historyRows.length === 0 ? (
-                  <Typography sx={{ fontSize: 14, color: "#64748b" }}>
+                  <Typography sx={{ fontSize: 14, color: colors.gray4 }}>
                     Sin versiones guardadas para esta fecha.
                   </Typography>
                 ) : (
@@ -15030,7 +15030,7 @@ export default function DailyReportPage() {
                       return (
                         <Paper key={row.id} variant="outlined" sx={{ p: 1.5 }}>
                           <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                            <Typography sx={{ fontWeight: 800, color: colors.blue1 }}>
+                            <Typography sx={{ fontWeight: 600, color: colors.blue1 }}>
                               Versión {row.version_no} - {createdLabel}
                             </Typography>
                             <Stack direction="row" spacing={1}>
@@ -15051,10 +15051,10 @@ export default function DailyReportPage() {
                               </Button>
                             </Stack>
                           </Stack>
-                          <Typography sx={{ fontSize: 12, color: "#64748b", mt: 0.5 }}>
+                          <Typography sx={{ fontSize: 12, color: colors.gray4, mt: 0.5 }}>
                             Frente: {String((next as any)?.work_front || (next as any)?.notes?.work_front || "-")} · Reporte N° {String((next as any)?.report_no || "-")}
                           </Typography>
-                          <Typography sx={{ fontSize: 12, color: "#64748b" }}>
+                          <Typography sx={{ fontSize: 12, color: colors.gray4 }}>
                             Resumen anterior HH: {String((prev as any)?.notes?.summary_total_hh ?? (prev as any)?.hh_day ?? "-")} · Resumen nuevo HH: {String((next as any)?.notes?.summary_total_hh ?? (next as any)?.hh_day ?? "-")}
                           </Typography>
                         </Paper>
@@ -15064,11 +15064,11 @@ export default function DailyReportPage() {
                 )}
               </Box>
               <Box>
-                <Typography sx={{ fontSize: 14, fontWeight: 800, color: "#991b1b", mb: 1 }}>
+                <Typography sx={{ fontSize: 14, fontWeight: 600, color: "#991b1b", mb: 1 }}>
                   Eliminados
                 </Typography>
                 {historyDeletionRows.length === 0 ? (
-                  <Typography sx={{ fontSize: 14, color: "#64748b" }}>
+                  <Typography sx={{ fontSize: 14, color: colors.gray4 }}>
                     Sin eliminaciones registradas para esta fecha.
                   </Typography>
                 ) : (
@@ -15079,7 +15079,7 @@ export default function DailyReportPage() {
                       return (
                         <Paper key={row.id} variant="outlined" sx={{ p: 1.5, borderColor: "#fecaca", bgcolor: "#fff7f7" }}>
                           <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                            <Typography sx={{ fontWeight: 800, color: "#991b1b" }}>
+                            <Typography sx={{ fontWeight: 600, color: "#991b1b" }}>
                               Eliminado - {deletedLabel}
                             </Typography>
                             <Button
@@ -15099,13 +15099,13 @@ export default function DailyReportPage() {
                               Ver respaldo
                             </Button>
                           </Stack>
-                          <Typography sx={{ fontSize: 12, color: "#64748b", mt: 0.5 }}>
+                          <Typography sx={{ fontSize: 12, color: colors.gray4, mt: 0.5 }}>
                             Frente: {String(row.work_front || (snap as any)?.work_front || (snap as any)?.notes?.work_front || "-")} · Reporte N° {String(row.report_no || (snap as any)?.report_no || "-")}
                           </Typography>
-                          <Typography sx={{ fontSize: 12, color: "#64748b" }}>
+                          <Typography sx={{ fontSize: 12, color: colors.gray4 }}>
                             Usuario: {String(row.deleted_by_email || "-")} · Rol: {String(row.deleted_by_role || "-")}
                           </Typography>
-                          <Typography sx={{ fontSize: 12, color: "#64748b" }}>
+                          <Typography sx={{ fontSize: 12, color: colors.gray4 }}>
                             Motivo: {String(row.delete_reason || "-")}
                           </Typography>
                         </Paper>
