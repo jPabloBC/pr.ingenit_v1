@@ -40,7 +40,7 @@ const menuItemGroupsUsers = [
     { text: 'Gestión y Datos', path: '/users/management', icon: <Work />, resourceKey: 'management' },
     { text: 'Programa', path: '/users/program', icon: <EventNote />, resourceKey: 'program' },
     { text: 'Reportabilidad', path: '/users/field-reports', icon: <ViewList />, resourceKey: 'field-reports' },
-    { text: 'Reporte diario', path: '/users/daily-report', icon: <ReceiptLong />, resourceKey: 'daily-report', legacyResourceKey: 'admin-daily-report', visibleRoles: ['admin', 'dev', 'user'] },
+    { text: 'Reporte diario', path: '/users/daily-report', icon: <ReceiptLong />, resourceKey: 'daily-report', legacyResourceKey: 'admin-daily-report', visibleRoles: ['admin', 'dev', 'user', 'viewer'] },
   ],
   [
     { text: 'Administración', path: '/users/admin/permissions', icon: <AdminPanelSettings />, resourceKey: 'admin-permissions', hideRoles: ['dev'] },
@@ -297,7 +297,7 @@ const Aside: React.FC = () => {
           if (visibleRoles && !visibleRoles.includes(role)) return null
           const permissions = serverPermissions ?? (session?.user as any)?.permissions ?? []
           const legacyKey = String((item as any).legacyResourceKey || '')
-          const hasPermission = roleIsPrivileged || (Array.isArray(permissions) && (
+          const hasPermission = roleIsPrivileged || (item.resourceKey === 'daily-report' && role === 'viewer') || (Array.isArray(permissions) && (
             permissions.includes('*') ||
             permissions.includes(item.resourceKey) ||
             (!!legacyKey && permissions.includes(legacyKey))

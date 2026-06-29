@@ -94,6 +94,11 @@ export async function middleware(req: NextRequest) {
   }
 
   const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
+  const role = String(token.role || '').trim().toLowerCase()
+
+  if (resource === 'daily-report' && role === 'viewer') {
+    return NextResponse.next()
+  }
   
   // Check if user has permission: wildcard or explicit resource
   const allowed = perms.includes('*') || perms.includes(resource)

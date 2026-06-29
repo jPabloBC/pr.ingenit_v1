@@ -6368,7 +6368,10 @@ export default function DailyReportPage() {
   const isUserRole = role === "user"
   const isAdminRole = role === "admin"
   const isDevRole = role === "dev"
-  const canAccess = role === "admin" || role === "dev" || role === "user"
+  const isViewerRole = role === "viewer"
+  const canMutateDailyReport = isAdminRole || isDevRole || isUserRole
+  const canExportDailyReport = canMutateDailyReport
+  const canAccess = canMutateDailyReport || isViewerRole
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -11444,6 +11447,7 @@ export default function DailyReportPage() {
   }
 
   const openNew = async () => {
+    if (!canMutateDailyReport) return
     const initialDate = availableReportDatesForCreate[0] || ""
     if (!initialDate) {
       showToast("No hay fechas disponibles desde Reportes de Terreno para crear un reporte diario.", "error")
@@ -11609,6 +11613,7 @@ export default function DailyReportPage() {
   }
 
   const openEdit = async (recordSummary: DailyReportRecord, sourceMode: EditSourceMode = "snapshot") => {
+    if (!canMutateDailyReport) return
     editHydrationLockRef.current = true
     setHistoryViewMeta(null)
     setDetailVisibleTotals(null)
@@ -12886,6 +12891,7 @@ export default function DailyReportPage() {
     templateOverride?: "daily_v1" | "daily_v2",
     exportTarget: "daily" | "combined" = "daily"
   ) => {
+    if (!canExportDailyReport) return
     if (!recordId || exporting) return
     setActiveActionRecordId(recordId)
     setExporting(true)
@@ -13355,6 +13361,7 @@ export default function DailyReportPage() {
   }
 
   const handleDeleteReportsByDate = async (record: DailyReportRecord) => {
+    if (!canMutateDailyReport) return
     if (exporting || saving) return
     const dateKey = String(record?.report_date || "").slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
@@ -13523,49 +13530,51 @@ export default function DailyReportPage() {
               <RefreshCw size={20} />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Nuevo Reporte Diario">
-            <IconButton
-              color="primary"
-              onClick={openNew}
-              sx={{
-                position: "fixed",
-                top: { xs: 64, sm: 70 },
-                right: { xs: 14, sm: 22 },
-                zIndex: 1200,
-                width: 52,
-                height: 52,
-                borderRadius: "50%",
-                bgcolor: colors.blue1,
-                color: colors.white,
-                border: `2px solid ${colors.blue14}`,
-                boxShadow: "0 10px 24px rgba(0, 26, 51, 0.32)",
-                transition: "border-color 160ms ease, box-shadow 160ms ease",
-                "&:hover": {
+          {canMutateDailyReport ? (
+            <Tooltip title="Nuevo Reporte Diario">
+              <IconButton
+                color="primary"
+                onClick={openNew}
+                sx={{
+                  position: "fixed",
+                  top: { xs: 64, sm: 70 },
+                  right: { xs: 14, sm: 22 },
+                  zIndex: 1200,
+                  width: 52,
+                  height: 52,
+                  borderRadius: "50%",
                   bgcolor: colors.blue1,
-                  borderColor: colors.blue15,
-                  boxShadow: "0 10px 28px rgba(125, 211, 252, 0.55)",
-                  "& .plus-icon": {
-                    color: colors.blue14,
-                    transform: "scale(1.18)",
+                  color: colors.white,
+                  border: `2px solid ${colors.blue14}`,
+                  boxShadow: "0 10px 24px rgba(0, 26, 51, 0.32)",
+                  transition: "border-color 160ms ease, box-shadow 160ms ease",
+                  "&:hover": {
+                    bgcolor: colors.blue1,
+                    borderColor: colors.blue15,
+                    boxShadow: "0 10px 28px rgba(125, 211, 252, 0.55)",
+                    "& .plus-icon": {
+                      color: colors.blue14,
+                      transform: "scale(1.18)",
+                    },
                   },
-                },
-                "&.Mui-disabled": {
-                  bgcolor: colors.blue14,
-                  color: colors.blue15,
-                  borderColor: colors.blue15,
-                },
-              }}
-            >
-              <Plus
-                className="plus-icon"
-                size={25}
-                style={{
-                  color: colors.blue14,
-                  transition: "color 160ms ease, transform 160ms ease",
+                  "&.Mui-disabled": {
+                    bgcolor: colors.blue14,
+                    color: colors.blue15,
+                    borderColor: colors.blue15,
+                  },
                 }}
-              />
-            </IconButton>
-          </Tooltip>
+              >
+                <Plus
+                  className="plus-icon"
+                  size={25}
+                  style={{
+                    color: colors.blue14,
+                    transition: "color 160ms ease, transform 160ms ease",
+                  }}
+                />
+              </IconButton>
+            </Tooltip>
+          ) : null}
         </Stack>
         <Box component="main" sx={{ py: { xs: 3.5, sm: 4 }, px: { xs: 1, sm: 1.5, md: 2 } }}>
           <Paper
@@ -13684,7 +13693,7 @@ export default function DailyReportPage() {
                     <col style={{ width: "1%" }} />
                     <col style={{ width: "1%" }} />
                     <col style={{ width: "1%" }} />
-                    <col style={{ width: "1%" }} />
+                    {canMutateDailyReport ? <col style={{ width: "1%" }} /> : null}
                   </colgroup>
                   <thead>
                     <tr>
@@ -13697,7 +13706,9 @@ export default function DailyReportPage() {
                       <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>HH Ind.</th>
                       <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>HH Total</th>
                       <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Ver</th>
-                      <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Acciones</th>
+                      {canMutateDailyReport ? (
+                        <th style={{ ...laborBlueBandSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>Acciones</th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -13725,7 +13736,7 @@ export default function DailyReportPage() {
                         isAdminRole ||
                         isDevRole ||
                         (isUserRole && linkedRecordsForDate.length > 0 && linkedRecordsForDate.every((row) => String(row?.created_by || "") === currentUserId))
-                      const showDateActions = deleteActionRecordIdByDate.get(reportDateKey) === String(r?.id || "")
+                      const showDateActions = canMutateDailyReport && deleteActionRecordIdByDate.get(reportDateKey) === String(r?.id || "")
                       const dateActionsRowSpan = reportCountByDate.get(reportDateKey) || 1
                       return (
                       <tr key={r.id} style={{ background: rowBg, borderTop: reportBlockChanged ? `3px solid ${colors.white}` : undefined }}>
@@ -13817,7 +13828,7 @@ export default function DailyReportPage() {
                     )})}
                     {visibleDailyRecords.length === 0 ? (
                       <tr>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center" }} colSpan={10}>No hay informes diarios guardados para esta semana.</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center" }} colSpan={canMutateDailyReport ? 10 : 9}>No hay informes diarios guardados para esta semana.</td>
                       </tr>
                     ) : null}
                   </tbody>
@@ -14896,6 +14907,8 @@ export default function DailyReportPage() {
               Versión histórica solo lectura
               {historyViewMeta?.createdAt ? ` · ${new Date(historyViewMeta.createdAt).toLocaleString("es-CL")}` : ""}
             </Typography>
+          ) : !canExportDailyReport ? (
+            <Box sx={{ mr: "auto" }} />
           ) : (
             <>
               <Box sx={{ mr: "auto" }} />

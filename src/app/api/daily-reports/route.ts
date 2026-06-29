@@ -689,7 +689,11 @@ const getDailyReportNoFromDate = (date: string) => {
   return DAILY_REPORT_BASE_SEQUENCE_ANCHOR_NO + (target - anchor)
 }
 
-function requireRole(role: string) {
+function requireReadRole(role: string) {
+  return role === 'admin' || role === 'dev' || role === 'user' || role === 'viewer'
+}
+
+function requireWriteRole(role: string) {
   return role === 'admin' || role === 'dev' || role === 'user'
 }
 
@@ -871,7 +875,7 @@ export async function GET(req: NextRequest) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (!requireRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!requireReadRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const supabaseAdmin = getSupabaseAdmin()
     const companyId = String(session.user.companyId)
@@ -1095,7 +1099,7 @@ export async function POST(req: NextRequest) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (!requireRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!requireWriteRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const supabaseAdmin = getSupabaseAdmin()
     const companyId = String(session.user.companyId)
@@ -1224,7 +1228,7 @@ export async function PUT(req: NextRequest) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (!requireRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!requireWriteRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const supabaseAdmin = getSupabaseAdmin()
     const companyId = String(session.user.companyId)
@@ -1353,7 +1357,7 @@ export async function DELETE(req: NextRequest) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const role = String(session?.user?.role || '').toLowerCase()
-    if (!requireRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!requireWriteRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const supabaseAdmin = getSupabaseAdmin()
     const companyId = String(session.user.companyId)

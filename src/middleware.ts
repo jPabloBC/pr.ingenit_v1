@@ -80,9 +80,9 @@ export async function middleware(req: NextRequest) {
   const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
   const role = String(token.role || '').trim().toLowerCase()
 
-  // Temporary direct access: allow user role into daily report screen
+  // Direct access: allow user/viewer roles into daily report screen
   // even when project permissions are not yet assigned.
-  if (resource === 'daily-report' && role === 'user') {
+  if (resource === 'daily-report' && (role === 'user' || role === 'viewer')) {
     return NextResponse.next()
   }
   
