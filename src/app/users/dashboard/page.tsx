@@ -348,6 +348,7 @@ export default function Dashboard() {
   const frontMetric = opsView === 'accum' ? 'accum' : opsView === 'growth' ? 'growth' : 'daily'
   const frontMetricLabel = opsView === 'accum' ? 'HH acumuladas' : opsView === 'growth' ? 'Crecimiento' : 'HH último reporte'
   const frontMetricSuffix = opsView === 'growth' ? '%' : ' HH'
+  const toUpperDisplay = (value: any) => String(value || '').trim().toUpperCase()
   const trendMetricConfig = trendMetric === 'direct'
     ? { key: 'direct', label: 'Directas', color: '#075ecb' }
     : trendMetric === 'indirect'
@@ -363,7 +364,7 @@ export default function Dashboard() {
   const departmentChartTotal = departmentChartRows.reduce((acc, item) => acc + item.total, 0)
   const departmentTitle = departments.length > 0 ? 'Por Departamento' : 'Por Especialidad'
   const departmentChartData = departmentChartRows.map((item) => ({
-    name: item.label,
+    name: toUpperDisplay(item.label),
     total: item.total,
   }))
   const monthlyCards = [

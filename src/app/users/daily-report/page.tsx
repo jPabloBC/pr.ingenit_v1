@@ -2297,8 +2297,15 @@ function DetailPersonnelEquipmentV2({
   const personWorkdayHours = resolvePersonWorkdayHours(form)
   const machineWorkdayHours = resolveMachineWorkdayHours(form)
   const halfDayHours = resolveHalfDayHours(form)
+  const normalizePersonDotationUnit = (value: number) => {
+    const nearestUnit = Math.round(value)
+    if (nearestUnit > 0 && Math.abs(value - nearestUnit) <= 0.015) return nearestUnit
+    return value
+  }
   const personDotationFromHours = (hours: unknown, source?: any) =>
-    resolvePersonDotationFromHours(hours, hasExplicitWorkdayMetadata(source) ? source : form)
+    normalizePersonDotationUnit(
+      resolvePersonDotationFromHours(hours, hasExplicitWorkdayMetadata(source) ? source : form)
+    )
   const centeredInputProps = { style: { textAlign: "center" as const } }
   const personalColumns = [
     "HH TURNO/DÍA",

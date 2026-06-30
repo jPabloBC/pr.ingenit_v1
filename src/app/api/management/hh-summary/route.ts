@@ -55,6 +55,13 @@ const DAILY_REPORT_MANAGEMENT_HH_SELECT = [
   'report_no',
   'work_front',
   'notes',
+  'v2_form_snapshot',
+  'v2_runtime_snapshot',
+  'hh_day',
+  's4_prev_indirect_hh',
+  's4_prev_direct_hh',
+  's4_curr_indirect_hh',
+  's4_curr_direct_hh',
   'created_at',
   'updated_at',
 ].join(', ')
@@ -248,6 +255,7 @@ const getReportSpecialty = (report: any) =>
 
 const normalizeDailyReportFrontForManagement = (value: any) => {
   const front = normalizeLabel(value)
+  if (front.includes('NOC') || front.includes('USO DE RECURSOS') || front.includes('EJECUCION')) return front || 'SIN FRENTE'
   if (front.includes('CANALETAS')) return 'CONTRATO BASE CANALETAS'
   if (front.includes('PISCINAS')) return 'CONTRATO BASE PISCINAS'
   return front || 'SIN FRENTE'
@@ -258,9 +266,37 @@ const getNocFrontLookupKey = (value: any) => {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase()
-  const match = normalized.match(/NOC\s+N[º°]?\s*0*(\d+)/)
-  const num = String(match?.[1] || '').trim()
-  return num ? `NOC:${num.padStart(3, '0')}` : ''
+  const nocNumbers = Array.from(normalized.matchAll(/NOC(?:[^0-9A-Z]*N)?[^0-9A-Z]*([0-9O]{1,5})/g))
+    .map((match) => String(match?.[1] || '').replace(/O/g, '0').replace(/\D/g, ''))
+    .map((num) => Number(num))
+    .filter((num) => Number.isFinite(num) && num > 0)
+    .map((num) => String(num).padStart(3, '0'))
+  const uniqueNumbers = Array.from(new Set(nocNumbers))
+  return uniqueNumbers.length > 0
+    ? `NOC:${uniqueNumbers.join('+')}`
+    : ''
+}
+
+const getDailyReportFrontGroupKey = (value: any) => {
+  const label = normalizeLabel(value)
+  return getNocFrontLookupKey(label) || label || 'SIN FRENTE'
+}
+
+const pickPreferredDailyReportFrontLabel = (current: any, next: any) => {
+  const currentLabel = normalizeLabel(current)
+  const nextLabel = normalizeLabel(next)
+  if (!currentLabel || currentLabel.startsWith('NOC:')) return nextLabel || currentLabel || 'SIN FRENTE'
+  if (!nextLabel) return currentLabel
+
+  const currentIsAbbrev = /\bUDR\b/.test(currentLabel)
+  const nextIsExpanded = nextLabel.includes('USO DE RECURSOS')
+  if (currentIsAbbrev && nextIsExpanded) return nextLabel
+
+  const currentIsExpanded = currentLabel.includes('USO DE RECURSOS')
+  const nextIsAbbrev = /\bUDR\b/.test(nextLabel)
+  if (currentIsExpanded && nextIsAbbrev) return currentLabel
+
+  return nextLabel.length > currentLabel.length ? nextLabel : currentLabel
 }
 
 const getFrontLookupKeys = (front: any) => {
@@ -287,8 +323,14 @@ const normalizeDailyReportDirectSpecialtyForManagement = (row: any) => {
 const pickDailyReportSnapshot = (record: any) => {
   const candidates = [
     parseJsonMaybe(record?.notes),
+    parseJsonMaybe(record?.v2_form_snapshot),
+    parseJsonMaybe(record?.v2_runtime_snapshot),
   ]
-  return candidates.find((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate)) || {}
+  return candidates.reduce((acc, candidate) => (
+    candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+      ? { ...acc, ...candidate }
+      : acc
+  ), {})
 }
 
 const parseDailyReportDynamicFrontColumns = (value: any): Array<{ key: string; label: string }> => {
@@ -331,6 +373,41 @@ const getDailyReportDynamicColumnsForRecord = (record: any, snapshot: any) => {
   return [...columnsByBlock.CANALETAS, ...columnsByBlock.PISCINAS]
 }
 
+const getAllDailyReportDynamicColumns = (snapshot: any) => {
+  const allColumns = parseDailyReportDynamicFrontColumns(snapshot?.v2_dynamic_front_columns)
+  if (allColumns.length > 0) return allColumns
+  const columnsByBlock = parseDailyReportDynamicFrontColumnsByBlock(snapshot?.v2_dynamic_front_columns_by_block)
+  return columnsByBlock ? [...columnsByBlock.CANALETAS, ...columnsByBlock.PISCINAS] : []
+}
+
+const getDailyReportLegacyNocFrontDescriptor = (
+  snapshot: any,
+  allDynamicColumns: Array<{ key: string; label: string }>
+) => {
+  const legacyLabel = normalizeLabel(
+    snapshot?.v2_noc_front_column_label ||
+    snapshot?.noc_front_column_label ||
+    snapshot?.nocFrontColumnLabel ||
+    ''
+  )
+  const legacyKey = getNocFrontLookupKey(legacyLabel)
+  if (legacyKey) return { key: legacyKey, label: legacyLabel }
+
+  const dynamicWithNoc = allDynamicColumns.find((column) => getNocFrontLookupKey(column.label))
+  if (dynamicWithNoc && allDynamicColumns.length === 1) {
+    return {
+      key: getNocFrontLookupKey(dynamicWithNoc.label) || normalizeLabel(dynamicWithNoc.label),
+      label: normalizeLabel(dynamicWithNoc.label),
+    }
+  }
+
+  const fallbackLabel = legacyLabel || normalizeLabel(allDynamicColumns[0]?.label || '')
+  return {
+    key: getNocFrontLookupKey(fallbackLabel) || fallbackLabel,
+    label: fallbackLabel,
+  }
+}
+
 const getDailyReportDirectSnapshotRows = (record: any) => {
   const snapshot = pickDailyReportSnapshot(record) as any
   const rawRows = Array.isArray(snapshot?.v2_detail_direct_rows)
@@ -338,13 +415,8 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
     : (Array.isArray(snapshot?.detail_direct_rows) ? snapshot.detail_direct_rows : [])
   const fallbackWorkdayHours = toNumber(snapshot?.person_workday_hours || snapshot?.workday_hours || 11) || 11
   const baseFront = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
-  const nocFrontKey = getNocFrontLookupKey(
-    snapshot?.v2_noc_front_column_label ||
-    snapshot?.noc_front_column_label ||
-    snapshot?.nocFrontColumnLabel ||
-    ''
-  )
   const dynamicColumns = getDailyReportDynamicColumnsForRecord(record, snapshot)
+  const legacyNocFront = getDailyReportLegacyNocFrontDescriptor(snapshot, getAllDailyReportDynamicColumns(snapshot))
 
   return rawRows
     .flatMap((row: any) => {
@@ -362,6 +434,7 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
           const dotacion = toNumber(dynamicFrontValues[idx])
           return {
             frontKey: getNocFrontLookupKey(column.label) || normalizeLabel(column.label),
+            frontLabel: normalizeLabel(column.label),
             specialty: specialty || 'PERSONAL DIRECTO',
             hh: dotacion > 0 ? dotacion * hhTurnoDia : 0,
           }
@@ -370,12 +443,62 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
       const legacyNocDotacion = dynamicRows.length === 0 ? toNumber(row?.nocFront) : 0
       const legacyNocHh = legacyNocDotacion > 0 ? legacyNocDotacion * hhTurnoDia : 0
       return [
-        { frontKey: baseFront, specialty: specialty || 'PERSONAL DIRECTO', hh: baseHh },
+        { frontKey: baseFront, frontLabel: baseFront, specialty: specialty || 'PERSONAL DIRECTO', hh: baseHh },
         ...dynamicRows,
-        { frontKey: nocFrontKey, specialty: specialty || 'PERSONAL DIRECTO', hh: legacyNocHh },
+        {
+          frontKey: legacyNocFront.key,
+          frontLabel: legacyNocFront.label,
+          specialty: specialty || 'PERSONAL DIRECTO',
+          hh: legacyNocHh
+        },
       ]
     })
     .filter((row: { frontKey: string; specialty: string; hh: number }) => row.frontKey && row.hh > 0)
+}
+
+const getDailyReportIndirectSnapshotRows = (record: any) => {
+  const snapshot = pickDailyReportSnapshot(record) as any
+  const rawRows = Array.isArray(snapshot?.v2_detail_indirect_rows)
+    ? snapshot.v2_detail_indirect_rows
+    : (Array.isArray(snapshot?.detail_indirect_rows) ? snapshot.detail_indirect_rows : [])
+  const fallbackWorkdayHours = toNumber(snapshot?.person_workday_hours || snapshot?.workday_hours || 11) || 11
+  const baseFront = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
+  const dynamicColumns = getDailyReportDynamicColumnsForRecord(record, snapshot)
+  const legacyNocFront = getDailyReportLegacyNocFrontDescriptor(snapshot, getAllDailyReportDynamicColumns(snapshot))
+
+  return rawRows
+    .flatMap((row: any) => {
+      const hhTurnoDia = toNumber(row?.hhTurnoDia || row?.hh_turno_dia || fallbackWorkdayHours) || fallbackWorkdayHours
+      const dotacion = toNumber(row?.dotacionTotalObra ?? row?.dotacion_total_obra)
+      const splitDotacion = toNumber(row?.instalacionFaena ?? row?.front1) + toNumber(row?.frente ?? row?.mainFront ?? row?.front2)
+      const hhTotal = toNumber(row?.hhTotalObra ?? row?.hh_total_obra)
+      const baseHh = hhTotal > 0 ? hhTotal : ((dotacion > 0 ? dotacion : splitDotacion) * hhTurnoDia)
+      const dynamicFrontValues = Array.isArray(row?.dynamicFrontValues)
+        ? row.dynamicFrontValues.map((value: any) => toNumber(value))
+        : []
+      const dynamicRows = dynamicColumns
+        .map((column, idx) => {
+          const dotacion = toNumber(dynamicFrontValues[idx])
+          return {
+            frontKey: getNocFrontLookupKey(column.label) || normalizeLabel(column.label),
+            frontLabel: normalizeLabel(column.label),
+            hh: dotacion > 0 ? dotacion * hhTurnoDia : 0,
+          }
+        })
+        .filter((item) => item.frontKey && item.hh > 0)
+      const legacyNocDotacion = dynamicRows.length === 0 ? toNumber(row?.nocFront) : 0
+      const legacyNocHh = legacyNocDotacion > 0 ? legacyNocDotacion * hhTurnoDia : 0
+      return [
+        { frontKey: baseFront, frontLabel: baseFront, hh: baseHh },
+        ...dynamicRows,
+        {
+          frontKey: legacyNocFront.key,
+          frontLabel: legacyNocFront.label,
+          hh: legacyNocHh
+        },
+      ]
+    })
+    .filter((row: { frontKey: string; hh: number }) => row.frontKey && row.hh > 0)
 }
 
 const getDirectRowSpecialty = (row: any, report: any) => {
@@ -971,12 +1094,115 @@ const getDailyReportDirectHhForFront = (
   }, 0)
 }
 
+const pickDailyReportSummaryHh = (record: any) => {
+  const snapshot = pickDailyReportSnapshot(record) as any
+  const directFromSummary = toNumber(snapshot?.summary_direct_hh)
+  const indirectFromSummary = toNumber(snapshot?.summary_indirect_hh)
+  const directFromS4 = Math.max(0, toNumber(record?.s4_curr_direct_hh) - toNumber(record?.s4_prev_direct_hh))
+  const indirectFromS4 = Math.max(0, toNumber(record?.s4_curr_indirect_hh) - toNumber(record?.s4_prev_indirect_hh))
+  const directHh = directFromSummary > 0 ? directFromSummary : directFromS4
+  const indirectHh = indirectFromSummary > 0 ? indirectFromSummary : indirectFromS4
+  const totalHh = directHh + indirectHh > 0 ? directHh + indirectHh : toNumber(record?.hh_day)
+  return { directHh, indirectHh, totalHh }
+}
+
+const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
+  const latestByDateFrontReport = new Map<string, any>()
+  dailyReports.forEach((record: any, idx: number) => {
+    const snapshot = pickDailyReportSnapshot(record) as any
+    const date = String(record?.report_date || '').slice(0, 10)
+    const front = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
+    if (!date || !front) return
+    const reportNo = Number(record?.report_no || snapshot?.report_no || 0) || idx
+    const key = `${date}__${front}__${reportNo}`
+    const current = latestByDateFrontReport.get(key)
+    const currentStamp = Date.parse(String(current?.updated_at || current?.created_at || '')) || 0
+    const nextStamp = Date.parse(String(record?.updated_at || record?.created_at || '')) || 0
+    if (!current || nextStamp >= currentStamp) latestByDateFrontReport.set(key, record)
+  })
+
+  const byFront = new Map<string, {
+    front: string
+    direct_hh: number
+    indirect_hh: number
+    total_hh: number
+    reports: Set<string>
+  }>()
+  let directHh = 0
+  let indirectHh = 0
+  let totalHh = 0
+
+  const upsertFront = (frontRaw: any, values: { directHh?: number; indirectHh?: number }, reportId: string) => {
+    const frontLabel = normalizeLabel(frontRaw) || 'SIN FRENTE'
+    const frontKey = getDailyReportFrontGroupKey(frontLabel)
+    const current = byFront.get(frontKey) || {
+      front: frontLabel,
+      direct_hh: 0,
+      indirect_hh: 0,
+      total_hh: 0,
+      reports: new Set<string>(),
+    }
+    current.front = pickPreferredDailyReportFrontLabel(current.front, frontLabel)
+    current.direct_hh += Number(values.directHh || 0)
+    current.indirect_hh += Number(values.indirectHh || 0)
+    current.total_hh = current.direct_hh + current.indirect_hh
+    if (reportId) current.reports.add(reportId)
+    byFront.set(frontKey, current)
+  }
+
+  Array.from(latestByDateFrontReport.values()).forEach((record: any) => {
+    const snapshot = pickDailyReportSnapshot(record) as any
+    const reportId = String(record?.id || `${record?.report_date || ''}-${record?.report_no || ''}`)
+    const baseFront = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
+    const summary = pickDailyReportSummaryHh(record)
+    const directRows = getDailyReportDirectSnapshotRows(record)
+    const indirectRows = getDailyReportIndirectSnapshotRows(record)
+    const directRowsTotal = directRows.reduce((acc: number, row: any) => acc + Number(row?.hh || 0), 0)
+    const indirectRowsTotal = indirectRows.reduce((acc: number, row: any) => acc + Number(row?.hh || 0), 0)
+    const effectiveDirect = directRowsTotal > 0 ? directRowsTotal : summary.directHh
+    const effectiveIndirect = indirectRowsTotal > 0 ? indirectRowsTotal : summary.indirectHh
+
+    directHh += effectiveDirect
+    indirectHh += effectiveIndirect
+    totalHh += effectiveDirect + effectiveIndirect
+
+    if (directRowsTotal > 0) {
+      directRows.forEach((row: any) => upsertFront(row.frontLabel || row.frontKey, { directHh: Number(row.hh || 0) }, reportId))
+    } else if (summary.directHh > 0) {
+      upsertFront(baseFront, { directHh: summary.directHh }, reportId)
+    }
+
+    if (indirectRowsTotal > 0) {
+      indirectRows.forEach((row: any) => upsertFront(row.frontLabel || row.frontKey, { indirectHh: Number(row.hh || 0) }, reportId))
+    } else if (summary.indirectHh > 0) {
+      upsertFront(baseFront, { indirectHh: summary.indirectHh }, reportId)
+    }
+  })
+
+  return {
+    direct_hh: directHh,
+    indirect_hh: indirectHh,
+    total_hh: totalHh,
+    report_count: latestByDateFrontReport.size,
+    by_front: Array.from(byFront.values())
+      .map((front) => ({
+        front: front.front,
+        direct_hh: front.direct_hh,
+        indirect_hh: front.indirect_hh,
+        total_hh: front.total_hh,
+        reports: front.reports.size,
+      }))
+      .sort((a, b) => b.total_hh - a.total_hh || a.front.localeCompare(b.front, 'es')),
+  }
+}
+
 const buildSummary = (
   reports: any[],
   dateFrom: string,
   dateTo: string,
   indirectTurnoByDateAndPosition: Map<string, Map<string, GroupSummary>>,
-  dailyReportDirectSnapshots: ReturnType<typeof buildDailyReportDirectSnapshotMaps>
+  dailyReportDirectSnapshots: ReturnType<typeof buildDailyReportDirectSnapshotMaps>,
+  dailyReportWeeklySummary = buildDailyReportWeeklySummary([])
 ) => {
   const matrixDates = listDateKeysBetween(dateFrom, dateTo)
   const matrixWeeks = buildProjectWeeksBetween(dateFrom, dateTo)
@@ -1221,6 +1447,7 @@ const buildSummary = (
     dashboard_by_day: dashboardByDay,
     matrix_rows: matrixRows,
     matrix_totals_by_week: matrixTotalsByWeek,
+    daily_report_weekly_summary: dailyReportWeeklySummary,
     total_hh_directas: directHhByDaySpecialty.reduce((acc, row) => acc + row.hh, 0),
     total_hh_extras_directas: directHhByDaySpecialty.reduce((acc, row) => acc + row.hhExtras, 0),
     directos_declarados: dashboardByDay.reduce((acc, row) => acc + row.peopleRows, 0),
@@ -1271,6 +1498,7 @@ export async function GET(request: NextRequest) {
         dashboard_by_day: [],
         matrix_rows: [],
         matrix_totals_by_week: {},
+        daily_report_weekly_summary: buildDailyReportWeeklySummary([]),
         total_hh_directas: 0,
         total_hh_extras_directas: 0,
         directos_declarados: 0,
@@ -1296,7 +1524,8 @@ export async function GET(request: NextRequest) {
     const enrichedReports = enrichPersonnelRows(visibleReports, buildCollaboratorIndexes(collaborators))
     const dailyReports = await fetchDailyReportsForRange(companyId, dateFrom, dateTo)
     const dailyReportDirectSnapshots = buildDailyReportDirectSnapshotMaps(dailyReports)
-    return NextResponse.json(buildSummary(enrichedReports, dateFrom, dateTo, indirectTurnoByDateAndPosition, dailyReportDirectSnapshots))
+    const dailyReportWeeklySummary = buildDailyReportWeeklySummary(dailyReports)
+    return NextResponse.json(buildSummary(enrichedReports, dateFrom, dateTo, indirectTurnoByDateAndPosition, dailyReportDirectSnapshots, dailyReportWeeklySummary))
   } catch (err: any) {
     console.error('Error GET /api/management/hh-summary', err)
     return NextResponse.json({ error: err?.message || 'Unexpected server error' }, { status: 500 })

@@ -4,6 +4,30 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../lib/auth'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 
+const normalizeText = (value: any) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+const getTodayInChile = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const values = new Map(parts.map((part) => [part.type, part.value]))
+  return `${values.get('year')}-${values.get('month')}-${values.get('day')}`
+}
+
+const isPresentDailyStatus = (row: any) => {
+  const status = normalizeText(row?.status)
+  const reason = normalizeText(row?.reason)
+  return status === 'turno' || status === 'presente' || reason === '11' || reason === 'turno' || reason === 'presente'
+}
+
 export async function GET() {
   try {
     const session = await getServerSession(authOptions) as any
@@ -69,21 +93,44 @@ export async function GET() {
     }
 
     // Obtener asistencia de hoy (filtrada por colaboradores permitidos)
-    const today = new Date().toISOString().split('T')[0]
+    const today = getTodayInChile()
     const collaboratorIds = (collaborators || []).map((c: any) => c.id).filter(Boolean)
+    const activeCollaboratorIds = (collaborators || [])
+      .filter((c: any) => c.is_active === true)
+      .map((c: any) => c.id)
+      .filter(Boolean)
 
     let presentToday = 0
-    if (collaboratorIds.length > 0) {
-      const { data: attendance } = await supabaseAdmin
-        .from('pr_attendance')
-        .select('collaborator_id, status')
-        .eq('date', today)
-        .in('collaborator_id', collaboratorIds)
+    if (activeCollaboratorIds.length > 0) {
+      let dailyStatusQuery = supabaseAdmin
+        .from('pr_collaborator_daily_status')
+        .select('collaborator_id, status, reason')
+        .eq('work_date', today)
+        .in('collaborator_id', activeCollaboratorIds)
 
-      presentToday = attendance?.filter(att => att.status === 'present').length || 0
+      if (companyId) {
+        dailyStatusQuery = dailyStatusQuery.eq('company_id', companyId)
+      }
+
+      const { data: dailyStatusRows, error: dailyStatusError } = await dailyStatusQuery
+
+      if (!dailyStatusError) {
+        presentToday = (dailyStatusRows || []).filter(isPresentDailyStatus).length
+      } else {
+        const { data: attendance } = await supabaseAdmin
+          .from('pr_attendance')
+          .select('collaborator_id, status')
+          .eq('date', today)
+          .in('collaborator_id', activeCollaboratorIds)
+
+        presentToday = attendance?.filter((att: any) => {
+          const status = normalizeText(att?.status)
+          return status === 'present' || status === 'presente' || status === 'turno'
+        }).length || 0
+      }
     }
 
-    const absentToday = activeCollaborators - presentToday
+    const absentToday = Math.max(0, activeCollaborators - presentToday)
 
     // Obtener EPP vencidos
     // Para filtrar por specialty, necesitamos ver EPP asignados a colaboradores filtrados

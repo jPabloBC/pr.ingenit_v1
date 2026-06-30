@@ -62,6 +62,18 @@ import {
   Clear,
 } from '@mui/icons-material';
 import { Trash2 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import UserHeader from '@/components/layout/UserHeader';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
@@ -353,6 +365,19 @@ type HhSummaryPayload = {
   dashboard_by_day?: DayDashboardRow[];
   matrix_rows?: HhMatrixRow[];
   matrix_totals_by_week?: Record<string, number>;
+  daily_report_weekly_summary?: {
+    direct_hh: number;
+    indirect_hh: number;
+    total_hh: number;
+    report_count: number;
+    by_front: Array<{
+      front: string;
+      direct_hh: number;
+      indirect_hh: number;
+      total_hh: number;
+      reports: number;
+    }>;
+  };
   total_hh_directas?: number;
   total_hh_extras_directas?: number;
   directos_declarados?: number;
@@ -500,6 +525,56 @@ const normalizeText = (value: any) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+const getManagementNocFrontGroupKey = (value: any) => {
+  const normalized = normalizeLabel(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  const numbers = Array.from(normalized.matchAll(/NOC(?:[^0-9A-Z]*N)?[^0-9A-Z]*([0-9O]{1,5})/g))
+    .map((match) => String(match?.[1] || '').replace(/O/g, '0').replace(/\D/g, ''))
+    .map((num) => Number(num))
+    .filter((num) => Number.isFinite(num) && num > 0)
+    .map((num) => String(num).padStart(3, '0'));
+  const uniqueNumbers = Array.from(new Set(numbers));
+  return uniqueNumbers.length > 0 ? `NOC:${uniqueNumbers.join('+')}` : (normalizeLabel(value) || 'SIN FRENTE');
+};
+const pickPreferredManagementFrontLabel = (current: any, next: any) => {
+  const currentLabel = normalizeLabel(current);
+  const nextLabel = normalizeLabel(next);
+  if (!currentLabel || currentLabel.startsWith('NOC:')) return nextLabel || currentLabel || 'SIN FRENTE';
+  if (!nextLabel) return currentLabel;
+  const currentIsAbbrev = /\bUDR\b/.test(currentLabel);
+  const nextIsExpanded = nextLabel.includes('USO DE RECURSOS');
+  if (currentIsAbbrev && nextIsExpanded) return nextLabel;
+  const currentIsExpanded = currentLabel.includes('USO DE RECURSOS');
+  const nextIsAbbrev = /\bUDR\b/.test(nextLabel);
+  if (currentIsExpanded && nextIsAbbrev) return currentLabel;
+  return nextLabel.length > currentLabel.length ? nextLabel : currentLabel;
+};
+const formatManagementFrontChartLabel = (value: any) => {
+  const label = normalizeLabel(value) || 'SIN FRENTE';
+  const normalized = label
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  const numbers = Array.from(normalized.matchAll(/NOC(?:[^0-9A-Z]*N)?[^0-9A-Z]*([0-9O]{1,5})/g))
+    .map((match) => String(match?.[1] || '').replace(/O/g, '0').replace(/\D/g, ''))
+    .map((num) => Number(num))
+    .filter((num) => Number.isFinite(num) && num > 0)
+    .map((num) => String(num).padStart(3, '0'));
+  const uniqueNumbers = Array.from(new Set(numbers));
+  if (uniqueNumbers.length > 0) {
+    const prefix = `NOC ${uniqueNumbers.join('/')}`;
+    if (normalized.includes('TRABAJOS ELECTRICOS')) return `${prefix} ELECTRICOS`;
+    if (normalized.includes('CALAMINAS')) return `${prefix} CALAMINAS`;
+    if (normalized.includes('LINEA 450')) return `${prefix} LINEA 450 HDPE`;
+    if (normalized.includes('PISCINA AGUA SALADA')) return `${prefix} PISCINA AGUA`;
+    if (normalized.includes('VERTEDERO')) return `${prefix} VERTEDERO`;
+    return prefix;
+  }
+  if (label.startsWith('CONTRATO BASE ')) return label.replace('CONTRATO BASE ', 'BASE ');
+  return label.length > 24 ? `${label.slice(0, 22)}...` : label;
+};
 const parseDateKeyToLocalDate = (value: string) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -3694,9 +3769,127 @@ export default function ManagementPage() {
     return Array.isArray(hhSummary?.dashboard_by_day) ? hhSummary.dashboard_by_day : [];
   }, [hhSummary]);
 
-  const totalDirectHh = Number(hhSummary?.total_hh_directas || 0);
-  const totalDirectHhExtras = Number(hhSummary?.total_hh_extras_directas || 0);
-  const totalDirectRows = Number(hhSummary?.directos_declarados || 0);
+  const dailyReportWeeklySummary = hhSummary?.daily_report_weekly_summary || null;
+  const hasDailyReportWeeklySummary = Number(dailyReportWeeklySummary?.report_count || 0) > 0;
+  const fallbackDirectHh = Number(hhSummary?.total_hh_directas || 0);
+  const fallbackDirectHhExtras = Number(hhSummary?.total_hh_extras_directas || 0);
+  const fallbackIndirectHh = dashboardByDay.reduce((acc, day) => acc + Number(day.indirectTurnoHhTotal || 0), 0);
+  const fallbackIndirectRows = dashboardByDay.reduce((acc, day) => acc + Number(day.indirectTurnoTotal || 0), 0);
+  const totalDirectHh = hasDailyReportWeeklySummary ? Number(dailyReportWeeklySummary?.direct_hh || 0) : fallbackDirectHh;
+  const totalIndirectHh = hasDailyReportWeeklySummary ? Number(dailyReportWeeklySummary?.indirect_hh || 0) : fallbackIndirectHh;
+  const totalWeeklyHh = hasDailyReportWeeklySummary
+    ? Number(dailyReportWeeklySummary?.total_hh || 0)
+    : (fallbackDirectHh + fallbackDirectHhExtras + fallbackIndirectHh);
+  const weeklyFrontHhRows = useMemo(() => {
+    const byFront = new Map<string, {
+      label: string;
+      hh: number;
+      hhExtras: number;
+      indirectHh: number;
+      dailyReportDirectHh: number;
+      totalHh: number;
+      reports: number;
+    }>();
+    const addFront = (
+      frontLabelRaw: any,
+      values: {
+        hh?: number;
+        hhExtras?: number;
+        indirectHh?: number;
+        dailyReportDirectHh?: number;
+        reports?: number;
+      },
+    ) => {
+      const label = normalizeLabel(frontLabelRaw) || 'SIN FRENTE';
+      const key = getManagementNocFrontGroupKey(label);
+      const current = byFront.get(key) || {
+        label,
+        hh: 0,
+        hhExtras: 0,
+        indirectHh: 0,
+        dailyReportDirectHh: 0,
+        totalHh: 0,
+        reports: 0,
+      };
+      current.label = pickPreferredManagementFrontLabel(current.label, label);
+      current.hh += Number(values.hh || 0);
+      current.hhExtras += Number(values.hhExtras || 0);
+      current.indirectHh += Number(values.indirectHh || 0);
+      current.dailyReportDirectHh += Number(values.dailyReportDirectHh || 0);
+      current.reports = Math.max(current.reports, Number(values.reports || 0));
+      current.totalHh = current.hh + current.hhExtras + current.indirectHh;
+      byFront.set(key, current);
+    };
+
+    if (hasDailyReportWeeklySummary) {
+      (dailyReportWeeklySummary?.by_front || []).forEach((front) => {
+        addFront(front.front, {
+          hh: Number(front.direct_hh || 0),
+          indirectHh: Number(front.indirect_hh || 0),
+          dailyReportDirectHh: Number(front.direct_hh || 0),
+          reports: Number(front.reports || 0),
+        });
+      });
+      return Array.from(byFront.values())
+        .sort((a, b) => b.totalHh - a.totalHh || a.label.localeCompare(b.label, 'es'));
+    }
+    dashboardByDay.forEach((day) => {
+      day.byFront.forEach((front) => {
+        addFront(front.label, {
+          hh: Number(front.hh || 0),
+          hhExtras: Number(front.hhExtras || 0),
+          dailyReportDirectHh: Number(front.dailyReportDirectHh || 0),
+        });
+      });
+    });
+    return Array.from(byFront.values())
+      .sort((a, b) => b.totalHh - a.totalHh || a.label.localeCompare(b.label, 'es'));
+  }, [dashboardByDay, dailyReportWeeklySummary, hasDailyReportWeeklySummary]);
+  const weeklyHhCards = [
+    {
+      label: 'HH directas Rep. Diario',
+      value: formatNumber(totalDirectHh),
+      helper: hasDailyReportWeeklySummary ? 'Fuente principal: reporte diario' : 'Sin reporte diario: usando reportes de terreno',
+    },
+    {
+      label: 'HH indirectas Rep. Diario',
+      value: formatNumber(totalIndirectHh),
+      helper: hasDailyReportWeeklySummary ? `${Number(dailyReportWeeklySummary?.report_count || 0)} reporte(s) diario(s)` : `${fallbackIndirectRows} registros turno`,
+    },
+    {
+      label: 'Total HH Rep. Diario',
+      value: formatNumber(totalWeeklyHh),
+      helper: hasDailyReportWeeklySummary
+        ? `${Number(dailyReportWeeklySummary?.report_count || 0)} reporte(s) diario(s)`
+        : 'Sin reporte diario: respaldo de terreno',
+    },
+  ];
+  const weeklySecondarySeriesLabel = hasDailyReportWeeklySummary ? 'Indirectas' : 'Extras';
+  const weeklyHhSourceLabel = hasDailyReportWeeklySummary
+    ? `Fuente principal: reporte diario (${Number(dailyReportWeeklySummary?.report_count || 0)} reporte(s))`
+    : 'Sin reporte diario: usando respaldo de terreno';
+  const weeklyCompositionChartData = useMemo(() => [
+    { name: 'Directas', value: totalDirectHh, color: colors.blue6 },
+    { name: weeklySecondarySeriesLabel, value: totalIndirectHh, color: colors.gold3 },
+  ].filter((row) => Number(row.value || 0) > 0), [totalDirectHh, totalIndirectHh, weeklySecondarySeriesLabel]);
+  const weeklyFrontChartData = useMemo(() => {
+    return weeklyFrontHhRows
+      .map((front) => {
+        const name = String(front.label || 'SIN FRENTE').trim() || 'SIN FRENTE';
+        const secondary = hasDailyReportWeeklySummary ? Number(front.indirectHh || 0) : Number(front.hhExtras || 0);
+        const directas = Number(front.hh || 0);
+        return {
+          name,
+          shortName: formatManagementFrontChartLabel(name),
+          directas,
+          secondary,
+          total: Number(front.totalHh || directas + secondary),
+          reports: Number(front.reports || 0),
+        };
+      })
+      .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'es'));
+  }, [hasDailyReportWeeklySummary, weeklyFrontHhRows]);
+  const weeklyFrontChartHeight = Math.max(220, Math.min(340, weeklyFrontChartData.length * 34 + 62));
 
   const crewPersonnelRows = useMemo<ManagementCrewPersonnelRow[]>(() => {
     const rows: ManagementCrewPersonnelRow[] = [];
@@ -4810,66 +5003,252 @@ export default function ManagementPage() {
                 </Stack>
               </Paper>
 
-              <Box
+              <Paper
+                variant="outlined"
                 sx={{
                   mb: { xs: 1.25, md: 1.5 },
-                  display: 'grid',
-                  gap: 1,
-                  gridTemplateColumns: {
-                    xs: '1fr',
-                    sm: 'repeat(2, minmax(0, 1fr))',
-                    lg: 'repeat(4, minmax(0, 1fr))',
-                  },
-                  alignItems: 'stretch',
+                  p: { xs: 1.25, md: 1.5 },
+                  borderColor: colors.blue13,
+                  background: colors.white,
                 }}
               >
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
-                      Total HH directas
+                <Stack
+                  direction={{ xs: 'column', sm: 'row' }}
+                  spacing={0.75}
+                  alignItems={{ xs: 'flex-start', sm: 'center' }}
+                  justifyContent="space-between"
+                  sx={{ mb: 1 }}
+                >
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.15 }}>
+                      Resumen semanal Rep. Diario
                     </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
-                      {formatNumber(totalDirectHh)}
+                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 500 }}>
+                      {weeklyHhSourceLabel}
                     </Typography>
-                  </Stack>
-                </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
-                      Directos declarados
-                    </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
-                      {totalDirectRows}
-                    </Typography>
-                  </Stack>
-                </Paper>
-                <Paper variant="outlined" sx={{ p: { xs: 1.25, md: 1.5 }, minWidth: 0, minHeight: 48, borderColor: colors.blue13 }}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }}>
-                      HH extras directas
-                    </Typography>
-                    <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.1, textAlign: 'right' }}>
-                      {formatNumber(totalDirectHhExtras)}
-                    </Typography>
-                  </Stack>
-                </Paper>
-                <Button
-                  variant="contained"
-                  onClick={() => setHhMatrixDialogOpen(true)}
+                  </Box>
+                </Stack>
+
+                <Box
                   sx={{
-                    minHeight: 46,
-                    px: 2,
-                    width: '100%',
-                    fontWeight: 700,
-                    textTransform: 'none',
-                    whiteSpace: 'nowrap',
-                    alignSelf: 'stretch',
+                    display: 'grid',
+                    gap: 1,
+                    gridTemplateColumns: {
+                      xs: '1fr',
+                      lg: 'minmax(280px, 340px) minmax(240px, 0.65fr) minmax(0, 1.35fr)',
+                    },
+                    alignItems: 'stretch',
                   }}
                 >
-                  HH por rango
-                </Button>
-              </Box>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gap: 0.75,
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        sm: 'repeat(2, minmax(0, 1fr))',
+                        lg: '1fr',
+                      },
+                    }}
+                  >
+                    {weeklyHhCards.map((card) => (
+                      <Paper key={card.label} variant="outlined" sx={{ p: 1, minWidth: 0, minHeight: 58, borderColor: colors.blue13 }}>
+                        <Stack spacing={0.2}>
+                          <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }} noWrap title={card.label}>
+                            {card.label}
+                          </Typography>
+                          <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.05 }}>
+                            {card.value}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: colors.gray5, fontWeight: 500 }} noWrap title={card.helper}>
+                            {card.helper}
+                          </Typography>
+                        </Stack>
+                      </Paper>
+                    ))}
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        p: 1,
+                        minWidth: 0,
+                        minHeight: 58,
+                        borderColor: colors.blue13,
+                        background: alpha(colors.blue15, 0.45),
+                      }}
+                    >
+                      <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography variant="caption" sx={{ color: colors.blue1, fontWeight: 700 }} noWrap>
+                            HH por rango
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 500, display: 'block' }} noWrap>
+                            Matriz detallada
+                          </Typography>
+                        </Box>
+                        <Button
+                          variant="contained"
+                          size="small"
+                          onClick={() => setHhMatrixDialogOpen(true)}
+                          sx={{ flex: '0 0 auto', minHeight: 32, px: 1.5, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
+                        >
+                          Abrir
+                        </Button>
+                      </Stack>
+                    </Paper>
+                  </Box>
 
+                  <Paper variant="outlined" sx={{ p: 1, borderColor: colors.blue13, minHeight: 250 }}>
+                    <Stack spacing={0.75} sx={{ height: '100%' }}>
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.15 }}>
+                          Composición
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 500 }}>
+                          Directas vs {weeklySecondarySeriesLabel.toLowerCase()}
+                        </Typography>
+                      </Box>
+                      {weeklyCompositionChartData.length > 0 ? (
+                        <Box sx={{ position: 'relative', height: 158 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={weeklyCompositionChartData}
+                                dataKey="value"
+                                nameKey="name"
+                                innerRadius={46}
+                                outerRadius={64}
+                                paddingAngle={3}
+                                stroke={colors.white}
+                                strokeWidth={3}
+                              >
+                                {weeklyCompositionChartData.map((entry) => (
+                                  <Cell key={entry.name} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <RechartsTooltip
+                                content={({ active, payload }: any) => {
+                                  if (!active || !payload?.length) return null;
+                                  const row = payload[0]?.payload;
+                                  return (
+                                    <Paper variant="outlined" sx={{ p: 1, borderColor: colors.blue13, background: colors.white }}>
+                                      <Typography variant="caption" sx={{ color: colors.blue1, fontWeight: 700 }}>
+                                        {row?.name}
+                                      </Typography>
+                                      <Typography variant="body2" sx={{ color: colors.gray3, fontWeight: 600 }}>
+                                        {formatNumber(Number(row?.value || 0))} HH
+                                      </Typography>
+                                    </Paper>
+                                  );
+                                }}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                          <Stack spacing={0} alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                            <Typography variant="caption" sx={{ color: colors.gray5, fontWeight: 500, lineHeight: 1 }}>
+                              Total
+                            </Typography>
+                            <Typography variant="subtitle1" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.05 }}>
+                              {formatNumber(totalWeeklyHh)}
+                            </Typography>
+                          </Stack>
+                        </Box>
+                      ) : (
+                        <Box sx={{ minHeight: 158, display: 'grid', placeItems: 'center', color: colors.gray5, fontWeight: 500 }}>
+                          Sin datos HH.
+                        </Box>
+                      )}
+                      <Stack spacing={0.45}>
+                        {weeklyCompositionChartData.map((item) => (
+                          <Stack key={item.name} direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                            <Stack direction="row" alignItems="center" spacing={0.6} sx={{ minWidth: 0 }}>
+                              <Box sx={{ width: 9, height: 9, borderRadius: '50%', background: item.color, flex: '0 0 auto' }} />
+                              <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 600 }} noWrap>
+                                {item.name}
+                              </Typography>
+                            </Stack>
+                            <Typography variant="caption" sx={{ color: colors.blue1, fontWeight: 700 }}>
+                              {formatNumber(item.value)}
+                            </Typography>
+                          </Stack>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  </Paper>
+
+                  <Paper variant="outlined" sx={{ p: 1, borderColor: colors.blue13, minHeight: 250 }}>
+                    <Stack spacing={0.75}>
+                      <Box>
+                        <Typography variant="subtitle2" sx={{ color: colors.blue1, fontWeight: 700, lineHeight: 1.15 }}>
+                          HH por frente
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 500 }}>
+                          Distribución semanal desde la fuente activa.
+                        </Typography>
+                      </Box>
+                      {weeklyFrontChartData.length > 0 ? (
+                        <Box sx={{ height: weeklyFrontChartHeight, minHeight: 220 }}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                              data={weeklyFrontChartData}
+                              layout="vertical"
+                              margin={{ top: 4, right: 14, left: 0, bottom: 0 }}
+                              barCategoryGap={10}
+                            >
+                              <CartesianGrid stroke={alpha(colors.blue13, 0.75)} horizontal={false} />
+                              <XAxis
+                                type="number"
+                                tick={{ fill: colors.gray5, fontSize: 10, fontWeight: 500 }}
+                                axisLine={{ stroke: colors.blue13 }}
+                                tickLine={false}
+                                tickFormatter={(value) => formatNumber(Number(value || 0))}
+                              />
+                              <YAxis
+                                type="category"
+                                dataKey="shortName"
+                                width={148}
+                                tick={{ fill: colors.blue1, fontSize: 10, fontWeight: 600 }}
+                                axisLine={false}
+                                tickLine={false}
+                              />
+                              <RechartsTooltip
+                                cursor={{ fill: alpha(colors.blue15, 0.45) }}
+                                content={({ active, payload }: any) => {
+                                  if (!active || !payload?.length) return null;
+                                  const row = payload[0]?.payload;
+                                  return (
+                                    <Paper variant="outlined" sx={{ p: 1, borderColor: colors.blue13, background: colors.white, maxWidth: 280 }}>
+                                      <Typography variant="caption" sx={{ color: colors.blue1, fontWeight: 700, textTransform: 'uppercase' }}>
+                                        {row?.name}
+                                      </Typography>
+                                      <Typography variant="body2" sx={{ color: colors.gray3, fontWeight: 600 }}>
+                                        Total: {formatNumber(Number(row?.total || 0))} HH
+                                      </Typography>
+                                      <Typography variant="caption" sx={{ color: colors.gray4, fontWeight: 500, display: 'block' }}>
+                                        Directas {formatNumber(Number(row?.directas || 0))} · {weeklySecondarySeriesLabel} {formatNumber(Number(row?.secondary || 0))}
+                                      </Typography>
+                                      {hasDailyReportWeeklySummary ? (
+                                        <Typography variant="caption" sx={{ color: colors.gray5, fontWeight: 500, display: 'block' }}>
+                                          {Number(row?.reports || 0)} reporte(s)
+                                        </Typography>
+                                      ) : null}
+                                    </Paper>
+                                  );
+                                }}
+                              />
+                              <Bar dataKey="directas" stackId="hh" fill={colors.blue6} radius={[5, 0, 0, 5]} />
+                              <Bar dataKey="secondary" stackId="hh" fill={colors.gold3} radius={[0, 5, 5, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </Box>
+                      ) : (
+                        <Box sx={{ minHeight: 220, display: 'grid', placeItems: 'center', color: colors.gray5, fontWeight: 500 }}>
+                          Sin frentes para graficar.
+                        </Box>
+                      )}
+                    </Stack>
+                  </Paper>
+                </Box>
+              </Paper>
               <Dialog
                 open={hhMatrixDialogOpen}
                 onClose={() => setHhMatrixDialogOpen(false)}
