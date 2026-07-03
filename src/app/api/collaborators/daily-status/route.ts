@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { todayYmd } from '@/lib/staffing/availableCollaborators'
 
 export const dynamic = 'force-dynamic'
 
@@ -407,10 +408,13 @@ export async function PUT(request: NextRequest) {
     const isDev = role === 'dev'
     const companyId = String(session.user.companyId || '').trim()
     if (!isDev && !companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await request.json()
     const date = normalizeDate(body?.date)
+    const canWriteDailyStatus = role === 'admin' || (role === 'user' && date === todayYmd())
+    if (!canWriteDailyStatus) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
     const incomingEntries = Array.isArray(body?.entries)
       ? body.entries
       : [{ collaborator_id: body?.collaborator_id, status: body?.status, reason: body?.reason }]
