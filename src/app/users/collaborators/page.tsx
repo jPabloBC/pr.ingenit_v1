@@ -40,6 +40,7 @@ import {
   MenuItem,
   Avatar,
   InputAdornment,
+  Popover,
   Tooltip
 } from '@mui/material'
 import {
@@ -54,14 +55,20 @@ import {
   PushPin,
   ViewList,
   ViewModule,
-  EventNote
+  EventNote,
+  CalendarMonth,
+  Visibility,
+  VisibilityOff
 } from '@mui/icons-material'
+import { DateCalendar } from '@mui/x-date-pickers'
+import { PickersDay, PickersDayProps } from '@mui/x-date-pickers/PickersDay'
 import { Trash2 } from 'lucide-react'
 import { colors } from '../../../theme/theme'
 import { getSuggestedPositions, findSimilarPositions, isStandardPosition, validateCustomPosition, addCustomPosition } from '../../../lib/positionStandards'
 import { IndustryType } from '../../../types'
 import CountryPhoneInput from '../../../components/CountryPhoneInput'
 import UserHeader from '../../../components/layout/UserHeader'
+import { AttendanceView } from '../../../components/attendance/AttendanceView'
 import { normalizeText, normalizeUppercaseDisplayText } from '../../../lib/normalize'
 
 interface Collaborator {
@@ -150,9 +157,13 @@ type PinColumnKey =
   | 'is_active'
   | 'actions'
 
+type ImportPrimaryAction = 'attendance_daily' | 'attendance_fix' | 'profile_update' | 'new_collaborators'
+
 export default function CollaboratorsPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
+  const currentRole = String((session?.user as any)?.role || '').trim().toLowerCase()
+  const showAttendanceForUser = currentRole === 'user'
 
   // Función helper para capitalizar texto
     const capitalizeText = (text?: string) => {
@@ -276,16 +287,16 @@ export default function CollaboratorsPage() {
     email: 'Correo electrónico (ej: juan@email.com)',
     phone: 'Teléfono con código de país (ej: +56912345678)',
     address: 'Dirección física (calle, ciudad)',
-    position: 'Cargo o posición dentro de la compañía (ej: Capataz cañería) — depende de `specialty`',
-    specialty: 'Especialidad (nivel superior) — define el dominio de `position` (ej: Cañería, Electricidad)',
+    position: 'Cargo o posición dentro de la compañía (ej: Capataz cañería)',
+    specialty: 'Especialidad o área principal (ej: Cañería, Electricidad)',
     worker_type: 'Tipo de trabajador (Directo, Indirecto, Contratista, etc.)',
     contract: 'Tipo de contrato (ej: Indefinido, Plazo fijo, Por obra)',
     shift_pattern: 'Turno o jornada (ej: A, B, 5x2, 8x6)',
     condition: 'Condición del colaborador (Turno, Descanso, Acreditacion, Oficina Central - Teletrabajo)',
     exception_condition: 'Condición de excepción del colaborador (opcional; puede quedar en blanco)',
     salary: 'Salario en moneda local (sin símbolos)',
-    birth_date: 'Fecha de nacimiento (YYYY-MM-DD)',
-    hire_date: 'Fecha de ingreso/contratación (YYYY-MM-DD)',
+    birth_date: 'Fecha de nacimiento',
+    hire_date: 'Fecha de ingreso o contratación',
     emergency_contact: 'Teléfono o contacto de emergencia',
     upper_clothing_size: 'Talla de ropa superior (S, M, L, XL)',
     lower_clothing_size: 'Talla de ropa inferior',
@@ -299,7 +310,7 @@ export default function CollaboratorsPage() {
     photo_url: 'URL de foto (opcional)',
     signature_url: 'URL de firma (opcional)',
     epp_details: 'Detalles de EPP entregado (texto libre)',
-    is_active: 'Vigencia del colaborador (true/false o Vigente/Finiquitado) — opcional',
+    is_active: 'Vigencia del colaborador (Vigente/Finiquitado) — opcional',
     password_hash: 'Hash de contraseña (normalmente vacío en import)',
     company_id: 'ID de la compañía (opcional, se usará companyId de sesión si falta)'
   }
@@ -344,10 +355,42 @@ export default function CollaboratorsPage() {
   }
   const requiredImportFields = ['first_name','last_name','document','email']
   const suggestedImportFields = ['position','specialty','worker_type','contract','shift_pattern','condition','exception_condition','phone','hire_date','birth_date','salary','address','emergency_contact','nationality','marital_status']
+  const profileUpdateHiddenFields = ['id', 'company_id', 'user_id', 'created_at', 'updated_at', 'last_activity', 'is_online', 'password_hash']
+  const newCollaboratorImportFields = [
+    'document',
+    'first_name',
+    'last_name',
+    'email',
+    'phone',
+    'country',
+    'region',
+    'commune',
+    'address',
+    'position',
+    'specialty',
+    'worker_type',
+    'contract',
+    'shift_pattern',
+    'condition',
+    'exception_condition',
+    'is_active',
+    'hire_date',
+    'birth_date',
+    'gender',
+    'nationality',
+    'marital_status',
+    'salary',
+    'emergency_contact',
+    'shoe_size',
+    'upper_clothing_size',
+    'lower_clothing_size',
+    'epp_details',
+  ]
       // Note: dynamic import of `xlsx` is used inside the file handler to avoid SSR/bundling/type errors
   const [importing, setImporting] = useState<boolean>(false)
   const [importParsing, setImportParsing] = useState<boolean>(false)
   const [importParsingMessage, setImportParsingMessage] = useState<string>('')
+  const [importParsingProgress, setImportParsingProgress] = useState<number>(0)
   const [importStatusMessage, setImportStatusMessage] = useState<string>('')
   const [importProgress, setImportProgress] = useState<number>(0)
   const [importNotice, setImportNotice] = useState<{ severity: 'success' | 'error' | 'info' | 'warning'; message: string } | null>(null)
@@ -355,6 +398,7 @@ export default function CollaboratorsPage() {
     'attendance_overwrite' |
     'attendance_new_only' |
     'attendance_specific_date' |
+    'attendance_specific_dates' |
     'attendance_specific_date_then_new' |
     'attendance_specific_workers' |
     'full_overwrite_all' |
@@ -363,9 +407,123 @@ export default function CollaboratorsPage() {
   const [attendanceOnlyMode, setAttendanceOnlyMode] = useState<boolean>(true)
   const [attendanceWriteMode, setAttendanceWriteMode] = useState<'insert_only' | 'upsert'>('insert_only')
   const [attendanceStartDate, setAttendanceStartDate] = useState<string>('')
+  const [attendanceEndDate, setAttendanceEndDate] = useState<string>('')
+  const [attendanceSelectedDates, setAttendanceSelectedDates] = useState<string[]>([])
   const [attendanceStartColumnIndex, setAttendanceStartColumnIndex] = useState<number>(-1)
   const [attendanceTargetDocuments, setAttendanceTargetDocuments] = useState<string[]>([])
+  const [importPrimaryAction, setImportPrimaryAction] = useState<ImportPrimaryAction>('attendance_daily')
+  const [showImportAdvancedOptions, setShowImportAdvancedOptions] = useState(false)
+  const [showImportMappingEditor, setShowImportMappingEditor] = useState(false)
+  const [importConfigurationCollapsed, setImportConfigurationCollapsed] = useState(false)
+  const [showImportPreviewTables, setShowImportPreviewTables] = useState(false)
+  const [showImportAttendancePreview, setShowImportAttendancePreview] = useState(false)
+  const [importHeaderApplying, setImportHeaderApplying] = useState(false)
+  const [importSheetSelectOpen, setImportSheetSelectOpen] = useState(false)
+  const [attendanceCorrectionMode, setAttendanceCorrectionMode] = useState<'single' | 'range' | 'multi' | null>(null)
+  const [attendanceCalendarAnchorEl, setAttendanceCalendarAnchorEl] = useState<HTMLElement | null>(null)
+  const [attendanceCalendarMode, setAttendanceCalendarMode] = useState<'single' | 'range' | 'multi'>('single')
+  const [pendingImportPrimaryAction, setPendingImportPrimaryAction] = useState<ImportPrimaryAction | null>(null)
+  const [attendanceDailyImportScope, setAttendanceDailyImportScope] = useState<'next' | 'all'>('next')
+  const [importAttendanceBounds, setImportAttendanceBounds] = useState<{ min: string | null; max: string | null; loading: boolean }>({
+    min: null,
+    max: null,
+    loading: false,
+  })
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const waitForUiPaint = () => new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
+  })
+  const sheetToAbsoluteRows = (sheet: any, XLSX: any): string[][] => {
+    let absoluteRange: any = 0
+    const ref = String(sheet?.['!ref'] || '')
+    if (ref) {
+      try {
+        const decoded = XLSX.utils.decode_range(ref)
+        absoluteRange = { s: { r: 0, c: 0 }, e: decoded.e }
+      } catch {
+        absoluteRange = 0
+      }
+    }
+    const aoa = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      blankrows: true,
+      defval: '',
+      range: absoluteRange,
+    }) as any[]
+    return aoa.map((r: any[]) => (Array.isArray(r) ? r : []).map((c: any) => c === undefined || c === null ? '' : String(c)))
+  }
+  const selectImportPrimaryAction = (action: 'attendance_daily' | 'attendance_fix' | 'profile_update' | 'new_collaborators') => {
+    setImportPrimaryAction(action)
+    setImportConfigurationCollapsed(false)
+    if (action === 'attendance_daily') {
+      setImportOperation('attendance_new_only')
+      setAttendanceWriteMode('insert_only')
+      setAttendanceDailyImportScope('next')
+      setShowImportAdvancedOptions(false)
+      return
+    }
+    if (action === 'attendance_fix') {
+      setImportOperation('attendance_specific_date')
+      setAttendanceWriteMode('upsert')
+      setAttendanceCorrectionMode(null)
+      setShowImportAdvancedOptions(true)
+      return
+    }
+    if (action === 'profile_update') {
+      setImportOperation('profile_specific_columns')
+      setShowImportAdvancedOptions(true)
+      setShowImportMappingEditor(true)
+      return
+    }
+    setImportOperation('full_overwrite_all')
+    setAttendanceWriteMode('upsert')
+    setShowImportAdvancedOptions(true)
+    setShowImportMappingEditor(true)
+  }
+  const handleImportSheetChange = async (nextSheet: string) => {
+    setImportSheetSelectOpen(false)
+    setSelectedImportSheet(nextSheet)
+    if (!importWorkbook || !nextSheet) return
+    try {
+      setImportParsing(true)
+      setImportParsingMessage(`Cambiando a hoja "${nextSheet}"...`)
+      setImportParsingProgress(15)
+      await waitForUiPaint()
+      setImportParsingMessage(`Leyendo datos de "${nextSheet}"...`)
+      setImportParsingProgress(35)
+      const mod = await import('xlsx')
+      const XLSX = (mod && (mod.default || mod)) as any
+      const sheet = importWorkbook.Sheets[nextSheet]
+      if (!sheet) return
+      const rawRows = sheetToAbsoluteRows(sheet, XLSX)
+      setImportRawRows(rawRows)
+      setImportParsingMessage(`Detectando cabecera y columnas en "${nextSheet}"...`)
+      setImportParsingProgress(60)
+      await waitForUiPaint()
+      const parsed = buildRowsFromStartCell(rawRows, 0, 0)
+      const rows = parsed.rows
+      if (!rows || rows.length === 0) return
+      setImportParsingMessage(`Preparando vista previa de "${nextSheet}"...`)
+      setImportParsingProgress(85)
+      await waitForUiPaint()
+      const headers = rows[0].map(h => formatExcelSerialAsDateHeader(h))
+      const dataRows = rows.slice(1).filter(r => r.some(cell => cell && String(cell).trim() !== ''))
+      setImportHeaders(headers)
+      setImportRows(dataRows)
+      setImportHeaderStartCell(parsed.headerCell)
+      importHeaderStartCellDraftRef.current = parsed.headerCell
+      setMapping(autoMatchHeader(headers))
+      setImportParsingProgress(100)
+      await waitForUiPaint()
+    } catch (err) {
+      console.error('Error reading selected sheet', err)
+      alert('No se pudo leer la hoja seleccionada')
+    } finally {
+      setImportParsing(false)
+      setImportParsingMessage('')
+      setImportParsingProgress(0)
+    }
+  }
   const resetImportState = () => {
     setImportDialogOpen(false)
     setImportHeaders([])
@@ -381,10 +539,27 @@ export default function CollaboratorsPage() {
     setAttendanceOnlyMode(true)
     setAttendanceWriteMode('insert_only')
     setAttendanceStartDate('')
+    setAttendanceEndDate('')
+    setAttendanceSelectedDates([])
     setAttendanceStartColumnIndex(-1)
     setAttendanceTargetDocuments([])
+    setImportPrimaryAction('attendance_daily')
+    setShowImportAdvancedOptions(false)
+    setShowImportMappingEditor(false)
+    setImportConfigurationCollapsed(false)
+    setShowImportPreviewTables(false)
+    setShowImportAttendancePreview(false)
+    setImportHeaderApplying(false)
+    setImportSheetSelectOpen(false)
+    setAttendanceCorrectionMode(null)
+    setAttendanceCalendarAnchorEl(null)
+    setAttendanceCalendarMode('single')
+    setPendingImportPrimaryAction(null)
+    setAttendanceDailyImportScope('next')
+    setImportAttendanceBounds({ min: null, max: null, loading: false })
     setImportParsing(false)
     setImportParsingMessage('')
+    setImportParsingProgress(0)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
     const [addressCountry, setAddressCountry] = useState<string>('')
@@ -1444,6 +1619,17 @@ export default function CollaboratorsPage() {
     setImportInstructionsOpen(true)
   }
 
+  const chooseImportActionAndFile = (action: ImportPrimaryAction) => {
+    if (showAttendanceForUser && action !== 'attendance_daily' && action !== 'new_collaborators') return
+    setPendingImportPrimaryAction(action)
+    selectImportPrimaryAction(action)
+    setImportInstructionsOpen(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+      fileInputRef.current.click()
+    }
+  }
+
   const parseCSV = (text: string) => {
     const rows: string[][] = []
     let cur = ''
@@ -1557,12 +1743,12 @@ export default function CollaboratorsPage() {
     const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
     if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
 
-    // Supports headers like 01-Apr, 1-Apr-2026, 01-abr, 01-abril-2026
+    // Supports headers like 01-Apr, 1-Apr-2026, 01-abr, 01-abril-2026, 07-ene
     const monthMap: Record<string, number> = {
-      jan: 1, enero: 1,
+      jan: 1, ene: 1, enero: 1,
       feb: 2, febrero: 2,
       mar: 3, marzo: 3,
-      apr: 4, abril: 4,
+      apr: 4, abr: 4, abril: 4,
       may: 5, mayo: 5,
       jun: 6, junio: 6,
       jul: 7, julio: 7,
@@ -1577,6 +1763,7 @@ export default function CollaboratorsPage() {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .replace(/\./g, '')
+      .replace(/[‐‑‒–—]/g, '-')
       .replace(/_/g, '-')
       .replace(/\s+/g, '-')
     const dayMonth = monthHeader.match(/^(\d{1,2})[-\/]([a-z]+)(?:[-\/](\d{2,4}))?$/)
@@ -1599,6 +1786,19 @@ export default function CollaboratorsPage() {
     const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
     if (!m) return iso
     return `${m[3]}/${m[2]}/${m[1]}`
+  }
+  const parseIsoDateToLocalDate = (isoDate: string): Date | null => {
+    const m = String(isoDate || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return null
+    const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+    return Number.isNaN(dt.getTime()) ? null : dt
+  }
+  const localDateToIsoDate = (date: Date | null): string => {
+    if (!date || Number.isNaN(date.getTime())) return ''
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
   }
   const addDaysToIsoDate = (isoDate: string, offsetDays: number): string | null => {
     const m = String(isoDate || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
@@ -1766,36 +1966,25 @@ export default function CollaboratorsPage() {
       const XLSX = (mod && (mod.default || mod)) as any
       const sheet = wb.Sheets[sheetName]
       if (!sheet) return { rows: [] as string[][], headerCell: 'A1', rawRows: [] as string[][] }
-      const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: true, defval: '' }) as any[]
-      const rawRows = aoa.map((r: any[]) => (Array.isArray(r) ? r : []).map((c: any) => c === undefined || c === null ? '' : String(c)))
-      let startRow = 0
-      let startCol = 0
-      let found = false
-      for (let rIdx = 0; rIdx < rawRows.length; rIdx += 1) {
-        const firstValueIdx = (rawRows[rIdx] || []).findIndex((c: string) => String(c || '').trim() !== '')
-        if (firstValueIdx >= 0) {
-          startRow = rIdx
-          startCol = firstValueIdx
-          found = true
-          break
-        }
-      }
-      if (!found) return { rows: [] as string[][], headerCell: 'A1', rawRows }
-      const parsed = buildRowsFromStartCell(rawRows, startRow, startCol)
+      const rawRows = sheetToAbsoluteRows(sheet, XLSX)
+      const parsed = buildRowsFromStartCell(rawRows, 0, 0)
       return { rows: parsed.rows, headerCell: parsed.headerCell, rawRows }
     }
 
     setImportParsing(true)
     setImportParsingMessage('Leyendo archivo...')
+    setImportParsingProgress(12)
 
     let rows: string[][] = []
     try {
       if (/\.(xlsx|xls)$/i.test(f.name)) {
         setImportParsingMessage('Procesando hojas de Excel...')
+        setImportParsingProgress(32)
         const mod = await import('xlsx')
         const XLSX = (mod && (mod.default || mod)) as any
         const ab = await f.arrayBuffer()
         const wb = XLSX.read(ab, { type: 'array' })
+        setImportParsingProgress(58)
         const sheetNames: string[] = Array.isArray(wb.SheetNames) ? wb.SheetNames : []
         setImportWorkbook(wb)
         setImportSheetNames(sheetNames)
@@ -1803,25 +1992,31 @@ export default function CollaboratorsPage() {
         setSelectedImportSheet(firstSheet)
         if (!firstSheet) return alert('El Excel no contiene hojas')
         const parsedSheet = await parseExcelSheet(wb, firstSheet)
+        setImportParsingProgress(82)
         setImportRawRows(parsedSheet.rawRows)
         rows = parsedSheet.rows
         applyRowsToImport(rows, firstSheet, parsedSheet.headerCell)
       } else {
         setImportParsingMessage('Procesando archivo CSV...')
+        setImportParsingProgress(38)
         setImportWorkbook(null)
         setImportSheetNames([])
         setSelectedImportSheet('')
         const text = await f.text()
+        setImportParsingProgress(68)
         rows = parseCSV(text)
         setImportRawRows(rows)
         applyRowsToImport(rows, undefined, 'A1')
       }
+      setImportParsingProgress(100)
+      await waitForUiPaint()
     } catch (err) {
       console.error('Error reading import file', err)
       return alert('Error leyendo archivo de importación')
     } finally {
       setImportParsing(false)
       setImportParsingMessage('')
+      setImportParsingProgress(0)
     }
   }
 
@@ -1865,18 +2060,38 @@ export default function CollaboratorsPage() {
   // Computed sets for mapping UI
   const multiMapAllowedFields = new Set(['first_name', 'last_name'])
   const attendanceDateHeaders = (importHeaders || []).filter((h) => Boolean(parseHeaderDateToISO(h)))
-  const mappedFieldsSet = new Set<string>(Object.values(mapping || {}).filter(v => v && v !== 'ignore'))
+  const profileDataHeaderEntries = (importHeaders || [])
+    .map((hdr, idx) => ({ hdr, idx }))
+    .filter(({ hdr }) => !parseHeaderDateToISO(hdr))
+  const mappedImportFields = Object.values(mapping || {}).filter(v => v && v !== 'ignore')
+  const mappedFieldsSet = new Set<string>(mappedImportFields)
+  const profileNonUpdateFields = new Set(['document', ...profileUpdateHiddenFields])
+  const profileDocumentMapped = mappedFieldsSet.has('document')
+  const profileUpdateMappedFields = Array.from(new Set(mappedImportFields.filter((field) => !profileNonUpdateFields.has(field))))
+  const selectableCollaboratorColumns = importPrimaryAction === 'new_collaborators'
+    ? newCollaboratorImportFields.filter((column) => collaboratorColumns.includes(column))
+    : importOperation === 'profile_specific_columns'
+      ? collaboratorColumns.filter((column) => !profileUpdateHiddenFields.includes(column))
+      : collaboratorColumns
   const unmappedCollaboratorColumns = collaboratorColumns.filter(c => !mappedFieldsSet.has(c))
-  const excelIgnoredHeaders = (importHeaders || []).filter((h, idx) => !(mapping?.[headerMapKey(h, idx)] && mapping[headerMapKey(h, idx)] !== 'ignore'))
+  const excelIgnoredHeaders = (importHeaders || []).filter((h, idx) => {
+    if ((importOperation === 'profile_specific_columns' || importPrimaryAction === 'new_collaborators') && parseHeaderDateToISO(h)) return false
+    return !(mapping?.[headerMapKey(h, idx)] && mapping[headerMapKey(h, idx)] !== 'ignore')
+  })
   const missingRequiredFieldsFull = requiredImportFields.filter(req => !Object.values(mapping || {}).includes(req))
   const missingRequiredFieldsAttendance = ['document'].filter(req => !Object.values(mapping || {}).includes(req))
   const isAttendanceOperation =
     importOperation === 'attendance_overwrite' ||
     importOperation === 'attendance_new_only' ||
     importOperation === 'attendance_specific_date' ||
+    importOperation === 'attendance_specific_dates' ||
     importOperation === 'attendance_specific_workers' ||
     importOperation === 'attendance_specific_date_then_new'
-  const missingRequiredFields = isAttendanceOperation ? missingRequiredFieldsAttendance : missingRequiredFieldsFull
+  const missingRequiredFields = isAttendanceOperation
+    ? missingRequiredFieldsAttendance
+    : importOperation === 'profile_specific_columns'
+      ? []
+      : missingRequiredFieldsFull
   const mappedHeadersCount = (importHeaders || []).filter((h, idx) => !!(mapping?.[headerMapKey(h, idx)] && mapping[headerMapKey(h, idx)] !== 'ignore')).length
   const mappingCounts = Object.values(mapping || {}).reduce((acc: Record<string, number>, field) => {
     if (!field || field === 'ignore') return acc
@@ -1908,16 +2123,20 @@ export default function CollaboratorsPage() {
     missingRequiredFieldsAttendance.length === 0 &&
     (attendanceStartColumnIndex < 0 || hasParseableDatesFromStart || Boolean(attendanceStartDate)) &&
     hasDocumentColumnBeforeAttendanceStart
-  const hasProfileIdentifierMapped = useMemo(() => {
-    const mapped = new Set<string>(Object.values(mapping || {}).filter(Boolean))
-    return mapped.has('document') || mapped.has('email')
-  }, [mapping])
-  const canImportProfileSpecificColumns = hasProfileIdentifierMapped && mappedHeadersCount > 0 && duplicateMappedFields.length === 0
+  const canImportProfileSpecificColumns = profileDocumentMapped && profileUpdateMappedFields.length > 0 && duplicateMappedFields.length === 0
   const canExecuteImportByMode =
-    importOperation === 'attendance_specific_date'
+    importPrimaryAction === 'new_collaborators'
+      ? (missingRequiredFieldsFull.length === 0 && duplicateMappedFields.length === 0)
+      : importPrimaryAction === 'attendance_fix' && !attendanceCorrectionMode
+      ? false
+      : importOperation === 'attendance_specific_date'
       ? canImportAttendanceOnly && Boolean(attendanceStartDate)
+      : importOperation === 'attendance_specific_dates'
+        ? canImportAttendanceOnly && attendanceSelectedDates.length > 0
       : importOperation === 'attendance_specific_date_then_new'
         ? canImportAttendanceOnly && Boolean(attendanceStartDate)
+      : importOperation === 'attendance_overwrite'
+        ? canImportAttendanceOnly && Boolean(attendanceStartDate) && Boolean(attendanceEndDate)
       : importOperation === 'attendance_specific_workers'
         ? canImportAttendanceOnly && attendanceTargetDocuments.length > 0
         : importOperation === 'full_overwrite_all'
@@ -1933,6 +2152,9 @@ export default function CollaboratorsPage() {
     }
     return Array.from(set).sort()
   }, [attendanceDateHeaders])
+  const attendanceDateIsoSet = useMemo(() => new Set(attendanceDateIsoOptions), [attendanceDateIsoOptions])
+  const firstAttendanceCalendarDate = attendanceDateIsoOptions.length ? parseIsoDateToLocalDate(attendanceDateIsoOptions[0]) : null
+  const lastAttendanceCalendarDate = attendanceDateIsoOptions.length ? parseIsoDateToLocalDate(attendanceDateIsoOptions[attendanceDateIsoOptions.length - 1]) : null
   const attendanceStartColumnOptions = useMemo(() => {
     return (importHeaders || []).map((header, idx) => ({
       idx,
@@ -2003,6 +2225,308 @@ export default function CollaboratorsPage() {
 
     return { dates: orderedDates, rows }
   }, [attendanceStartColumnIndex, attendanceStartDate, importHeaders, importRows, mapping])
+  const detectedImportDocuments = useMemo(() => {
+    const indexes = (importHeaders || [])
+      .map((h, idx) => ({ h, idx }))
+      .filter(({ h, idx }) => (mapping?.[headerMapKey(h, idx)] || '') === 'document')
+      .map(({ idx }) => idx)
+    if (indexes.length === 0) return [] as string[]
+    const set = new Set<string>()
+    for (const row of importRows || []) {
+      for (const idx of indexes) {
+        const doc = normalizeDocument(row[idx] !== undefined ? String(row[idx]) : '')
+        if (doc) set.add(doc)
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base', numeric: true }))
+  }, [importHeaders, importRows, mapping])
+  const detectedImportDocumentCount = detectedImportDocuments.length
+  const newCollaboratorImportPreview = useMemo(() => {
+    const existingDocuments = new Set(
+      (collaborators || [])
+        .map((collaborator) => normalizeDocument(collaborator.document || ''))
+        .filter(Boolean)
+    )
+    let existing = 0
+    let created = 0
+    for (const document of detectedImportDocuments) {
+      if (existingDocuments.has(document)) existing++
+      else created++
+    }
+    return {
+      total: detectedImportDocuments.length,
+      created,
+      existing,
+      canPreview: detectedImportDocuments.length > 0,
+    }
+  }, [collaborators, detectedImportDocuments])
+  const detectedHeaderSuggestion = useMemo(() => {
+    if (!Array.isArray(importRawRows) || importRawRows.length === 0) return null
+
+    let best: { cell: string; rowIdx: number; colIdx: number; firstHeader: string; score: number } | null = null
+    const maxRows = Math.min(importRawRows.length, 40)
+    const getHeaderCellScore = (cell: unknown) => {
+      const normalized = normalizeHeaderKey(String(cell || ''))
+      if (!normalized) return 0
+      if (parseHeaderDateToISO(cell)) return 3
+      if (normalized.includes('rut') || normalized.includes('document') || normalized.includes('codigo') || normalized === 'cod') return 5
+      if (normalized.includes('nombre')) return 4
+      if (normalized.includes('paterno') || normalized.includes('materno') || normalized.includes('apellido')) return 4
+      if (normalized.includes('cargo') || normalized.includes('especialidad') || normalized.includes('contrato')) return 2
+      if (normalized.includes('proyecto') || normalized.includes('cliente') || normalized.includes('obra') || normalized === 'cat') return 2
+      return 0
+    }
+
+    for (let rowIdx = 0; rowIdx < maxRows; rowIdx += 1) {
+      const row = importRawRows[rowIdx] || []
+      const evidenceCells = row
+        .map((cell, colIdx) => ({ cell: String(cell || '').trim(), colIdx, score: getHeaderCellScore(cell) }))
+        .filter((item) => item.cell && item.score > 0)
+      if (evidenceCells.length < 2) continue
+
+      const firstHeaderColIdx = evidenceCells[0].colIdx
+      const cells = row.slice(firstHeaderColIdx).map((cell) => String(cell || '').trim()).filter(Boolean)
+      if (cells.length < 2) continue
+
+      const score = evidenceCells.reduce((acc, item) => acc + item.score, 0)
+
+      if (!best || score > best.score) {
+        best = {
+          cell: `${columnNumberToLetter(firstHeaderColIdx + 1)}${rowIdx + 1}`,
+          rowIdx,
+          colIdx: firstHeaderColIdx,
+          firstHeader: cells[0],
+          score,
+        }
+      }
+    }
+
+    return best && best.score > 0 ? best : null
+  }, [importRawRows])
+  const needsImportMappingReview =
+    missingRequiredFields.length > 0 ||
+    (isAttendanceOperation && attendanceDateHeaders.length === 0 && attendanceStartColumnIndex < 0) ||
+    (isAttendanceOperation && !hasDocumentColumnBeforeAttendanceStart) ||
+    duplicateMappedFields.length > 0
+  const shouldShowImportOriginPanel =
+    !importConfigurationCollapsed && (
+      showImportAdvancedOptions ||
+      needsImportMappingReview ||
+      (importPrimaryAction === 'attendance_daily' && importSheetNames.length > 1)
+    )
+  const shouldShowFullImportMapper =
+    !importConfigurationCollapsed && importPrimaryAction !== 'attendance_daily' && (showImportMappingEditor || needsImportMappingReview)
+  const shouldShowAttendanceImportPreview =
+    showImportAttendancePreview || (importPrimaryAction === 'attendance_daily' && !needsImportMappingReview)
+  const importDialogTitle = {
+    attendance_daily: 'Importar asistencia diaria',
+    attendance_fix: 'Corregir asistencia',
+    profile_update: 'Actualizar datos',
+    new_collaborators: 'Importar nuevos colaboradores',
+  }[importPrimaryAction]
+  const allImportActionOptions: Array<{ key: ImportPrimaryAction; title: string; detail: string }> = [
+    {
+      key: 'attendance_daily',
+      title: 'Importar asistencia diaria',
+      detail: 'Carga la fecha actual o pendiente.',
+    },
+    {
+      key: 'attendance_fix',
+      title: 'Corregir asistencia',
+      detail: 'Actualiza una fecha, varias o un rango.',
+    },
+    {
+      key: 'profile_update',
+      title: 'Actualizar datos',
+      detail: 'Modifica columnas de colaboradores existentes.',
+    },
+    {
+      key: 'new_collaborators',
+      title: 'Nuevos colaboradores',
+      detail: 'Importa trabajadores no existentes.',
+    },
+  ]
+  const importActionOptions = allImportActionOptions.filter((option) =>
+    !showAttendanceForUser || option.key === 'attendance_daily' || option.key === 'new_collaborators'
+  )
+  const importConfigurationVisible = !importConfigurationCollapsed && (showImportAdvancedOptions || showImportMappingEditor || shouldShowImportOriginPanel || shouldShowFullImportMapper)
+  const canToggleImportConfiguration = importDialogOpen && !importParsing && !importing
+  const toggleImportConfiguration = () => {
+    if (importConfigurationVisible) {
+      setImportConfigurationCollapsed(true)
+      return
+    }
+    setImportConfigurationCollapsed(false)
+    setShowImportAdvancedOptions(true)
+    setShowImportMappingEditor(importPrimaryAction !== 'attendance_daily')
+  }
+  const importValidationMessages = [
+    missingRequiredFields.length > 0
+      ? `Faltan campos requeridos mapeados: ${missingRequiredFields.map(getColumnLabel).join(', ')}.`
+      : '',
+    importOperation === 'profile_specific_columns' && !profileDocumentMapped
+      ? 'Debes mapear Documento para identificar a los colaboradores existentes.'
+      : '',
+    importOperation === 'profile_specific_columns' && profileDocumentMapped && profileUpdateMappedFields.length === 0
+      ? 'Debes mapear al menos una columna de datos a actualizar además de Documento.'
+      : '',
+    isAttendanceOperation && attendanceDateHeaders.length === 0 && attendanceStartColumnIndex < 0
+      ? 'Para importar asistencia debes incluir al menos una columna de fecha o indicar `Primera columna de fecha`.'
+      : '',
+    (importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new') &&
+    !attendanceStartDate &&
+    (importPrimaryAction !== 'attendance_fix' || attendanceCorrectionMode === 'single')
+      ? 'Debes seleccionar una `Fecha específica a actualizar`.'
+      : '',
+    importOperation === 'attendance_overwrite' && attendanceCorrectionMode === 'range' && (!attendanceStartDate || !attendanceEndDate)
+      ? 'Debes seleccionar fecha inicial y fecha final para actualizar el rango.'
+      : '',
+    importOperation === 'attendance_overwrite' && attendanceCorrectionMode === 'range' && attendanceStartDate && attendanceEndDate && attendanceStartDate > attendanceEndDate
+      ? 'La fecha inicial del rango no puede ser posterior a la fecha final.'
+      : '',
+    importOperation === 'attendance_specific_dates' && attendanceCorrectionMode === 'multi' && attendanceSelectedDates.length === 0
+      ? 'Debes seleccionar al menos una fecha a actualizar.'
+      : '',
+    importOperation === 'attendance_specific_workers' && attendanceTargetDocuments.length === 0
+      ? 'Debes seleccionar al menos un trabajador en `Trabajadores a actualizar`.'
+      : '',
+    isAttendanceOperation && !hasDocumentColumnBeforeAttendanceStart
+      ? 'La columna `document` debe quedar antes de la `Primera columna de fecha` para poder asignar asistencia al colaborador correcto.'
+      : '',
+    duplicateMappedFields.length > 0
+      ? `Hay mapeos duplicados no permitidos: ${duplicateMappedFields.join(', ')}. Solo \`first_name\` y \`last_name\` permiten múltiples columnas.`
+      : '',
+  ].filter(Boolean)
+  const importDateRangeLabel = attendanceDateIsoOptions.length > 0
+    ? `${formatIsoDateToDisplay(attendanceDateIsoOptions[0])}${attendanceDateIsoOptions.length > 1 ? ` - ${formatIsoDateToDisplay(attendanceDateIsoOptions[attendanceDateIsoOptions.length - 1])}` : ''}`
+    : 'Sin fechas detectadas'
+  const nextExpectedImportDate = importAttendanceBounds.max ? addDaysToIsoDate(importAttendanceBounds.max, 1) : null
+  const todayIsoDate = new Date().toLocaleDateString('en-CA')
+  const attendanceCalendarReferenceDate = parseIsoDateToLocalDate(
+    attendanceDateIsoOptions.includes(todayIsoDate)
+      ? todayIsoDate
+      : (attendanceDateIsoOptions.find((isoDate) => isoDate >= todayIsoDate) || attendanceDateIsoOptions[attendanceDateIsoOptions.length - 1] || '')
+  )
+  const pendingImportDates = useMemo(() => {
+    if (attendanceWriteMode === 'insert_only' && importAttendanceBounds.max) {
+      return attendanceDateIsoOptions.filter((isoDate) => isoDate > String(importAttendanceBounds.max))
+    }
+    return attendanceDateIsoOptions
+  }, [attendanceDateIsoOptions, attendanceWriteMode, importAttendanceBounds.max])
+  const newImportDates = useMemo(() => {
+    return pendingImportDates.filter((isoDate) => isoDate <= todayIsoDate)
+  }, [pendingImportDates, todayIsoDate])
+  const futureImportDates = useMemo(() => {
+    return pendingImportDates.filter((isoDate) => isoDate > todayIsoDate)
+  }, [pendingImportDates, todayIsoDate])
+  const excelIncludesToday = attendanceDateIsoOptions.includes(todayIsoDate)
+  const todayAlreadyImported = Boolean(importAttendanceBounds.max && String(importAttendanceBounds.max) >= todayIsoDate)
+  const suggestedSingleImportDate = (() => {
+    if (nextExpectedImportDate && nextExpectedImportDate <= todayIsoDate && newImportDates.includes(nextExpectedImportDate)) return nextExpectedImportDate
+    if (newImportDates.includes(todayIsoDate)) return todayIsoDate
+    return newImportDates[0] || ''
+  })()
+  const importCandidateDates = useMemo(() => {
+    if (!isAttendanceOperation) return []
+    if (importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new') {
+      return attendanceStartDate ? [attendanceStartDate] : []
+    }
+    if (importOperation === 'attendance_specific_dates') {
+      return [...attendanceSelectedDates].sort()
+    }
+    if (importOperation === 'attendance_overwrite') {
+      if (!attendanceStartDate || !attendanceEndDate || attendanceStartDate > attendanceEndDate) return []
+      return attendanceDateIsoOptions.filter((isoDate) => isoDate >= attendanceStartDate && isoDate <= attendanceEndDate)
+    }
+    if (attendanceDailyImportScope === 'next') return suggestedSingleImportDate ? [suggestedSingleImportDate] : []
+    return newImportDates
+  }, [attendanceDailyImportScope, attendanceDateIsoOptions, attendanceEndDate, attendanceSelectedDates, attendanceStartDate, importOperation, isAttendanceOperation, newImportDates, suggestedSingleImportDate])
+  const importCandidateRangeLabel = importCandidateDates.length > 0
+    ? `${formatIsoDateToDisplay(importCandidateDates[0])}${importCandidateDates.length > 1 ? ` - ${formatIsoDateToDisplay(importCandidateDates[importCandidateDates.length - 1])}` : ''}`
+    : ''
+  const importExecutionSummary = (() => {
+    if (importPrimaryAction === 'new_collaborators') {
+      if (missingRequiredFieldsFull.length > 0) return 'Mapea los campos requeridos para importar nuevos colaboradores.'
+      if (newCollaboratorImportPreview.canPreview) {
+        return `Se crearán ${newCollaboratorImportPreview.created} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'} colaborador${newCollaboratorImportPreview.created === 1 ? '' : 'es'}${excelIncludesToday ? ` con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : ''} y se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}.`
+      }
+      return 'Se importarán solo colaboradores no existentes en el archivo.'
+    }
+    if (importOperation === 'profile_specific_columns') {
+      if (!profileDocumentMapped) return 'Mapea document para identificar a los colaboradores existentes.'
+      if (profileUpdateMappedFields.length === 0) return 'Mapea una o más columnas de ficha para actualizar.'
+      return `Se actualizarán ${profileUpdateMappedFields.length} columna${profileUpdateMappedFields.length === 1 ? '' : 's'} de ficha por document.`
+    }
+    if (!isAttendanceOperation) return 'Se actualizarán datos de colaboradores según el modo seleccionado.'
+    if (needsImportMappingReview) return 'Completa origen y mapeo para calcular qué fecha se importará.'
+    if (importAttendanceBounds.loading) return 'Consultando última fecha importada...'
+    if (importPrimaryAction === 'attendance_fix' && !attendanceCorrectionMode) return 'Elige si corregirás una fecha, un rango o fechas específicas.'
+    if (importCandidateDates.length === 0) {
+      if (importPrimaryAction === 'attendance_fix') {
+        if (importOperation === 'attendance_overwrite') return 'Selecciona fecha inicial y fecha final para actualizar ese rango.'
+        if (importOperation === 'attendance_specific_dates') return 'Selecciona las fechas específicas que necesitas actualizar.'
+        return 'Selecciona la fecha que necesitas actualizar.'
+      }
+      if (attendanceDateIsoOptions.length === 0) return 'No hay fechas detectadas para importar.'
+      if (excelIncludesToday && todayAlreadyImported) {
+        return `La fecha actual ${formatIsoDateToDisplay(todayIsoDate)} ya existe en asistencia. No hay fechas nuevas para importar hasta hoy. Puedes actualizar esa fecha si necesitas corregir los datos cargados.`
+      }
+      if (futureImportDates.length > 0) {
+        return `No hay fechas nuevas para importar hasta hoy (${formatIsoDateToDisplay(todayIsoDate)}). El Excel contiene ${futureImportDates.length} fecha${futureImportDates.length === 1 ? '' : 's'} futura${futureImportDates.length === 1 ? '' : 's'} que no se importarán en el flujo diario.`
+      }
+      if (attendanceWriteMode === 'insert_only' && importAttendanceBounds.max) {
+        return `No hay fechas nuevas posteriores a ${formatIsoDateToDisplay(importAttendanceBounds.max)}.`
+      }
+      return 'No hay fechas seleccionadas para importar.'
+    }
+    if (importOperation === 'attendance_specific_date') return `Se actualizará la fecha ${formatIsoDateToDisplay(importCandidateDates[0])}.`
+    if (importOperation === 'attendance_specific_dates') {
+      if (importCandidateDates.length === 1) return `Se actualizará la fecha ${formatIsoDateToDisplay(importCandidateDates[0])}.`
+      return `Se actualizarán ${importCandidateDates.length} fechas seleccionadas: ${importCandidateRangeLabel}.`
+    }
+    if (importOperation === 'attendance_specific_date_then_new') return `Se actualizará la fecha ${formatIsoDateToDisplay(importCandidateDates[0])} y luego se revisarán nuevos colaboradores.`
+    if (importOperation === 'attendance_overwrite') {
+      if (importCandidateDates.length === 1) return `Se actualizará la fecha ${formatIsoDateToDisplay(importCandidateDates[0])}.`
+      return `Se actualizará el rango ${importCandidateRangeLabel}.`
+    }
+    if (importCandidateDates.length === 1) return `Se importará la fecha ${formatIsoDateToDisplay(importCandidateDates[0])}.`
+    return `Se importarán ${importCandidateDates.length} fechas: ${importCandidateRangeLabel}.`
+  })()
+
+  useEffect(() => {
+    if (!importDialogOpen || !isAttendanceOperation) return
+    let cancelled = false
+    setImportAttendanceBounds((prev) => ({ ...prev, loading: true }))
+
+    ;(async () => {
+      try {
+        const response = await fetch('/api/collaborators/daily-status?bounds=1')
+        const payload = await response.json().catch(() => ({}))
+        if (cancelled) return
+        if (!response.ok) {
+          setImportAttendanceBounds({ min: null, max: null, loading: false })
+          return
+        }
+        setImportAttendanceBounds({
+          min: payload?.min_work_date ? String(payload.min_work_date).slice(0, 10) : null,
+          max: payload?.max_work_date ? String(payload.max_work_date).slice(0, 10) : null,
+          loading: false,
+        })
+      } catch {
+        if (!cancelled) setImportAttendanceBounds({ min: null, max: null, loading: false })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [importDialogOpen, isAttendanceOperation])
+
+  useEffect(() => {
+    if (importPrimaryAction === 'attendance_daily' && attendanceDailyImportScope !== 'next') {
+      setAttendanceDailyImportScope('next')
+    }
+  }, [attendanceDailyImportScope, importPrimaryAction])
 
   const resetMappingForHeaders = () => {
     const next: Record<string, string> = {}
@@ -2110,7 +2634,9 @@ export default function CollaboratorsPage() {
     profileOnly?: boolean
     allowAttendanceForSkippedDuplicates?: boolean
     attendanceStartDate?: string
+    attendanceEndDate?: string
     attendanceExactDate?: string
+    attendanceExactDates?: string[]
     attendanceStartColumnIndex?: number
     targetDocuments?: string[]
     attendanceWriteMode?: 'insert_only' | 'upsert'
@@ -2118,6 +2644,7 @@ export default function CollaboratorsPage() {
     suppressNotice?: boolean
   }) => {
     const addNewAndAttendanceMode = Boolean(opts.allowAttendanceForSkippedDuplicates) && !opts.attendanceOnly && !opts.profileOnly
+    const shouldFilterAttendanceDates = Boolean(opts.attendanceOnly || opts.attendanceExactDate || opts.attendanceExactDates?.length || opts.attendanceStartDate || opts.attendanceEndDate)
     setImporting(true)
     setImportProgress(2)
     setImportStatusMessage(
@@ -2227,7 +2754,30 @@ export default function CollaboratorsPage() {
           },
         })
       }
-      const rowsToSend: any[] = [...rowsWithoutDocument, ...Array.from(byDocument.values())]
+      const rowsToSend: any[] = [...rowsWithoutDocument, ...Array.from(byDocument.values())].map((row) => {
+        if (!shouldFilterAttendanceDates) return row
+        const attendanceMap = row?.attendance_by_date && typeof row.attendance_by_date === 'object'
+          ? row.attendance_by_date
+          : null
+        if (!attendanceMap) return row
+
+        const filteredAttendance = Object.entries(attendanceMap).reduce((acc: Record<string, string>, [date, value]) => {
+          const isoDate = String(date || '').slice(0, 10)
+          if (!isoDate) return acc
+          if (opts.attendanceExactDates && opts.attendanceExactDates.length > 0 && !opts.attendanceExactDates.includes(isoDate)) return acc
+          if (opts.attendanceExactDate && isoDate !== opts.attendanceExactDate) return acc
+          if (!opts.attendanceExactDate && opts.attendanceStartDate && isoDate < opts.attendanceStartDate) return acc
+          if (!opts.attendanceExactDate && opts.attendanceEndDate && isoDate > opts.attendanceEndDate) return acc
+          if (!opts.attendanceExactDate && !opts.attendanceExactDates?.length && opts.attendanceWriteMode !== 'upsert' && isoDate > todayIsoDate) return acc
+          acc[isoDate] = String(value || '')
+          return acc
+        }, {})
+
+        return {
+          ...row,
+          attendance_by_date: filteredAttendance,
+        }
+      })
       if (opts.attendanceOnly) {
         const totalAttendanceCells = rowsToSend.reduce((acc, row) => {
           const map = row?.attendance_by_date && typeof row.attendance_by_date === 'object' ? row.attendance_by_date : {}
@@ -2323,6 +2873,38 @@ export default function CollaboratorsPage() {
       const errorSample = json?.error_sample && typeof json.error_sample === 'object' ? json.error_sample : null
       const docsNotFoundPreview = docsNotFound.slice(0, 12)
       const hasHardErrors = Number(json.errors?.length || 0) > 0
+      const formatImportErrorReason = (sample: any) => {
+        const reason = String(sample?.reason || '')
+          .replace('Faltan campos requeridos (first_name/last_name/document)', 'Faltan campos requeridos: Nombres, Apellidos, Documento')
+          .replaceAll('first_name', 'Nombres')
+          .replaceAll('last_name', 'Apellidos')
+          .replaceAll('document', 'Documento')
+          .replaceAll('email', 'Correo')
+        const details = sample?.details ? String(sample.details) : ''
+        return details ? `${reason} (${details})` : reason
+      }
+      if (importPrimaryAction === 'new_collaborators' && !opts.attendanceOnly && !opts.profileOnly) {
+        const insertedCount = Number(json.inserted || 0)
+        const skippedCount = Number(json.skipped || 0)
+        const errorsCount = Number(json.errors?.length || 0)
+        const attendanceWrittenCount = Number(json.attendance_rows_written || 0)
+        const message = insertedCount > 0
+          ? `Importación exitosa\nSe importaron ${insertedCount} nuevo${insertedCount === 1 ? '' : 's'} colaborador${insertedCount === 1 ? '' : 'es'}.${attendanceWrittenCount > 0 ? ` Se cargó asistencia de hoy para ${attendanceWrittenCount} registro${attendanceWrittenCount === 1 ? '' : 's'}.` : ''} ${skippedCount > 0 ? `Se omitieron ${skippedCount} existente${skippedCount === 1 ? '' : 's'}.` : ''}${errorsCount > 0 ? `\nNo se pudieron procesar ${errorsCount} registro${errorsCount === 1 ? '' : 's'}.` : ''}`
+          : errorsCount > 0
+            ? `No se importaron colaboradores\nNo se pudieron procesar ${errorsCount} registro${errorsCount === 1 ? '' : 's'}.${errorSample ? `\nPrimer error: ${formatImportErrorReason(errorSample)}` : ''}`
+            : `No se encontraron nuevos colaboradores\nNo se importó ningún colaborador nuevo. ${skippedCount > 0 ? `Se omitieron ${skippedCount} existente${skippedCount === 1 ? '' : 's'}.` : ''}`
+        if (!opts.suppressNotice) {
+          setImportNotice({
+            severity: insertedCount > 0 && errorsCount === 0 ? 'success' : 'warning',
+            message,
+          })
+        }
+        const resp = await fetch('/api/collaborators')
+        if (resp.ok) setCollaborators(await resp.json())
+        setImportStatusMessage('')
+        setImportProgress(0)
+        return json
+      }
       const successPrefix = opts.attendanceOnly
         ? (hasHardErrors ? 'Actualización de asistencia con errores' : 'Actualización de asistencia lista')
         : opts.profileOnly
@@ -2392,12 +2974,14 @@ export default function CollaboratorsPage() {
       importOperation === 'attendance_overwrite' ||
       importOperation === 'attendance_new_only' ||
       importOperation === 'attendance_specific_date' ||
+      importOperation === 'attendance_specific_dates' ||
       importOperation === 'attendance_specific_workers' ||
       importOperation === 'attendance_specific_date_then_new'
     )
     if (
       importOperation === 'attendance_overwrite' ||
       importOperation === 'attendance_specific_date' ||
+      importOperation === 'attendance_specific_dates' ||
       importOperation === 'attendance_specific_date_then_new'
     ) {
       setAttendanceWriteMode('upsert')
@@ -2660,7 +3244,7 @@ export default function CollaboratorsPage() {
   return (
     <Box sx={{ display: 'flex', width: '100%', minWidth: 0 }}>
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <UserHeader title="Colaboradores" />
+        <UserHeader title={showAttendanceForUser ? 'Actualizar / Importar - Asistencia / Colaboradores' : 'Colaboradores'} />
         <Container
           maxWidth={false}
           disableGutters
@@ -2684,6 +3268,7 @@ export default function CollaboratorsPage() {
           )}
 
           {/* Estadísticas rápidas */}
+          {!showAttendanceForUser && (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2.5 }}>
             <Card>
               <CardContent>
@@ -2746,8 +3331,10 @@ export default function CollaboratorsPage() {
               </CardContent>
             </Card>
           </Box>
+          )}
 
           {/* Barra de herramientas */}
+          {!showAttendanceForUser && (
           <Paper sx={{ p: 1.75, mb: 2.5 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
               <Box display="flex" alignItems="center" gap={2}>
@@ -2874,6 +3461,9 @@ export default function CollaboratorsPage() {
                   </Button>
                 </Tooltip>
               </Box>
+            </Box>
+          </Paper>
+          )}
               {/* Instructions dialog shown before opening file selector */}
               <Dialog
                 open={importInstructionsOpen}
@@ -2882,34 +3472,81 @@ export default function CollaboratorsPage() {
                 fullWidth
                 PaperProps={{
                   sx: {
-                    borderRadius: 2,
-                    width: { xs: 'calc(100% - 68px)', sm: 'calc(100% - 220px)', md: 'calc(100% - 420px)' },
-                    maxWidth: 440,
+                    borderRadius: 1.5,
+                    width: { xs: 'calc(100% - 40px)', sm: 'calc(100% - 140px)', md: 'calc(100% - 320px)' },
+                    maxWidth: 720,
                   },
                 }}
               >
-                <DialogTitle sx={{ pb: 0.5, fontWeight: 800, color: '#0b2e59' }}>
-                  Importar colaboradores
-                </DialogTitle>
-                <DialogContent sx={{ pt: '6px !important', pb: 1 }}>
-                  <Typography variant="body2" sx={{ color: '#64748b' }}>
-                    Selecciona un archivo CSV o Excel para continuar.
+                <DialogTitle sx={{ pb: 0.5, pt: 2.25, px: 2.5 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, color: '#0b2e59', lineHeight: 1.15 }}>
+                    Importar datos
                   </Typography>
+                </DialogTitle>
+                <DialogContent sx={{ pt: '8px !important', pb: 1.5, px: 2.5 }}>
+                  <Typography variant="body2" sx={{ color: '#64748b', lineHeight: 1.55 }}>
+                    Elige qué necesitas hacer y luego selecciona el archivo Excel.
+                  </Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 1.25, mt: 2 }}>
+                    {importActionOptions.map((option) => {
+                      const selected = pendingImportPrimaryAction === option.key
+                      return (
+                        <Button
+                          key={option.key}
+                          variant="outlined"
+                          disabled={importParsing || importing}
+                          onClick={() => chooseImportActionAndFile(option.key)}
+                          sx={{
+                            alignItems: 'center',
+                            justifyContent: 'flex-start',
+                            textAlign: 'left',
+                            px: 1.5,
+                            py: 0.75,
+                            minHeight: 56,
+                            textTransform: 'none',
+                            borderColor: selected ? colors.blue6 : colors.gray8,
+                            color: selected ? colors.white : colors.gray2,
+                            backgroundColor: selected ? colors.blue6 : colors.gray10,
+                            transition: 'background-color 140ms ease, border-color 140ms ease, color 140ms ease',
+                            '&:hover': {
+                              backgroundColor: colors.blue4,
+                              borderColor: colors.blue4,
+                              color: colors.blue13,
+                              boxShadow: 'none',
+                            },
+                            '&:hover .import-action-detail': {
+                              color: colors.blue13,
+                            },
+                            '&:active': {
+                              backgroundColor: colors.blue2,
+                              borderColor: colors.blue2,
+                              color: colors.white,
+                            },
+                            '&:active .import-action-detail': {
+                              color: colors.blue13,
+                            },
+                          }}
+                        >
+                          <Box sx={{ width: '100%' }}>
+                            <Typography variant="body2" sx={{ fontWeight: 800, lineHeight: 1.15 }}>
+                              {option.title}
+                            </Typography>
+                            <Typography
+                              className="import-action-detail"
+                              variant="caption"
+                              sx={{ display: 'block', mt: 0.5, color: selected ? colors.blue13 : colors.gray4, lineHeight: 1.2 }}
+                            >
+                              {option.detail}
+                            </Typography>
+                          </Box>
+                        </Button>
+                      )
+                    })}
+                  </Box>
                 </DialogContent>
-                <DialogActions>
-                  <Button onClick={() => setImportInstructionsOpen(false)} disabled={importParsing || importing}>Cerrar</Button>
-                  <Button
-                    variant="contained"
-                    disabled={importParsing || importing}
-                    onClick={() => {
-                      setImportInstructionsOpen(false)
-                      if (fileInputRef.current) {
-                        fileInputRef.current.value = ''
-                        fileInputRef.current.click()
-                      }
-                    }}
-                  >
-                    Seleccionar archivo
+                <DialogActions sx={{ px: 2.5, pb: 2.25, pt: 0.5, gap: 1 }}>
+                  <Button onClick={() => setImportInstructionsOpen(false)} disabled={importParsing || importing}>
+                    Cancelar
                   </Button>
                 </DialogActions>
               </Dialog>
@@ -2929,157 +3566,455 @@ export default function CollaboratorsPage() {
                 maxWidth="lg"
                 fullWidth
               >
-                <DialogTitle>Importar colaboradores</DialogTitle>
-                <DialogContent sx={{ overflowX: 'hidden', maxHeight: '65vh', overflowY: 'auto', px: { xs: 2, md: 3 } }}>
-                  {importSheetNames.length > 1 && (
-                    <Box sx={{ mt: 1, mb: 2 }}>
-                      <FormControl fullWidth size="small">
-                        <InputLabel>Hoja del Excel</InputLabel>
-                        <Select
-                          value={selectedImportSheet}
+                <DialogTitle sx={{ pb: 1.25 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700, color: colors.blue1 }}>
+                      {importDialogTitle}
+                    </Typography>
+                    <Tooltip title={importConfigurationVisible ? 'Ocultar configuración' : 'Mostrar configuración'}>
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={toggleImportConfiguration}
+                          disabled={!canToggleImportConfiguration}
+                          aria-label={importConfigurationVisible ? 'Ocultar configuración' : 'Mostrar configuración'}
+                          sx={{
+                            border: '1px solid',
+                            borderColor: 'divider',
+                            color: colors.blue6,
+                          }}
+                        >
+                          {importConfigurationVisible ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  </Box>
+                </DialogTitle>
+                <DialogContent sx={{ overflowX: 'hidden', maxHeight: '65vh', overflowY: 'auto', px: { xs: 2, md: 3 }, pt: '10px !important' }}>
+                  {importParsing && (
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        mb: 2,
+                        p: 1.5,
+                        borderColor: 'rgba(25,118,210,0.28)',
+                        backgroundColor: 'rgba(25,118,210,0.04)'
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, mb: 1 }}>
+                        <CircularProgress size={18} />
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: colors.blue1 }}>
+                          {importParsingMessage || 'Procesando hoja seleccionada...'}
+                        </Typography>
+                      </Box>
+                      <LinearProgress
+                        variant="determinate"
+                        value={Math.max(0, Math.min(100, importParsingProgress))}
+                        sx={{ height: 6, borderRadius: 999 }}
+                      />
+                    </Paper>
+                  )}
+                  <Paper
+                    variant="outlined"
+                    sx={{
+                      p: 1,
+                      mb: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      backgroundColor: 'rgba(25,118,210,0.03)',
+                    }}
+                  >
+                    <Box sx={{ width: '100%', display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center' }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1, mr: 'auto', display: 'flex', alignItems: 'center' }}>
+                        {importExecutionSummary}
+                      </Typography>
+                      {(importPrimaryAction === 'profile_update'
+                        ? [
+                            ['Archivo', `${detectedImportDocumentCount || '-'} trabajadores`],
+                            ['Identificador', profileDocumentMapped ? 'document' : 'Sin document'],
+                            ['Columnas', profileUpdateMappedFields.length > 0 ? profileUpdateMappedFields.map(getColumnLabel).join(', ') : 'Sin columnas'],
+                          ]
+                        : importPrimaryAction === 'new_collaborators'
+                          ? [
+                              ['Archivo', `${detectedImportDocumentCount || '-'} trabajadores`],
+                              ['Identificador', mappedFieldsSet.has('document') ? 'Documento' : 'Sin documento'],
+                              ['Nuevos', newCollaboratorImportPreview.canPreview ? String(newCollaboratorImportPreview.created) : '-'],
+                              ['Existentes omitidos', newCollaboratorImportPreview.canPreview ? String(newCollaboratorImportPreview.existing) : '-'],
+                            ]
+                        : [
+                            ['Archivo', `${detectedImportDocumentCount || '-'} trabajadores · ${attendanceDateHeaders.length} fechas`],
+                            ['Rango Excel', importDateRangeLabel],
+                            ['Última importada', importAttendanceBounds.loading ? 'Consultando...' : (importAttendanceBounds.max ? formatIsoDateToDisplay(importAttendanceBounds.max) : 'Sin registro')],
+                          ]
+                      ).map(([label, value]) => (
+                        <Box key={label} sx={{ display: 'flex', gap: 0.75, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1, display: 'flex', alignItems: 'center' }}>
+                            {label}
+                          </Typography>
+                          <Typography variant="caption" sx={{ fontWeight: 600, lineHeight: 1, display: 'flex', alignItems: 'center' }}>
+                            {value}
+                          </Typography>
+                        </Box>
+                      ))}
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {importCandidateDates.length === 0 && excelIncludesToday && todayAlreadyImported && (
+                        <>
+                        <Button
+                          size="small"
+                          variant="contained"
                           disabled={importParsing || importing}
-                          label="Hoja del Excel"
-                          onChange={async (e) => {
-                            const nextSheet = String(e.target.value || '')
-                            setSelectedImportSheet(nextSheet)
-                            if (!importWorkbook || !nextSheet) return
-                            try {
-                              setImportParsing(true)
-                              setImportParsingMessage(`Cambiando a hoja "${nextSheet}"...`)
-                              const mod = await import('xlsx')
-                              const XLSX = (mod && (mod.default || mod)) as any
-                              const sheet = importWorkbook.Sheets[nextSheet]
-                              if (!sheet) return
-                              const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: true, defval: '' }) as any[]
-                              const rawRows = aoa.map((r: any[]) => (Array.isArray(r) ? r : []).map((c: any) => c === undefined || c === null ? '' : String(c)))
-                              setImportRawRows(rawRows)
-                              let startRow = 0
-                              let startCol = 0
-                              let found = false
-                              for (let rIdx = 0; rIdx < rawRows.length; rIdx += 1) {
-                                const firstValueIdx = (rawRows[rIdx] || []).findIndex((c: string) => String(c || '').trim() !== '')
-                                if (firstValueIdx >= 0) {
-                                  startRow = rIdx
-                                  startCol = firstValueIdx
-                                  found = true
-                                  break
+                          onClick={() => {
+                            setImportOperation('attendance_specific_date')
+                            setAttendanceWriteMode('upsert')
+                            setAttendanceStartDate(todayIsoDate)
+                            setAttendanceDailyImportScope('next')
+                          }}
+                        >
+                          Actualizar fecha actual
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={importParsing || importing}
+                          onClick={() => {
+                            setImportOperation('attendance_overwrite')
+                            setAttendanceWriteMode('upsert')
+                            setAttendanceStartDate(todayIsoDate)
+                            setAttendanceDailyImportScope('all')
+                            setShowImportAdvancedOptions(true)
+                          }}
+                        >
+                          Elegir fecha o rango
+                        </Button>
+                        </>
+                      )}
+                      {showImportAttendancePreview && importPrimaryAction !== 'attendance_daily' && (
+                        <Button size="small" variant="text" onClick={() => setShowImportAttendancePreview(false)}>
+                          Ocultar vista previa
+                        </Button>
+                      )}
+                    </Box>
+                  </Paper>
+
+                  {shouldShowImportOriginPanel && (
+                    <Paper
+                      variant="outlined"
+                      sx={{
+                        p: 1.25,
+                        mb: 2,
+                        '& .import-origin-control .MuiInputBase-root': {
+                          minHeight: 32,
+                          height: 32,
+                        },
+                        '& .import-origin-control .MuiInputBase-input': {
+                          height: 32,
+                          boxSizing: 'border-box',
+                          py: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          lineHeight: '32px',
+                        },
+                        '& .import-origin-control .MuiSelect-select': {
+                          minHeight: '0 !important',
+                          height: 32,
+                          boxSizing: 'border-box',
+                          py: '0 !important',
+                          display: 'flex',
+                          alignItems: 'center',
+                        },
+                        '& .import-origin-action': {
+                          minHeight: 32,
+                          height: 32,
+                          px: 1.25,
+                          py: 0.25,
+                        },
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Typography variant="subtitle2" sx={{ minWidth: { xs: '100%', md: 'auto' }, mr: { md: 0.5 } }}>
+                        Origen de datos
+                      </Typography>
+                      {importSheetNames.length > 1 && (
+                        <FormControl className="import-origin-control" size="small" sx={{ minWidth: 180, width: { xs: '100%', sm: 260, md: 230 } }}>
+                          <InputLabel>Hoja del Excel</InputLabel>
+                          <Select
+                            value={selectedImportSheet}
+                            disabled={importParsing || importing}
+                            label="Hoja del Excel"
+                            open={importSheetSelectOpen}
+                            onOpen={() => {
+                              if (!importParsing && !importing) setImportSheetSelectOpen(true)
+                            }}
+                            onClose={() => setImportSheetSelectOpen(false)}
+                            MenuProps={{
+                              PaperProps: {
+                                sx: {
+                                  mt: 0.5,
+                                  width: { xs: 'calc(100vw - 48px)', sm: 300 },
+                                  maxWidth: 'calc(100vw - 48px)',
+                                  maxHeight: 320,
                                 }
                               }
-                              if (!found) return
-                              const parsed = buildRowsFromStartCell(rawRows, startRow, startCol)
-                              const rows = parsed.rows
-                              if (!rows || rows.length === 0) return
-                              const headers = rows[0].map(h => formatExcelSerialAsDateHeader(h))
-                              const dataRows = rows.slice(1).filter(r => r.some(cell => cell && String(cell).trim() !== ''))
+                            }}
+                            onChange={(e) => handleImportSheetChange(String(e.target.value || ''))}
+                          >
+                            {importSheetNames.map((sheetName) => (
+                              <MenuItem key={sheetName} value={sheetName}>{sheetName}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      )}
+                      <TextField
+                        className="import-origin-control"
+                        key={`header-start-cell-${importHeaderStartCell}`}
+                        size="small"
+                        label="Celda cabecera"
+                        defaultValue=""
+                        onChange={(e) => {
+                          importHeaderStartCellDraftRef.current = String(e.target.value || '').toUpperCase()
+                        }}
+                        placeholder={importHeaderStartCell || 'A1'}
+                        sx={{
+                          minWidth: 150,
+                          width: { xs: '100%', sm: 190, md: 170 },
+                          '& .MuiInputBase-root': {
+                            height: '40px !important',
+                            minHeight: '40px !important',
+                          },
+                          '& .MuiInputBase-input': {
+                            height: '40px !important',
+                            lineHeight: '40px !important',
+                          },
+                          '& input': { textAlign: 'left', pl: 1.5 },
+                        }}
+                        disabled={importParsing || importing || importHeaderApplying}
+                      />
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', ml: { xs: 0, md: 'auto' }, width: { xs: '100%', md: 'auto' }, justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
+                        <Button
+                          className="import-origin-action"
+                          size="small"
+                          variant="outlined"
+                          disabled={importParsing || importing || importHeaderApplying}
+                          onClick={async () => {
+                            if (importHeaderApplying) return
+                            setImportHeaderApplying(true)
+                            setImportParsing(true)
+                            setImportParsingMessage('Aplicando celda de cabecera...')
+                            setImportParsingProgress(20)
+                            try {
+                              await waitForUiPaint()
+                              const draftCell = String(importHeaderStartCellDraftRef.current || importHeaderStartCell || 'A1').trim().toUpperCase()
+                              const parsedCell = parseCellReference(draftCell)
+                              if (!parsedCell) {
+                                alert('Formato inválido. Usa una celda como A1 o B10.')
+                                return
+                              }
+                              if (!importRawRows || importRawRows.length === 0) {
+                                alert('No hay datos cargados para recalcular desde una celda.')
+                                return
+                              }
+                              setImportParsingMessage(`Recalculando desde ${draftCell}...`)
+                              setImportParsingProgress(50)
+                              await waitForUiPaint()
+                              const recalculated = buildRowsFromStartCell(importRawRows, parsedCell.rowIdx, parsedCell.colIdx)
+                              if (!recalculated.rows || recalculated.rows.length === 0) {
+                                alert('La celda seleccionada no contiene datos para importar.')
+                                return
+                              }
+                              setImportParsingMessage('Actualizando cabeceras, vista previa y mapeo...')
+                              setImportParsingProgress(82)
+                              await waitForUiPaint()
+                              const headers = recalculated.rows[0].map((h) => formatExcelSerialAsDateHeader(h))
+                              const dataRows = recalculated.rows.slice(1).filter((r) => r.some((cell) => cell && String(cell).trim() !== ''))
+                              setImportHeaderStartCell(recalculated.headerCell)
+                              importHeaderStartCellDraftRef.current = recalculated.headerCell
                               setImportHeaders(headers)
                               setImportRows(dataRows)
-                              setImportHeaderStartCell(parsed.headerCell)
-                              importHeaderStartCellDraftRef.current = parsed.headerCell
                               setMapping(autoMatchHeader(headers))
-                            } catch (err) {
-                              console.error('Error reading selected sheet', err)
-                              alert('No se pudo leer la hoja seleccionada')
+                              setImportParsingProgress(100)
+                              await waitForUiPaint()
                             } finally {
+                              setImportHeaderApplying(false)
                               setImportParsing(false)
                               setImportParsingMessage('')
+                              setImportParsingProgress(0)
                             }
                           }}
                         >
-                          {importSheetNames.map((sheetName) => (
-                            <MenuItem key={sheetName} value={sheetName}>{sheetName}</MenuItem>
-                          ))}
-                        </Select>
-                      </FormControl>
-                    </Box>
+                          {importHeaderApplying ? 'Aplicando...' : 'Aplicar celda'}
+                        </Button>
+                        {importPrimaryAction !== 'attendance_daily' && importPrimaryAction !== 'attendance_fix' && (
+                          <>
+                            <Button
+                              className="import-origin-action"
+                              size="small"
+                              variant="outlined"
+                              disabled={importParsing || importing || importHeaderApplying}
+                              onClick={() => setMapping(autoMatchHeader(importHeaders || []))}
+                            >
+                              Auto-mapear
+                            </Button>
+                            <Button
+                              className="import-origin-action"
+                              size="small"
+                              variant="outlined"
+                              color="primary"
+                              disabled={importParsing || importing || importHeaderApplying}
+                              onClick={resetMappingForHeaders}
+                            >
+                              Limpiar mapeo
+                            </Button>
+                          </>
+                        )}
+                      </Box>
+                      {detectedHeaderSuggestion && (
+                        <Box
+                          sx={{
+                            px: 1,
+                            py: 0.75,
+                            borderRadius: 1,
+                            backgroundColor: 'rgba(25,118,210,0.04)',
+                            border: '1px solid',
+                            borderColor: 'rgba(25,118,210,0.18)',
+                            display: 'flex',
+                            gap: 1,
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            flex: '1 1 100%',
+                            minWidth: { xs: '100%', md: 280 },
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            {detectedHeaderSuggestion.cell === importHeaderStartCell ? (
+                              <>
+                                Usando cabeceras desde <strong>{importHeaderStartCell}</strong> · primera cabecera: <strong>{detectedHeaderSuggestion.firstHeader}</strong>
+                              </>
+                            ) : (
+                              <>
+                                Sugerencia disponible: cabeceras en <strong>{detectedHeaderSuggestion.cell}</strong> · actualmente usando <strong>{importHeaderStartCell}</strong>
+                              </>
+                            )}
+                          </Typography>
+                          {detectedHeaderSuggestion.cell !== importHeaderStartCell && (
+                            <Button
+                              className="import-origin-action"
+                              size="small"
+                              variant="outlined"
+                              disabled={importParsing || importing || importHeaderApplying}
+                              sx={{ ml: { xs: 0, sm: 'auto' } }}
+                              onClick={async () => {
+                                if (importHeaderApplying) return
+                                setImportHeaderApplying(true)
+                                setImportParsing(true)
+                                setImportParsingMessage(`Aplicando sugerencia ${detectedHeaderSuggestion.cell}...`)
+                                setImportParsingProgress(25)
+                                try {
+                                  await waitForUiPaint()
+                                  const recalculated = buildRowsFromStartCell(importRawRows, detectedHeaderSuggestion.rowIdx, detectedHeaderSuggestion.colIdx)
+                                  if (!recalculated.rows || recalculated.rows.length === 0) {
+                                    alert('La sugerencia no contiene datos para importar.')
+                                    return
+                                  }
+                                  setImportParsingMessage('Actualizando cabeceras, vista previa y mapeo...')
+                                  setImportParsingProgress(80)
+                                  await waitForUiPaint()
+                                  const headers = recalculated.rows[0].map((h) => formatExcelSerialAsDateHeader(h))
+                                  const dataRows = recalculated.rows.slice(1).filter((r) => r.some((cell) => cell && String(cell).trim() !== ''))
+                                  setImportHeaderStartCell(recalculated.headerCell)
+                                  importHeaderStartCellDraftRef.current = recalculated.headerCell
+                                  setImportHeaders(headers)
+                                  setImportRows(dataRows)
+                                  setMapping(autoMatchHeader(headers))
+                                  setImportParsingProgress(100)
+                                  await waitForUiPaint()
+                                } finally {
+                                  setImportHeaderApplying(false)
+                                  setImportParsing(false)
+                                  setImportParsingMessage('')
+                                  setImportParsingProgress(0)
+                                }
+                              }}
+                            >
+                              Usar sugerencia
+                            </Button>
+                          )}
+                        </Box>
+                      )}
+                      </Box>
+                      {needsImportMappingReview && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                          Si la asistencia no parte en la primera fila útil, ajusta la celda donde empiezan las cabeceras y aplica nuevamente.
+                        </Typography>
+                      )}
+                    </Paper>
                   )}
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>Cabeceras detectadas</Typography>
-
-                  <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <Chip label={`Cabeceras: ${importHeaders.length}`} size="small" />
-                    <Chip label={`Primera cabecera: ${importHeaderStartCell}`} size="small" color="primary" />
-                    <Chip label={`Mapeadas: ${mappedHeadersCount}`} size="small" color={mappedHeadersCount > 0 ? 'success' : 'default'} />
-                    <Chip label={`Sin mapear: ${excelIgnoredHeaders.length}`} size="small" color={excelIgnoredHeaders.length > 0 ? 'warning' : 'default'} />
-                    <Chip label={`Fechas asistencia: ${attendanceDateHeaders.length}`} size="small" color={attendanceDateHeaders.length > 0 ? 'info' : 'default'} />
-                    <Button size="small" variant="outlined" onClick={() => setMapping(autoMatchHeader(importHeaders || []))}>
-                      Auto-mapear
-                    </Button>
-                    <Button size="small" variant="text" color="inherit" onClick={resetMappingForHeaders}>
-                      Limpiar mapeo
-                    </Button>
-                  </Box>
-                  <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <TextField
-                      key={`header-start-cell-${importHeaderStartCell}`}
-                      size="small"
-                      label="Celda cabecera"
-                      defaultValue={importHeaderStartCell}
-                      onChange={(e) => {
-                        importHeaderStartCellDraftRef.current = String(e.target.value || '').toUpperCase()
-                      }}
-                      placeholder="Ej: B10"
-                      sx={{ minWidth: 180 }}
-                    />
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => {
-                        const draftCell = String(importHeaderStartCellDraftRef.current || '').trim().toUpperCase()
-                        const parsedCell = parseCellReference(draftCell)
-                        if (!parsedCell) {
-                          alert('Formato inválido. Usa una celda como A1 o B10.')
-                          return
-                        }
-                        if (!importRawRows || importRawRows.length === 0) {
-                          alert('No hay datos cargados para recalcular desde una celda.')
-                          return
-                        }
-                        const recalculated = buildRowsFromStartCell(importRawRows, parsedCell.rowIdx, parsedCell.colIdx)
-                        if (!recalculated.rows || recalculated.rows.length === 0) {
-                          alert('La celda seleccionada no contiene datos para importar.')
-                          return
-                        }
-                        const headers = recalculated.rows[0].map((h) => formatExcelSerialAsDateHeader(h))
-                        const dataRows = recalculated.rows.slice(1).filter((r) => r.some((cell) => cell && String(cell).trim() !== ''))
-                        setImportHeaderStartCell(recalculated.headerCell)
-                        importHeaderStartCellDraftRef.current = recalculated.headerCell
-                        setImportHeaders(headers)
-                        setImportRows(dataRows)
-                        setMapping(autoMatchHeader(headers))
-                      }}
-                    >
-                      Aplicar celda
-                    </Button>
-                  </Box>
 
                   {/* If any required fields are not mapped, show a clear error */}
-                  <Box sx={{ mb: 2 }}>
-                    <TextField
-                      select
-                      size="small"
-                      label="Tipo de actualización"
-                      value={importOperation}
-                      onChange={(e) => setImportOperation(String(e.target.value) as any)}
-                      sx={{ mb: 1.5, minWidth: { xs: '100%', md: 440 } }}
-                    >
-                      <MenuItem value="attendance_overwrite">Actualizar asistencia (reescribe fechas existentes)</MenuItem>
-                      <MenuItem value="attendance_new_only">Importar fechas nuevas (solo nuevas detectadas)</MenuItem>
-                      <MenuItem value="attendance_specific_date">Actualizar una fecha específica</MenuItem>
-                      <MenuItem value="attendance_specific_date_then_new">Actualizar fecha específica + importar nuevos</MenuItem>
-                      <MenuItem value="attendance_specific_workers">Trabajadores a actualizar (específicos)</MenuItem>
-                      <MenuItem value="full_overwrite_all">Actualizar todo (datos + asistencia)</MenuItem>
-                      <MenuItem value="profile_specific_columns">Actualizar columnas de datos específicas</MenuItem>
-                    </TextField>
-                    {isAttendanceOperation ? null : importOperation === 'full_overwrite_all' ? (
+                  {!importConfigurationCollapsed && showImportAdvancedOptions && (
+                  <Box sx={{ mb: 2, ...(importPrimaryAction === 'attendance_fix' ? { display: 'flex', gap: 1.25, flexWrap: 'wrap', alignItems: 'flex-start' } : {}) }}>
+                    {importPrimaryAction === 'attendance_fix' && (
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', flex: '0 0 auto', pt: 0.25 }}>
+                        {[
+                          ['single', 'attendance_specific_date', 'Fecha única'],
+                          ['range', 'attendance_overwrite', 'Rango de fechas'],
+                          ['multi', 'attendance_specific_dates', 'Fechas específicas'],
+                        ].map(([correctionMode, mode, label]) => (
+                          <Button
+                            key={mode}
+                            size="small"
+                            variant={attendanceCorrectionMode === correctionMode ? 'contained' : 'outlined'}
+                            disabled={importParsing || importing}
+                            sx={{ minHeight: 40, px: 1.8 }}
+                            onClick={() => {
+                              setImportOperation(mode as any)
+                              setAttendanceCorrectionMode(correctionMode as 'single' | 'range' | 'multi')
+                              if (mode === 'attendance_specific_date') {
+                                setAttendanceStartDate('')
+                                setAttendanceEndDate('')
+                                setAttendanceSelectedDates([])
+                              }
+                              if (mode === 'attendance_overwrite') {
+                                setAttendanceStartDate('')
+                                setAttendanceEndDate('')
+                                setAttendanceSelectedDates([])
+                              }
+                              if (mode === 'attendance_specific_dates') {
+                                setAttendanceStartDate('')
+                                setAttendanceEndDate('')
+                                setAttendanceSelectedDates([])
+                              }
+                            }}
+                          >
+                            {label}
+                          </Button>
+                        ))}
+                      </Box>
+                    )}
+                    {importPrimaryAction === 'new_collaborators' ? (
+                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                        {newCollaboratorImportPreview.canPreview
+                          ? newCollaboratorImportPreview.created > 0
+                            ? `Se crearán ${newCollaboratorImportPreview.created} trabajador${newCollaboratorImportPreview.created === 1 ? '' : 'es'} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'}${excelIncludesToday ? ` con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : '. El Excel no contiene asistencia de hoy'} y se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
+                            : `No se encontraron trabajadores nuevos. Se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
+                          : `Se crearán solo trabajadores no existentes según el Documento${excelIncludesToday ? `, con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : ''}. Los colaboradores ya existentes se omiten.`}
+                      </Alert>
+                    ) : isAttendanceOperation ? null : importOperation === 'full_overwrite_all' ? (
                       <Alert severity="warning" sx={{ mb: 1.5 }}>
                         Se reescribirán datos y asistencia usando el mapeo del archivo.
                       </Alert>
+                    ) : importOperation === 'profile_specific_columns' ? (
+                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                        Selecciona las columnas de ficha que necesitas actualizar.
+                      </Alert>
                     ) : (
                       <Alert severity="info" sx={{ mb: 1.5 }}>
-                        Se actualizarán solo las columnas de datos que mapeaste (sin asistencia).
+                        Se actualizarán solo las columnas de datos que mapeaste.
                       </Alert>
                     )}
                     {isAttendanceOperation ? (
-                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.5 }}>
+                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: importPrimaryAction === 'attendance_fix' ? 'minmax(240px, 360px)' : '1fr 1fr' }, gap: 1.5, ...(importPrimaryAction === 'attendance_fix' ? { flex: '0 1 360px', minWidth: { xs: '100%', md: 240 }, ml: { md: 'auto' } } : {}) }}>
+                          {importPrimaryAction !== 'attendance_fix' && (
                           <TextField
                             select
                             size="small"
@@ -3095,19 +4030,103 @@ export default function CollaboratorsPage() {
                               </MenuItem>
                             ))}
                           </TextField>
-                          <TextField
-                            select
-                            size="small"
-                            label={(importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new') ? 'Fecha específica a actualizar' : 'Primera fecha a actualizar (opcional)'}
-                            value={attendanceStartDate}
-                            onChange={(e) => setAttendanceStartDate(String(e.target.value || ''))}
-                            helperText={(importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new') ? 'Se actualizará únicamente esta fecha.' : 'Se usa para filtrar histórico y para derivar fechas si seleccionaste columna inicial.'}
-                          >
-                            {(importOperation !== 'attendance_specific_date' && importOperation !== 'attendance_specific_date_then_new') ? <MenuItem value="">Todas las fechas detectadas</MenuItem> : null}
-                            {attendanceDateIsoOptions.map((isoDate) => (
-                              <MenuItem key={`attendance-start-${isoDate}`} value={isoDate}>{formatIsoDateToDisplay(isoDate)}</MenuItem>
-                            ))}
-                          </TextField>
+                          )}
+                          {((importPrimaryAction === 'attendance_fix' && attendanceCorrectionMode === 'single') || (importPrimaryAction !== 'attendance_fix' && (importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new'))) && (
+                            <TextField
+                              size="small"
+                              label="Fecha a actualizar"
+                              value={attendanceStartDate ? formatIsoDateToDisplay(attendanceStartDate) : ''}
+                              onClick={(e) => {
+                                setAttendanceCalendarMode('single')
+                                setAttendanceCalendarAnchorEl(e.currentTarget)
+                              }}
+                              helperText="Se actualizará únicamente esta fecha."
+                              InputProps={{
+                                readOnly: true,
+                                endAdornment: (
+                                  <InputAdornment position="end">
+                                    <CalendarMonth sx={{ fontSize: 20, color: 'text.secondary' }} />
+                                  </InputAdornment>
+                                ),
+                              }}
+                              sx={{
+                                maxWidth: { md: 360 },
+                                '& .MuiInputBase-root, & .MuiInputBase-input': {
+                                  cursor: attendanceDateIsoOptions.length === 0 ? 'default' : 'pointer',
+                                },
+                              }}
+                              disabled={attendanceDateIsoOptions.length === 0 || importParsing || importing}
+                            />
+                          )}
+                          {importOperation === 'attendance_overwrite' && (importPrimaryAction !== 'attendance_fix' || attendanceCorrectionMode === 'range') && (
+                            <TextField
+                              size="small"
+                              label="Rango a actualizar"
+                              value={
+                                attendanceStartDate && attendanceEndDate
+                                  ? `${formatIsoDateToDisplay(attendanceStartDate)} - ${formatIsoDateToDisplay(attendanceEndDate)}`
+                                  : attendanceStartDate
+                                    ? `${formatIsoDateToDisplay(attendanceStartDate)} -`
+                                    : ''
+                              }
+                              onClick={(e) => {
+                                setAttendanceCalendarMode('range')
+                                setAttendanceCalendarAnchorEl(e.currentTarget)
+                              }}
+                              helperText="Elige fecha inicial y fecha final en el calendario."
+                              InputProps={{
+                                readOnly: true,
+                                endAdornment: (
+                                  <InputAdornment position="end">
+                                    <CalendarMonth sx={{ fontSize: 20, color: 'text.secondary' }} />
+                                  </InputAdornment>
+                                ),
+                              }}
+                              sx={{
+                                gridColumn: { xs: '1 / -1', md: importPrimaryAction === 'attendance_fix' ? '1' : 'auto' },
+                                maxWidth: { md: 360 },
+                                '& .MuiInputBase-root, & .MuiInputBase-input': {
+                                  cursor: attendanceDateIsoOptions.length === 0 ? 'default' : 'pointer',
+                                },
+                              }}
+                              disabled={attendanceDateIsoOptions.length === 0 || importParsing || importing}
+                            />
+                          )}
+                          {importOperation === 'attendance_specific_dates' && (importPrimaryAction !== 'attendance_fix' || attendanceCorrectionMode === 'multi') && (
+                            <TextField
+                              size="small"
+                              label="Fechas a actualizar"
+                              value={
+                                attendanceSelectedDates.length === 0
+                                  ? ''
+                                  : attendanceSelectedDates.length <= 3
+                                    ? [...attendanceSelectedDates].sort().map(formatIsoDateToDisplay).join(', ')
+                                    : `${attendanceSelectedDates.length} fechas seleccionadas`
+                              }
+                              onClick={(e) => {
+                                setAttendanceCalendarMode('multi')
+                                setAttendanceCalendarAnchorEl(e.currentTarget)
+                              }}
+                              helperText="Puedes elegir fechas no continuas."
+                              InputProps={{
+                                readOnly: true,
+                                endAdornment: (
+                                  <InputAdornment position="end">
+                                    <CalendarMonth sx={{ fontSize: 20, color: 'text.secondary' }} />
+                                  </InputAdornment>
+                                ),
+                              }}
+                              sx={{
+                                gridColumn: { xs: '1 / -1', md: importPrimaryAction === 'attendance_fix' ? '1' : '2 / -1' },
+                                maxWidth: { md: 360 },
+                                '& .MuiInputBase-root, & .MuiInputBase-input': {
+                                  cursor: attendanceDateIsoOptions.length === 0 ? 'default' : 'pointer',
+                                },
+                              }}
+                              disabled={attendanceDateIsoOptions.length === 0 || importParsing || importing}
+                            />
+                          )}
+                          {importPrimaryAction !== 'attendance_fix' && (
                           <FormControl size="small" sx={{ gridColumn: { xs: '1 / -1', md: '1 / -1' } }}>
                             <InputLabel>{importOperation === 'attendance_specific_workers' ? 'Trabajadores a actualizar (requerido)' : 'Trabajadores a actualizar (opcional)'}</InputLabel>
                             <Select
@@ -3127,90 +4146,284 @@ export default function CollaboratorsPage() {
                               ))}
                             </Select>
                           </FormControl>
+                          )}
+                          <Popover
+                            open={Boolean(attendanceCalendarAnchorEl)}
+                            anchorEl={attendanceCalendarAnchorEl}
+                            onClose={() => setAttendanceCalendarAnchorEl(null)}
+                            anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                          >
+                            <Box sx={{ p: 0.75, width: { xs: 300, sm: 320 }, maxWidth: 'calc(100vw - 24px)' }}>
+                              <DateCalendar
+                                value={null}
+                                referenceDate={attendanceCalendarReferenceDate || undefined}
+                                minDate={firstAttendanceCalendarDate || undefined}
+                                maxDate={lastAttendanceCalendarDate || undefined}
+                                shouldDisableDate={(day) => !attendanceDateIsoSet.has(localDateToIsoDate(day as Date))}
+                                onChange={(next) => {
+                                  const isoDate = localDateToIsoDate(next as Date | null)
+                                  if (!isoDate || !attendanceDateIsoSet.has(isoDate)) return
+                                  if (attendanceCalendarMode === 'single') {
+                                    setAttendanceStartDate(isoDate)
+                                    setAttendanceCalendarAnchorEl(null)
+                                    return
+                                  }
+                                  if (attendanceCalendarMode === 'range') {
+                                    if (!attendanceStartDate || attendanceEndDate) {
+                                      setAttendanceStartDate(isoDate)
+                                      setAttendanceEndDate('')
+                                      return
+                                    }
+                                    if (isoDate < attendanceStartDate) {
+                                      setAttendanceEndDate(attendanceStartDate)
+                                      setAttendanceStartDate(isoDate)
+                                    } else {
+                                      setAttendanceEndDate(isoDate)
+                                    }
+                                    setAttendanceCalendarAnchorEl(null)
+                                    return
+                                  }
+                                  setAttendanceSelectedDates((prev) => (
+                                    prev.includes(isoDate)
+                                      ? prev.filter((date) => date !== isoDate)
+                                      : [...prev, isoDate].sort()
+                                  ))
+                                }}
+                                slots={{
+                                  day: (props: PickersDayProps) => {
+                                    const isoDate = localDateToIsoDate(props.day as Date)
+                                    const isSelected =
+                                      attendanceCalendarMode === 'multi'
+                                        ? attendanceSelectedDates.includes(isoDate)
+                                        : attendanceCalendarMode === 'range'
+                                          ? attendanceStartDate === isoDate || attendanceEndDate === isoDate
+                                          : attendanceStartDate === isoDate
+                                    const isInRange = Boolean(attendanceStartDate && attendanceEndDate && isoDate >= attendanceStartDate && isoDate <= attendanceEndDate)
+                                    return (
+                                      <PickersDay
+                                        {...props}
+                                        selected={isSelected}
+                                        sx={{
+                                          ...(isInRange && attendanceCalendarMode === 'range'
+                                            ? { backgroundColor: 'rgba(25,118,210,0.14)' }
+                                            : {}),
+                                        }}
+                                      />
+                                    )
+                                  }
+                                }}
+                                sx={{
+                                  mx: 'auto',
+                                  width: '100%',
+                                  maxWidth: 304,
+                                  '& .MuiPickersCalendarHeader-root': { px: 1, mb: 0.25 },
+                                  '& .MuiDayCalendar-header': { mb: 0.15 },
+                                  '& .MuiDayCalendar-weekContainer': { my: 0.1 },
+                                  '& .MuiPickersSlideTransition-root': { minHeight: 210 },
+                                }}
+                              />
+                              {attendanceCalendarMode === 'multi' && (
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, px: 1, pb: 1 }}>
+                                  <Button size="small" onClick={() => setAttendanceSelectedDates([])}>
+                                    Limpiar
+                                  </Button>
+                                  <Button size="small" variant="contained" onClick={() => setAttendanceCalendarAnchorEl(null)}>
+                                    Listo
+                                  </Button>
+                                </Box>
+                              )}
+                            </Box>
+                          </Popover>
                         </Box>
                     ) : null}
                   </Box>
-                  {missingRequiredFields.length > 0 && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      Faltan campos requeridos mapeados: {missingRequiredFields.join(', ')}. Mapéalos antes de importar.
-                    </Alert>
                   )}
-                  {isAttendanceOperation && attendanceDateHeaders.length === 0 && attendanceStartColumnIndex < 0 && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      Para importar asistencia debes incluir al menos una columna de fecha o indicar `Primera columna de fecha`.
-                    </Alert>
-                  )}
-                  {(importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new') && !attendanceStartDate && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      Debes seleccionar una `Fecha específica a actualizar`.
-                    </Alert>
-                  )}
-                  {importOperation === 'attendance_specific_workers' && attendanceTargetDocuments.length === 0 && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      Debes seleccionar al menos un trabajador en `Trabajadores a actualizar`.
-                    </Alert>
-                  )}
-                  {isAttendanceOperation && !hasDocumentColumnBeforeAttendanceStart && (
-                    <Alert severity="error" sx={{ mb: 2 }}>
-                      La columna `document` debe quedar antes de la `Primera columna de fecha` para poder asignar asistencia al colaborador correcto.
-                    </Alert>
-                  )}
-                  {duplicateMappedFields.length > 0 && (
-                    <Alert severity="warning" sx={{ mb: 2 }}>
-                      Hay mapeos duplicados no permitidos: {duplicateMappedFields.join(', ')}. Solo `first_name` y `last_name` permiten múltiples columnas.
+                  {importValidationMessages.length > 0 && (
+                    <Alert severity={duplicateMappedFields.length > 0 && importValidationMessages.length === 1 ? 'warning' : 'error'} sx={{ mb: 2 }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                        Revisa el mapeo antes de importar
+                      </Typography>
+                      <Box component="ul" sx={{ m: 0, pl: 2.25 }}>
+                        {importValidationMessages.map((message) => (
+                          <Typography key={message} component="li" variant="body2">
+                            {message}
+                          </Typography>
+                        ))}
+                      </Box>
                     </Alert>
                   )}
 
-                  <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'flex-start' }}>
+                  {shouldShowFullImportMapper ? (
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexDirection: { xs: 'column', md: 'row' },
+                      gap: 2,
+                      mb: 2,
+                      alignItems: 'flex-start',
+                      maxHeight: { xs: 'none', md: '52vh' },
+                      minHeight: 0,
+                    }}
+                  >
                     {/* Left: Excel headers as cards */}
-                    <Box sx={{ flex: 1, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(2, 1fr)' }, gap: 2 }}>
-                      {(importHeaders || []).map((hdr, idx) => {
+                    <Box
+                      sx={{
+                        flex: 1,
+                        width: '100%',
+                        maxHeight: { xs: 'none', md: '52vh' },
+                        overflowY: { xs: 'visible', md: 'auto' },
+                        pr: { md: 0.5 },
+                      }}
+                    >
+                      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(2, 1fr)' }, gap: 1.25 }}>
+                      {(importOperation === 'profile_specific_columns' || importPrimaryAction === 'new_collaborators'
+                        ? profileDataHeaderEntries
+                        : (importHeaders || []).map((hdr, idx) => ({ hdr, idx }))
+                      ).map(({ hdr, idx }) => {
                         const currentHeaderKey = headerMapKey(hdr, idx)
                         const isAttendanceColumn =
-                          Boolean(parseHeaderDateToISO(hdr)) ||
-                          (attendanceStartColumnIndex >= 0 && idx >= attendanceStartColumnIndex)
+                          isAttendanceOperation && (
+                            Boolean(parseHeaderDateToISO(hdr)) ||
+                            (attendanceStartColumnIndex >= 0 && idx >= attendanceStartColumnIndex)
+                          )
                         const selected = mapping?.[currentHeaderKey] || ''
                         const missingRequired = missingRequiredFields.length > 0 && !selected
                         const isIgnored = !selected || selected === 'ignore'
                         const isInvalidDuplicate = !!selected && selected !== 'ignore' && duplicateMappedFields.includes(selected)
                         return (
-                          <Paper key={`${idx}-${hdr}`} variant="outlined" sx={{ p: 2, borderColor: isAttendanceColumn ? 'info.main' : (isInvalidDuplicate ? 'warning.main' : (missingRequired ? 'error.main' : (isIgnored ? 'warning.main' : 'divider'))), minWidth: 200 }}>
-                            <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{hdr}</Typography>
-                              <Chip
-                                label={isAttendanceColumn ? 'Asistencia (fecha)' : (selected ? getColumnLabel(selected) : 'Sin mapear')}
-                                size="small"
-                                color={isAttendanceColumn ? 'info' : (selected ? 'success' : (isIgnored ? 'warning' : 'default'))}
-                              />
+                          <Paper key={`${idx}-${hdr}`} variant="outlined" sx={{ p: 1.25, borderColor: isAttendanceColumn ? 'info.main' : (isInvalidDuplicate ? 'warning.main' : (missingRequired ? 'error.main' : (isIgnored ? 'warning.main' : 'divider'))), minWidth: 200 }}>
+                            <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
+                              <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>{hdr}</Typography>
+                              <Box
+                                component="span"
+                                sx={{
+                                  flexShrink: 0,
+                                  px: 0.75,
+                                  py: 0.15,
+                                  borderRadius: 1,
+                                  fontSize: '0.72rem',
+                                  lineHeight: 1.4,
+                                  color: isAttendanceColumn
+                                    ? 'info.dark'
+                                    : selected && selected !== 'ignore'
+                                      ? 'success.dark'
+                                      : 'text.secondary',
+                                  backgroundColor: isAttendanceColumn
+                                    ? 'rgba(2, 136, 209, 0.1)'
+                                    : selected && selected !== 'ignore'
+                                      ? 'rgba(46, 125, 50, 0.1)'
+                                      : 'rgba(0, 0, 0, 0.06)',
+                                }}
+                              >
+                                {isAttendanceColumn ? 'Asistencia (fecha)' : (selected ? getColumnLabel(selected) : 'Sin mapear')}
+                              </Box>
                             </Box>
 
                             <Typography variant="caption" color="text.secondary">Ejemplos (primeras 3 filas)</Typography>
-                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', my: 1 }}>
+                            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mt: 0.5, mb: 0.75 }}>
                               {importRows && importRows.length > 0 ? importRows.slice(0, 3).map((row, rIdx) => (
-                                <Typography key={rIdx} variant="body2" sx={{ backgroundColor: 'rgba(0,0,0,0.03)', px: 1, py: 0.4, borderRadius: 1 }}>{Array.isArray(row) ? (row[idx] ?? '') : (row[hdr] ?? '')}</Typography>
+                                <Typography key={rIdx} variant="body2" sx={{ backgroundColor: 'rgba(0,0,0,0.03)', px: 0.8, py: 0.25, borderRadius: 1, lineHeight: 1.35 }}>{Array.isArray(row) ? (row[idx] ?? '') : (row[hdr] ?? '')}</Typography>
                               )) : (
                                 <Typography variant="body2" color="text.secondary">— Sin filas —</Typography>
                               )}
                             </Box>
 
-                            <FormControl fullWidth size="small">
+                            <FormControl
+                              fullWidth
+                              size="small"
+                              sx={{
+                                '& .MuiInputBase-root': { minHeight: 36 },
+                                '& .MuiSelect-select': {
+                                  py: 0.75,
+                                  fontWeight: selected && selected !== 'ignore' ? 600 : 400,
+                                  color: selected && selected !== 'ignore' ? 'primary.main' : 'text.primary',
+                                },
+                              }}
+                            >
                               <InputLabel>Mapear a</InputLabel>
                               <Select
                                 value={isAttendanceColumn ? '' : selected}
                                 label="Mapear a"
                                 disabled={isAttendanceColumn}
+                                displayEmpty
+                                renderValue={(value) => value && value !== 'ignore' ? getColumnLabel(String(value)) : 'No mapear'}
                                 onChange={(e) => setMapping((prev: any) => ({ ...(prev || {}), [currentHeaderKey]: e.target.value }))}
+                                MenuProps={{
+                                  PaperProps: {
+                                    sx: {
+                                      maxHeight: 360,
+                                      '& .MuiMenuItem-root': {
+                                        position: 'relative',
+                                        alignItems: 'flex-start',
+                                        minHeight: 44,
+                                        py: 0.8,
+                                        borderRadius: 1,
+                                        mx: 0.75,
+                                        my: 0.25,
+                                        '&:hover': {
+                                          backgroundColor: 'rgba(0, 95, 184, 0.08)',
+                                        },
+                                        '&.Mui-selected': {
+                                          backgroundColor: 'rgba(0, 95, 184, 0.12)',
+                                          '&::before': {
+                                            content: '""',
+                                            position: 'absolute',
+                                            left: 0,
+                                            top: 6,
+                                            bottom: 6,
+                                            width: 3,
+                                            borderRadius: 3,
+                                            backgroundColor: 'primary.main',
+                                          },
+                                          '&:hover': {
+                                            backgroundColor: 'rgba(0, 95, 184, 0.16)',
+                                          },
+                                        },
+                                      },
+                                    },
+                                  },
+                                }}
                               >
-                                <MenuItem value="">(No mapear)</MenuItem>
-                                {collaboratorColumns.map(col => {
+                                <MenuItem value="">
+                                  <Box>
+                                    <Typography variant="body2">No mapear</Typography>
+                                    <Typography variant="caption" color="text.secondary">Ignorar esta columna del Excel</Typography>
+                                  </Box>
+                                </MenuItem>
+                                {selectableCollaboratorColumns.map(col => {
                                   const alreadyUsedByOther = !multiMapAllowedFields.has(col) &&
                                     Object.entries(mapping || {}).some(([otherKey, mapped]) => otherKey !== currentHeaderKey && mapped === col)
                                   return (
                                     <MenuItem key={col} value={col} disabled={alreadyUsedByOther}>
-                                      {getColumnLabel(col)}
-                                      {collaboratorColumnDescriptions?.[col] ? ` — ${collaboratorColumnDescriptions[col]}` : ''}
-                                      {` (${col})`}
-                                      {alreadyUsedByOther ? ' (ya usado)' : ''}
+                                      <Box sx={{ display: 'flex', width: '100%', gap: 1, justifyContent: 'space-between' }}>
+                                        <Box sx={{ minWidth: 0 }}>
+                                          <Typography variant="body2" sx={{ fontWeight: 500, lineHeight: 1.25 }}>
+                                            {getColumnLabel(col)}
+                                          </Typography>
+                                          {collaboratorColumnDescriptions?.[col] && (
+                                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.25 }}>
+                                              {collaboratorColumnDescriptions[col]}
+                                            </Typography>
+                                          )}
+                                        </Box>
+                                        {alreadyUsedByOther && (
+                                          <Box
+                                            component="span"
+                                            sx={{
+                                              flexShrink: 0,
+                                              px: 0.75,
+                                              py: 0.1,
+                                              borderRadius: 1,
+                                              fontSize: '0.7rem',
+                                              lineHeight: 1.4,
+                                              color: 'text.secondary',
+                                              backgroundColor: 'rgba(0, 0, 0, 0.06)',
+                                            }}
+                                          >
+                                            Ya usado
+                                          </Box>
+                                        )}
+                                      </Box>
                                     </MenuItem>
                                   )
                                 })}
@@ -3229,23 +4442,40 @@ export default function CollaboratorsPage() {
                           </Paper>
                         )
                       })}
+                      </Box>
                     </Box>
 
-                    {/* Right: pr_collaborators columns status */}
-                    <Box sx={{ width: { xs: '100%', md: '320px' }, maxHeight: '52vh', overflowY: 'auto', borderRadius: 1 }}>
-                      <Typography variant="subtitle2" sx={{ mb: 1 }}>Columnas de pr_collaborators</Typography>
+                    {/* Right: collaborator fields status */}
+                    <Box sx={{ width: { xs: '100%', md: '320px' }, maxHeight: { xs: 'none', md: '52vh' }, overflowY: { xs: 'visible', md: 'auto' }, borderRadius: 1, pr: { md: 0.5 } }}>
+                      <Typography variant="subtitle2" sx={{ mb: 1 }}>Campos de colaboradores</Typography>
                       <Box sx={{ display: 'grid', gap: 1 }}>
-                        {collaboratorColumns.map(col => {
+                        {selectableCollaboratorColumns.map(col => {
                           const mapped = mappedFieldsSet.has(col)
                           return (
-                            <Paper key={col} variant="outlined" sx={{ p: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: mapped ? 'rgba(0,128,0,0.03)' : 'rgba(0,0,0,0.02)', borderColor: mapped ? 'success.main' : 'divider' }}>
-                              <Box>
-                                <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 600 }}>{col}</Typography>
-                                {collaboratorColumnDescriptions?.[col] && (
-                                  <Typography variant="caption" color="text.secondary">{collaboratorColumnDescriptions[col]}</Typography>
-                                )}
+                            <Paper key={col} variant="outlined" sx={{ p: 1, backgroundColor: mapped ? 'rgba(0,128,0,0.03)' : 'rgba(0,0,0,0.02)', borderColor: mapped ? 'success.main' : 'divider' }}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+                                <Typography variant="body2" sx={{ fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.25 }}>{getColumnLabel(col)}</Typography>
+                                <Box
+                                  component="span"
+                                  sx={{
+                                    flexShrink: 0,
+                                    px: 0.75,
+                                    py: 0.15,
+                                    borderRadius: 1,
+                                    fontSize: '0.72rem',
+                                    lineHeight: 1.4,
+                                    color: mapped ? 'success.dark' : 'text.secondary',
+                                    backgroundColor: mapped ? 'rgba(46, 125, 50, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+                                  }}
+                                >
+                                  {mapped ? 'Recibe datos' : 'Sin datos'}
+                                </Box>
                               </Box>
-                              <Chip label={mapped ? 'Recibe datos' : 'Sin datos'} size="small" color={mapped ? 'success' : 'default'} />
+                              {collaboratorColumnDescriptions?.[col] && (
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35, lineHeight: 1.35 }}>
+                                  {collaboratorColumnDescriptions[col]}
+                                </Typography>
+                              )}
                             </Paper>
                           )
                         })}
@@ -3262,7 +4492,18 @@ export default function CollaboratorsPage() {
                       </Box>
                     </Box>
                   </Box>
+                  ) : null}
 
+                  {!importConfigurationCollapsed && (showImportAdvancedOptions || showImportMappingEditor) && (
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+                      <Button size="small" variant="text" onClick={() => setShowImportPreviewTables((prev) => !prev)}>
+                        {showImportPreviewTables ? 'Ocultar vistas técnicas' : 'Mostrar vistas técnicas'}
+                      </Button>
+                    </Box>
+                  )}
+
+                  {showImportPreviewTables && (
+                  <>
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>Vista previa original</Typography>
                   <Box sx={{ width: '100%', overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                     <Table size="small" sx={{ tableLayout: 'auto', width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
@@ -3376,60 +4617,85 @@ export default function CollaboratorsPage() {
                       </Table>
                     </Box>
                   )}
+                  </>
+                  )}
 
-                  <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
-                    Vista previa asistencia (documento x fecha)
-                  </Typography>
-                  {attendancePreview.dates.length === 0 ? (
-                    <Alert severity="info" sx={{ mb: 1 }}>
-                      No hay columnas de fecha detectadas para generar la vista previa de asistencia.
-                    </Alert>
-                  ) : attendancePreview.rows.length === 0 ? (
-                    <Alert severity="info" sx={{ mb: 1 }}>
-                      No hay filas con documento/asistencia para mostrar.
-                    </Alert>
-                  ) : (
-                    <Box sx={{ width: '100%', overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-                      <Table size="small" sx={{ tableLayout: 'auto', width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
-                        <TableHead>
-                          <TableRow>
-                            <TableCell sx={{ fontSize: '0.8rem', fontWeight: 700, backgroundColor: 'rgba(25,118,210,0.08)', border: '1px solid', borderColor: 'divider', minWidth: 160 }}>
-                              Documento
-                            </TableCell>
-                            {attendancePreview.dates.map((dateCol) => (
-                              <TableCell
-                                key={`attendance-preview-header-${dateCol.isoDate}`}
-                                sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap', backgroundColor: 'rgba(25,118,210,0.08)', border: '1px solid', borderColor: 'divider', minWidth: 120 }}
-                              >
-                                {formatIsoDateToDisplay(dateCol.isoDate)}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {attendancePreview.rows.map((row) => (
-                            <TableRow key={`attendance-preview-row-${row.document}`}>
-                              <TableCell sx={{ fontSize: '0.8rem', border: '1px solid', borderColor: 'divider', fontWeight: 600 }}>
-                                {formatDocumentForDisplay(row.document)}
-                              </TableCell>
-                              {attendancePreview.dates.map((dateCol) => {
-                                const value = row.byDate[dateCol.isoDate]
-                                const label = value?.status ? `${value.code} (${value.status})` : (value?.code || '')
-                                return (
-                                  <TableCell
-                                    key={`attendance-preview-cell-${row.document}-${dateCol.isoDate}`}
-                                    sx={{ fontSize: '0.78rem', border: '1px solid', borderColor: 'divider', minWidth: 120 }}
-                                    title={label}
-                                  >
-                                    {label || '-'}
+                  {shouldShowAttendanceImportPreview && (
+                    <>
+                      <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
+                        Vista previa asistencia
+                      </Typography>
+                      {attendancePreview.dates.length === 0 ? (
+                        <Alert severity="info" sx={{ mb: 1 }}>
+                          No hay columnas de fecha detectadas para generar la vista previa de asistencia.
+                        </Alert>
+                      ) : attendancePreview.rows.length === 0 ? (
+                        <Alert severity="info" sx={{ mb: 1 }}>
+                          No hay filas con documento/asistencia para mostrar.
+                        </Alert>
+                      ) : (
+                        <Box sx={{ width: '100%', overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                          <Table size="small" sx={{ tableLayout: 'auto', width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
+                            <TableHead>
+                              <TableRow>
+                                <TableCell sx={{ fontSize: '0.8rem', fontWeight: 700, backgroundColor: 'rgba(25,118,210,0.08)', border: '1px solid', borderColor: 'divider', minWidth: 160 }}>
+                                  Documento
+                                </TableCell>
+                                {attendancePreview.dates.map((dateCol) => {
+                                  const isImportColumn = importCandidateDates.includes(dateCol.isoDate)
+                                  return (
+                                    <TableCell
+                                      key={`attendance-preview-header-${dateCol.isoDate}`}
+                                      sx={{
+                                        fontSize: '0.8rem',
+                                        whiteSpace: 'nowrap',
+                                        backgroundColor: isImportColumn ? colors.blue13 : 'rgba(25,118,210,0.08)',
+                                        color: isImportColumn ? colors.blue1 : 'inherit',
+                                        fontWeight: isImportColumn ? 700 : 500,
+                                        border: '1px solid',
+                                        borderColor: isImportColumn ? colors.blue8 : 'divider',
+                                        minWidth: 120
+                                      }}
+                                    >
+                                      {formatIsoDateToDisplay(dateCol.isoDate)}
+                                    </TableCell>
+                                  )
+                                })}
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {attendancePreview.rows.map((row) => (
+                                <TableRow key={`attendance-preview-row-${row.document}`}>
+                                  <TableCell sx={{ fontSize: '0.8rem', border: '1px solid', borderColor: 'divider', fontWeight: 600 }}>
+                                    {formatDocumentForDisplay(row.document)}
                                   </TableCell>
-                                )
-                              })}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </Box>
+                                  {attendancePreview.dates.map((dateCol) => {
+                                    const value = row.byDate[dateCol.isoDate]
+                                    const label = value?.status ? `${value.code} (${value.status})` : (value?.code || '')
+                                    const isImportColumn = importCandidateDates.includes(dateCol.isoDate)
+                                    return (
+                                      <TableCell
+                                        key={`attendance-preview-cell-${row.document}-${dateCol.isoDate}`}
+                                        sx={{
+                                          fontSize: '0.78rem',
+                                          border: '1px solid',
+                                          borderColor: isImportColumn ? colors.blue8 : 'divider',
+                                          backgroundColor: isImportColumn ? 'rgba(51,147,255,0.10)' : 'transparent',
+                                          minWidth: 120
+                                        }}
+                                        title={label}
+                                      >
+                                        {label || '-'}
+                                      </TableCell>
+                                    )
+                                  })}
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </Box>
+                      )}
+                    </>
                   )}
 
                 </DialogContent>
@@ -3438,8 +4704,20 @@ export default function CollaboratorsPage() {
                   <Button
                     variant="contained"
                     color="primary"
-                    endIcon={<EventNote />}
                     onClick={async () => {
+                      if (importPrimaryAction === 'new_collaborators') {
+                        handleExecuteImport({
+                          onDuplicate: 'skip',
+                          createAuth: false,
+                          updateDefaults: false,
+                          attendanceOnly: false,
+                          profileOnly: false,
+                          allowAttendanceForSkippedDuplicates: false,
+                          attendanceWriteMode: 'upsert',
+                          attendanceExactDate: excelIncludesToday ? todayIsoDate : undefined,
+                        })
+                        return
+                      }
                       if (importOperation === 'attendance_specific_date_then_new') {
                         try {
                           await handleExecuteImport({
@@ -3498,25 +4776,35 @@ export default function CollaboratorsPage() {
                         updateDefaults: false,
                         attendanceOnly: true,
                         attendanceWriteMode,
-                        attendanceStartDate: attendanceStartDate || undefined,
+                        attendanceStartDate: importPrimaryAction === 'attendance_fix'
+                          ? (attendanceStartDate || undefined)
+                          : attendanceDailyImportScope === 'next'
+                            ? (suggestedSingleImportDate || undefined)
+                            : (attendanceStartDate || undefined),
+                        attendanceEndDate: importOperation === 'attendance_overwrite'
+                          ? (attendanceEndDate || undefined)
+                          : undefined,
                         attendanceExactDate: importOperation === 'attendance_specific_date'
                           ? (attendanceStartDate || undefined)
+                          : importPrimaryAction !== 'attendance_fix' && attendanceDailyImportScope === 'next'
+                            ? (suggestedSingleImportDate || undefined)
+                          : undefined,
+                        attendanceExactDates: importOperation === 'attendance_specific_dates'
+                          ? importCandidateDates
                           : undefined,
                         attendanceStartColumnIndex: attendanceStartColumnIndex >= 0 ? attendanceStartColumnIndex : undefined,
                         targetDocuments: attendanceTargetDocuments,
                       })
                     }}
-                    disabled={importing || importParsing || !canExecuteImportByMode}
+                    disabled={importing || importParsing || !canExecuteImportByMode || (importPrimaryAction === 'new_collaborators' && newCollaboratorImportPreview.canPreview && newCollaboratorImportPreview.created === 0) || (importPrimaryAction !== 'new_collaborators' && isAttendanceOperation && !needsImportMappingReview && importCandidateDates.length === 0)}
                   >
-                    Ejecutar importación
+                    Ejecutar
                   </Button>
                 </DialogActions>
               </Dialog>
-            </Box>
-          </Paper>
 
           <Backdrop
-            open={importing || importParsing}
+            open={importing}
             sx={{
               color: '#fff',
               zIndex: (theme) => theme.zIndex.modal + 10,
@@ -3526,37 +4814,70 @@ export default function CollaboratorsPage() {
             <Box sx={{ textAlign: 'center', px: 3 }}>
               <CircularProgress color="inherit" />
               <Typography variant="h6" sx={{ mt: 2, fontWeight: 700 }}>
-                {importing ? 'Importación en proceso' : 'Procesando archivo'}
+                Importación en proceso
               </Typography>
-              {importing ? (
-                <Box sx={{ mt: 1.5, width: { xs: 260, sm: 360 } }}>
-                  <LinearProgress
-                    variant="determinate"
-                    value={Math.max(0, Math.min(100, importProgress))}
-                    sx={{ height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' }}
-                  />
-                  <Typography variant="caption" sx={{ display: 'block', mt: 0.75, opacity: 0.92 }}>
-                    {Math.max(0, Math.min(100, Math.round(importProgress)))}%
-                  </Typography>
-                </Box>
-              ) : (
-                <Box sx={{ mt: 1.5, width: { xs: 260, sm: 360 } }}>
-                  <LinearProgress
-                    variant="indeterminate"
-                    sx={{ height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' }}
-                  />
-                </Box>
-              )}
+              <Box sx={{ mt: 1.5, width: { xs: 260, sm: 360 } }}>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.max(0, Math.min(100, importProgress))}
+                  sx={{ height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' }}
+                />
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.75, opacity: 0.92 }}>
+                  {Math.max(0, Math.min(100, Math.round(importProgress)))}%
+                </Typography>
+              </Box>
               <Typography variant="body2" sx={{ mt: 0.5 }}>
-                {importing
-                  ? (importStatusMessage || 'Escribiendo colaboradores y asistencia. No cierres esta ventana.')
-                  : (importParsingMessage || 'Preparando archivo para importación...')}
+                {importStatusMessage || (importOperation === 'profile_specific_columns'
+                  ? 'Actualizando datos de colaboradores. No cierres esta ventana.'
+                  : 'Escribiendo colaboradores y asistencia. No cierres esta ventana.')}
               </Typography>
             </Box>
           </Backdrop>
 
-          {/* Vista de colaboradores */}
-          {viewMode === 'cards' ? (
+          {/* Vista principal */}
+          {showAttendanceForUser ? (
+            <Box
+              sx={{
+                mt: 1,
+                '& > .MuiBox-root > .MuiBox-root > :first-of-type': {
+                  display: 'none',
+                },
+                '& .MuiContainer-root': {
+                  px: '0 !important',
+                  pt: '0 !important',
+                  pb: '0 !important',
+                },
+              }}
+            >
+              <AttendanceView
+                renderImportAction={() => (
+                  <Tooltip title="Cargar colaboradores" arrow>
+                    <span className="attendance-action attendance-compact-action">
+                      <IconButton
+                        onClick={handleUploadFile}
+                        aria-label="Cargar colaboradores"
+                        sx={{
+                          width: 38,
+                          height: 34,
+                          border: `1px solid ${colors.blue6}`,
+                          borderRadius: 1,
+                          color: colors.blue6,
+                          transition: 'background-color 160ms ease, border-color 160ms ease, color 160ms ease',
+                          '&:hover': {
+                            bgcolor: '#eef6ff',
+                            borderColor: colors.blue8,
+                            color: colors.blue8,
+                          },
+                        }}
+                      >
+                        <Upload fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                )}
+              />
+            </Box>
+          ) : viewMode === 'cards' ? (
             <Box
               sx={{
                 width: '100%',
@@ -4209,6 +5530,7 @@ export default function CollaboratorsPage() {
           </Menu>
 
           {/* FAB para agregar colaborador */}
+          {!showAttendanceForUser && (
           <Fab
             aria-label="Agregar colaborador"
             onClick={handleAddCollaborator}
@@ -4242,6 +5564,7 @@ export default function CollaboratorsPage() {
               }}
             />
           </Fab>
+          )}
 
           {/* Dialog para agregar/editar colaborador */}
           <Dialog open={openDialog} onClose={() => { resetCollaboratorForm(); setEditingCollaborator(null); setOpenDialog(false); }} maxWidth="md" fullWidth>

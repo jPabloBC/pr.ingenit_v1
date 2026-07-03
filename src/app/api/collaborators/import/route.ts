@@ -789,7 +789,7 @@ export async function POST(req: NextRequest) {
 
             const updatePayload: Record<string, any> = {}
             for (const [key, value] of Object.entries(record)) {
-              if (key === 'company_id' || key === 'user_id') continue
+              if (key === 'company_id' || key === 'user_id' || key === 'document') continue
               if (value === undefined || value === null || value === '') continue
               updatePayload[key] = value
             }
