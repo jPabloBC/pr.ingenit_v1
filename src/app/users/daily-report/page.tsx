@@ -2163,6 +2163,7 @@ function DetailPersonnelEquipmentV2({
   nocFrontColumnLabel,
   fieldReportsForDate = [],
   reportFrontNames = [],
+  reportFrontTypesByName = {},
   nocFrontAssignment,
   getFrontCounterpartInfo,
   prevencionistaFrontDistribution = {
@@ -2273,6 +2274,7 @@ function DetailPersonnelEquipmentV2({
   nocFrontColumnLabel?: string
   fieldReportsForDate?: any[]
   reportFrontNames?: string[]
+  reportFrontTypesByName?: Record<string, string>
   nocFrontAssignment?: any
   getFrontCounterpartInfo?: (row: any, section: "indirect" | "direct") => {
     currentFront: "CANALETAS" | "PISCINAS"
@@ -2502,7 +2504,9 @@ function DetailPersonnelEquipmentV2({
   ]
   const isUdrDynamicColumn = (label: string) => {
     const normalized = String(label || "").toUpperCase()
+    const catalogType = reportFrontTypesByName[normalizeDynamicFrontKey(label)]
     return (
+      String(catalogType || "").trim().toLowerCase() === "udr" ||
       normalized.includes("UDR") ||
       normalized.includes("USO DE RECURSOS") ||
       normalized.includes("NOC N") ||
@@ -6392,6 +6396,7 @@ export default function DailyReportPage() {
   const [dailyStatusRows, setDailyStatusRows] = useState<DailyStatusLite[]>([])
   const [fieldReportsForDate, setFieldReportsForDate] = useState<any[]>([])
   const [reportFrontNames, setReportFrontNames] = useState<string[]>([])
+  const [reportFrontTypesByName, setReportFrontTypesByName] = useState<Record<string, string>>({})
   const collaboratorsLoadPromiseRef = useRef<Record<string, Promise<CollaboratorLite[]>>>({})
   const fieldReportsByDateCacheRef = useRef<Record<string, any[]>>({})
   const [evidenceViewUrls, setEvidenceViewUrls] = useState<Record<string, string>>({})
@@ -6577,6 +6582,13 @@ export default function DailyReportPage() {
       .map((front: any) => String(front?.name || "").replace(/\s+/g, " ").trim())
       .filter(Boolean)
     setReportFrontNames(Array.from(new Set(names)))
+    const typesByName: Record<string, string> = {}
+    fronts.forEach((front: any) => {
+      const name = String(front?.name || "").replace(/\s+/g, " ").trim()
+      if (!name) return
+      typesByName[normalizeDynamicFrontKey(name)] = String(front?.type || "").trim().toLowerCase()
+    })
+    setReportFrontTypesByName(typesByName)
   }
 
   const loadCollaborators = async (force = false, asOfDate?: string) => {
@@ -14209,6 +14221,7 @@ export default function DailyReportPage() {
                       nocFrontColumnLabel={resolvedDailyReportDynamicFrontLabel}
                       fieldReportsForDate={fieldReportsForDate}
                       reportFrontNames={reportFrontNames}
+                      reportFrontTypesByName={reportFrontTypesByName}
                       nocFrontAssignment={nocFrontAssignment}
                       getFrontCounterpartInfo={getFrontCounterpartInfo}
                       prevencionistaFrontDistribution={prevencionistaFrontDistribution}
@@ -14888,6 +14901,7 @@ export default function DailyReportPage() {
                         nocFrontColumnLabel={resolvedDailyReportDynamicFrontLabel}
                         fieldReportsForDate={fieldReportsForDate}
                         reportFrontNames={reportFrontNames}
+                        reportFrontTypesByName={reportFrontTypesByName}
                         nocFrontAssignment={nocFrontAssignment}
                         getFrontCounterpartInfo={getFrontCounterpartInfo}
                         prevencionistaFrontDistribution={prevencionistaFrontDistribution}
