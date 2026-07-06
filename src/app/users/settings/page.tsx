@@ -44,6 +44,7 @@ type SnackbarState = {
 }
 
 const ASSET_TYPES = [
+  { value: 'email_logo', label: 'Correo' },
   { value: 'field_report_logo', label: 'Reporte terreno' },
   { value: 'daily_report_logo', label: 'Reporte diario' },
   { value: 'attendance_logo', label: 'Asistencia' },

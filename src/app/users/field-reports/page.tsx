@@ -33,7 +33,8 @@ import {
   Snackbar,
   Alert,
   Tabs,
-  Tab
+  Tab,
+  Autocomplete
 } from '@mui/material'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
@@ -601,6 +602,13 @@ const pickFieldReportHeaderLogo = (assets: CompanyAsset[]) => {
     .sort((a, b) => b.score - a.score)[0]?.asset || null
 }
 
+const pickEmailLogo = (assets: CompanyAsset[]) => {
+  const active = (assets || []).filter((asset) => String(asset?.r2_key || '').trim() && String(asset?.asset_type || '') === 'email_logo')
+  return active
+    .slice()
+    .sort((a, b) => Number(Boolean(b.is_default)) - Number(Boolean(a.is_default)))[0] || null
+}
+
 const detectFieldReportFront = (report: any): 'CANALETAS' | 'PISCINAS' | null => {
   const normalize = (v: any) =>
     String(v || '')
@@ -693,8 +701,12 @@ export default function FieldReportsPage() {
   const openSessionRef = useRef(0)
   const reportModalSessionRef = useRef(0)
   const [fieldReportHeaderLogoKey, setFieldReportHeaderLogoKey] = useState('')
+  const [emailLogoKey, setEmailLogoKey] = useState('')
   const fieldReportHeaderLogoUrl = fieldReportHeaderLogoKey
     ? `/api/company-assets/file?key=${encodeURIComponent(fieldReportHeaderLogoKey)}`
+    : ''
+  const emailLogoUrl = emailLogoKey
+    ? `/api/company-assets/file?key=${encodeURIComponent(emailLogoKey)}`
     : ''
 
   useEffect(() => {
@@ -702,16 +714,21 @@ export default function FieldReportsPage() {
     const loadFieldReportHeaderLogo = async () => {
       if (!session?.user?.companyId) {
         if (mounted) setFieldReportHeaderLogoKey('')
+        if (mounted) setEmailLogoKey('')
         return
       }
       try {
         const res = await fetch('/api/company-assets', { cache: 'no-store' })
         const json = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(json?.error || 'No se pudo cargar logo de reporte terreno')
-        const selected = pickFieldReportHeaderLogo(Array.isArray(json?.assets) ? json.assets : [])
+        const assets = Array.isArray(json?.assets) ? json.assets : []
+        const selected = pickFieldReportHeaderLogo(assets)
+        const selectedEmailLogo = pickEmailLogo(assets)
         if (mounted) setFieldReportHeaderLogoKey(String(selected?.r2_key || ''))
+        if (mounted) setEmailLogoKey(String(selectedEmailLogo?.r2_key || ''))
       } catch {
         if (mounted) setFieldReportHeaderLogoKey('')
+        if (mounted) setEmailLogoKey('')
       }
     }
     void loadFieldReportHeaderLogo()
@@ -845,6 +862,18 @@ export default function FieldReportsPage() {
   const [materialQtyCellActivityIndex, setMaterialQtyCellActivityIndex] = useState<number>(0)
   const [materialQtyCellDraft, setMaterialQtyCellDraft] = useState<string>('0')
   const [confirmCloseReportOpen, setConfirmCloseReportOpen] = useState(false)
+  const [notifyCompletedConfirm, setNotifyCompletedConfirm] = useState<{
+    date: string
+    reportCount: number
+    loading: boolean
+    error?: string
+    recipients: Array<{ id: string; name: string; email: string; role: string; receives_email: boolean }>
+    emailRecipients: string[]
+    emailRecipientCount: number
+    sendInternal: boolean
+    sendEmail: boolean
+    reportsForAttachment: FieldReport[]
+  } | null>(null)
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' | 'warning' }>({ open: false, message: '', severity: 'info' })
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [dailyExcelPreviewOpen, setDailyExcelPreviewOpen] = useState(false)
@@ -6349,10 +6378,53 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
     try { return JSON.parse(val) } catch { return val }
   }
 
-  const notifyFieldReportsDayCompleted = async (date: string, reportCount: number) => {
+  const normalizeNotificationEmail = (value: any) => String(value || '').trim().toLowerCase()
+  const isValidNotificationEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  const normalizeNotificationEmailList = (values: any[]) => Array.from(new Set(
+    values.map(normalizeNotificationEmail).filter(isValidNotificationEmail)
+  ))
+  const formatNotificationDate = (date: string) => {
+    const [year, month, day] = String(date || '').slice(0, 10).split('-')
+    return year && month && day ? `${day}-${month}-${year}` : date
+  }
+  const EXCEL_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  const getFieldReportsAttachmentName = (date: string) => `reportes_terreno_${String(date || '').slice(0, 10) || 'sin_fecha'}.xlsx`
+  const arrayBufferToBase64 = (buffer: ArrayBuffer) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '')
+      resolve(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl)
+    }
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(new Blob([buffer], { type: EXCEL_CONTENT_TYPE }))
+  })
+  const notificationEmailDomainOptions = ['@pugamujica.cl', '@gmail.com', '@outlook.com', '@hotmail.com']
+  const getNotificationEmailOptions = (inputValue: string) => {
+    const input = normalizeNotificationEmail(inputValue)
+    if (!input || input.includes('@')) return []
+    return notificationEmailDomainOptions.map((domain) => `${input}${domain}`)
+  }
+  const getEvidenceDownloadUrl = (file: EvidenceFile) => {
+    const key = String(file?.key || '').trim()
+    if (!key) return ''
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    return `${origin}/api/field-reports/evidence/download?key=${encodeURIComponent(key)}&name=${encodeURIComponent(file?.name || 'imagen')}`
+  }
+
+  const previewFieldReportsDayCompletedNotification = async (date: string, reportCount: number, reportsForAttachment: FieldReport[] = []) => {
     const safeDate = String(date || '').slice(0, 10)
     if (!safeDate) return
-    setNotifyingCompletedDate(safeDate)
+    setNotifyCompletedConfirm({
+      date: safeDate,
+      reportCount,
+      loading: true,
+      recipients: [],
+      emailRecipients: [],
+      emailRecipientCount: 0,
+      sendInternal: true,
+      sendEmail: false,
+      reportsForAttachment,
+    })
     try {
       const response = await fetch('/api/internal-notifications', {
         method: 'POST',
@@ -6361,16 +6433,84 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
           type: 'field_reports_day_completed',
           date: safeDate,
           report_count: Math.max(0, Number(reportCount || 0) || 0),
+          preview: true,
+        }),
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(payload?.error || 'No se pudo preparar la vista previa')
+      setNotifyCompletedConfirm((current) => {
+        if (!current || current.date !== safeDate) return current
+        return {
+          ...current,
+          loading: false,
+          error: undefined,
+          recipients: Array.isArray(payload?.recipients) ? payload.recipients : [],
+          emailRecipients: Array.isArray(payload?.email_recipients)
+            ? normalizeNotificationEmailList(payload.email_recipients.map((recipient: any) => recipient?.email || recipient))
+            : [],
+          emailRecipientCount: Number(payload?.email_recipient_count || 0) || 0,
+        }
+      })
+    } catch (err: any) {
+      setNotifyCompletedConfirm((current) => {
+        if (!current || current.date !== safeDate) return current
+        return {
+          ...current,
+          loading: false,
+          error: err?.message || 'No se pudo preparar la vista previa',
+          recipients: [],
+          emailRecipients: [],
+          emailRecipientCount: 0,
+        }
+      })
+    }
+  }
+
+  const notifyFieldReportsDayCompleted = async (
+    date: string,
+    reportCount: number,
+    emailRecipients: string[] = [],
+    options: { sendInternal: boolean; sendEmail: boolean; reportsForAttachment?: FieldReport[] } = { sendInternal: true, sendEmail: false }
+  ) => {
+    const safeDate = String(date || '').slice(0, 10)
+    if (!safeDate) return
+    setNotifyingCompletedDate(safeDate)
+    try {
+      const emailAttachment = options.sendEmail
+        ? await handleExportReportsListExcel(
+          options.reportsForAttachment || [],
+          getFieldReportsAttachmentName(safeDate),
+          { returnAttachment: true, silent: true, forcedDesignVersion: 'V2', includeEvidenceImages: false }
+        )
+        : null
+      if (options.sendEmail && !emailAttachment) {
+        throw new Error('No se pudo generar el Excel adjunto para el correo.')
+      }
+      const response = await fetch('/api/internal-notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'field_reports_day_completed',
+          date: safeDate,
+          report_count: Math.max(0, Number(reportCount || 0) || 0),
+          email_recipients: normalizeNotificationEmailList(emailRecipients),
+          email_attachment: emailAttachment && typeof emailAttachment === 'object'
+            ? {
+              filename: emailAttachment.filename,
+              content_base64: emailAttachment.contentBase64,
+              content_type: emailAttachment.contentType,
+            }
+            : undefined,
+          send_internal: options.sendInternal,
+          send_email: options.sendEmail,
         }),
       })
       const payload = await response.json().catch(() => null)
       if (!response.ok) throw new Error(payload?.error || 'No se pudo enviar la notificación interna')
       const inserted = Number(payload?.inserted_count || 0)
       showSnackbar(
-        inserted > 0
-          ? `Notificación interna enviada a ${inserted} usuario${inserted === 1 ? '' : 's'}.`
-          : (payload?.message || 'No hay destinatarios para notificar.'),
-        inserted > 0 ? 'success' : 'info'
+        `Envío completado. Plataforma: ${inserted}. Correos: ${Number(payload?.email_sent_count || 0)}.`,
+        'success'
       )
     } catch (err: any) {
       showSnackbar(err?.message || 'No se pudo enviar la notificación interna', 'error')
@@ -6430,6 +6570,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
     collaboratorLookup?: Record<string, { name: string; position: string }>
     crewByPersonId?: Record<string, string>
     crewMembers?: any[]
+    calculationVersion?: string | number
+    personWorkdayHours?: number
+    machineWorkdayHours?: number
+    halfDayHours?: number
+    maxPersonHoursWithOvertime?: number
+    maxMachineHoursWithOvertime?: number
   }) => {
     const splitCrewLabels = (value: any): string[] => {
       if (!value) return []
@@ -7167,7 +7313,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[field-reports][save] completed', {
 
   const exportWithExcelJs = async (
     filename: string,
-    sheets: Array<{ name: string; built: { rows: any[][]; cols: any[]; merges: any[]; rowHeights: any[] }; evidenceImages?: EvidenceFile[] }>
+    sheets: Array<{
+      name: string
+      built: { rows: any[][]; cols: any[]; merges: any[]; rowHeights: any[] }
+      evidenceImages?: EvidenceFile[]
+      evidenceLinks?: Array<{ name: string; url: string }>
+    }>,
+    options?: { returnAttachment?: boolean }
   ) => {
     let ExcelJS: any = null
     try {
@@ -8353,6 +8505,44 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] pre-writeBuffer cell'
             }
           }
         }
+        const sheetEvidenceLinks = Array.isArray(s.evidenceLinks) ? s.evidenceLinks : []
+        if (sheetEvidenceLinks.length > 0) {
+          const firstCol = 2
+          const lastCol = Math.max(2, Math.min(DETAIL_COL_END, colCount || 20))
+          let evidenceLinkRow = Math.max(rowCount + 2, ws.rowCount + 2)
+
+          ws.mergeCells(evidenceLinkRow, firstCol, evidenceLinkRow, lastCol)
+          const evidenceHeader = ws.getCell(evidenceLinkRow, firstCol)
+          evidenceHeader.value = 'EVIDENCIAS FOTOGRAFICAS'
+          evidenceHeader.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF163B82' } }
+          evidenceHeader.alignment = { vertical: 'middle', horizontal: 'left' }
+          evidenceHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
+          evidenceHeader.border = thinBlackBorder
+          ws.getRow(evidenceLinkRow).height = 20
+          evidenceLinkRow += 1
+
+          sheetEvidenceLinks.forEach((link, idx) => {
+            const nameCell = ws.getCell(evidenceLinkRow, firstCol)
+            const urlCell = ws.getCell(evidenceLinkRow, firstCol + 1)
+            nameCell.value = idx + 1
+            nameCell.font = { name: 'Arial', size: 10, bold: true }
+            nameCell.alignment = { vertical: 'middle', horizontal: 'center' }
+            urlCell.value = {
+              text: String(link.name || `Evidencia ${idx + 1}`),
+              hyperlink: String(link.url || '')
+            }
+            urlCell.font = { name: 'Arial', size: 10, color: { argb: 'FF0563C1' }, underline: true }
+            urlCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
+            for (let c = firstCol; c <= lastCol; c += 1) {
+              const cell = ws.getCell(evidenceLinkRow, c)
+              cell.border = thinBlackBorder
+            }
+            ws.mergeCells(evidenceLinkRow, firstCol + 1, evidenceLinkRow, lastCol)
+            ws.getRow(evidenceLinkRow).height = 22
+            evidenceLinkRow += 1
+          })
+          printAreaLastRow = Math.max(printAreaLastRow, evidenceLinkRow - 1)
+        }
         if (isV2Detailed) {
           const printAreaLastCol = Math.max(2, Math.min(DETAIL_COL_END, colCount || 20))
           ws.pageSetup = {
@@ -8366,6 +8556,13 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] pre-writeBuffer cell'
       }
 if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer', { filename })
       const buffer = await workbook.xlsx.writeBuffer()
+      if (options?.returnAttachment) {
+        return {
+          filename,
+          contentBase64: await arrayBufferToBase64(buffer as ArrayBuffer),
+          contentType: EXCEL_CONTENT_TYPE,
+        }
+      }
       const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -8432,6 +8629,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         .trim() || 'REPORTE DE TERRENO'
       const exportFileName = `${safeExportTitle}.xlsx`
       const built = buildDetailedReportRows({
+        ...buildWorkdayMetadataForSource(fieldReportWorkdaySource),
         designVersion: excelVersion,
         reportTitle: selectedReport?.report_title || selectedReport?.reportTitle || '',
         contractName,
@@ -8519,11 +8717,15 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     }
   }
 
-  const handleExportReportsListExcel = async (reportsToExport?: FieldReport[], customFileName?: string) => {
+  const handleExportReportsListExcel = async (
+    reportsToExport?: FieldReport[],
+    customFileName?: string,
+    options?: { returnAttachment?: boolean; silent?: boolean; forcedDesignVersion?: 'V1' | 'V2'; includeEvidenceImages?: boolean }
+  ) => {
     try {
       const visibleReports = (reportsToExport && reportsToExport.length > 0) ? reportsToExport : (reports || [])
       if (!visibleReports || visibleReports.length === 0) {
-        showSnackbar('No hay reportes para exportar', 'info')
+        if (!options?.silent) showSnackbar('No hay reportes para exportar', 'info')
         return false
       }
       const mod = await import('xlsx')
@@ -8531,7 +8733,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 
       const wb = XLSX.utils.book_new()
       const exportCollaboratorLookup = await loadCollaboratorLookup()
-      const excelJsSheets: Array<{ name: string; built: { rows: any[][]; cols: any[]; merges: any[]; rowHeights: any[] } }> = []
+      const excelJsSheets: Array<{
+        name: string
+        built: { rows: any[][]; cols: any[]; merges: any[]; rowHeights: any[] }
+        evidenceImages?: EvidenceFile[]
+        evidenceLinks?: Array<{ name: string; url: string }>
+      }> = []
 
       for (let i = 0; i < visibleReports.length; i++) {
         const r = visibleReports[i]
@@ -8575,7 +8782,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         const exportCrewByPersonId = await loadCrewByPersonIdForReport(full)
 
         const built = buildDetailedReportRows({
-          designVersion: String(full?.design_version || 'V1'),
+          ...buildWorkdayMetadataForSource(getFieldReportWorkdaySource(full)),
+          designVersion: options?.forcedDesignVersion || String(full?.design_version || 'V1'),
           reportTitle: full?.report_title || '',
           contractName,
           date: full?.date,
@@ -8620,6 +8828,25 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
           crewByPersonId: exportCrewByPersonId
         })
 
+        const exportEvidenceFiles = Array.from(
+          new Map(
+            (activities || [])
+              .flatMap((a: any) => parseEvidenceFiles(a?.evidence_files))
+              .map((f) => [String(f?.key || '').trim(), f] as const)
+          ).values()
+        ).filter((f) => String(f?.key || '').trim().length > 0)
+        const exportEvidenceImages = options?.includeEvidenceImages === false
+          ? []
+          : exportEvidenceFiles
+        const exportEvidenceLinks = options?.includeEvidenceImages === false
+          ? exportEvidenceFiles
+            .map((file, idx) => ({
+              name: String(file?.name || `Evidencia ${idx + 1}`),
+              url: getEvidenceDownloadUrl(file)
+            }))
+            .filter((link) => link.url)
+          : []
+
         const ws = XLSX.utils.aoa_to_sheet(built.rows)
         ws['!cols'] = built.cols
         ws['!merges'] = built.merges
@@ -8627,23 +8854,34 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
         ws['!margins'] = { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 }
         const sheetNameBase = `reporte_${i + 1}`
         const sheetName = sheetNameBase.length > 31 ? sheetNameBase.slice(0, 31) : sheetNameBase
-        excelJsSheets.push({ name: sheetName, built })
+        excelJsSheets.push({ name: sheetName, built, evidenceImages: exportEvidenceImages, evidenceLinks: exportEvidenceLinks })
         XLSX.utils.book_append_sheet(wb, ws, sheetName)
       }
 
       const excelJsDone = await exportWithExcelJs(
         customFileName || `reportes_terreno_detalle_${new Date().toISOString().slice(0, 10)}.xlsx`,
-        excelJsSheets
+        excelJsSheets,
+        { returnAttachment: options?.returnAttachment }
       )
       if (excelJsDone) {
+        if (options?.returnAttachment && typeof excelJsDone === 'object') return excelJsDone
         return true
+      }
+
+      if (options?.returnAttachment) {
+        const arrayBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer
+        return {
+          filename: customFileName || `reportes_terreno_detalle_${new Date().toISOString().slice(0, 10)}.xlsx`,
+          contentBase64: await arrayBufferToBase64(arrayBuffer),
+          contentType: EXCEL_CONTENT_TYPE,
+        }
       }
 
       XLSX.writeFile(wb, customFileName || `reportes_terreno_detalle_${new Date().toISOString().slice(0, 10)}.xlsx`)
       return true
     } catch (e) {
       console.error('Error exporting reports list', e)
-      showSnackbar('Error al exportar reportes', 'error')
+      if (!options?.silent) showSnackbar('Error al exportar reportes', 'error')
       return false
     }
   }
@@ -10778,17 +11016,25 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               )
                             })()}
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto', flexShrink: 0 }}>
-                              {(isAdminRole || isUserRole) ? (
+                              {(isAdminRole || (isUserRole && group.items.some(isFieldReportCreatedByLoggedUser))) ? (
                                 <>
+                                  {(() => {
+                                    const groupDate = String(group.date || '').slice(0, 10)
+                                    const previousDate = new Date()
+                                    previousDate.setDate(previousDate.getDate() - 1)
+                                    const reportableDate = format(previousDate, 'yyyy-MM-dd')
+                                    const canNotifyDate = groupDate === reportableDate
+                                    return (
                                   <Button
                                     size="small"
                                     variant="text"
                                     onClick={(event) => {
                                       event.stopPropagation()
-                                      void notifyFieldReportsDayCompleted(group.date, group.items.length)
+                                      if (!canNotifyDate) return
+                                      void previewFieldReportsDayCompletedNotification(group.date, group.items.length, group.items)
                                     }}
-                                    disabled={notifyingCompletedDate === String(group.date || '').slice(0, 10)}
-                                    title="Notificar reportes completados"
+                                    disabled={!canNotifyDate || notifyingCompletedDate === groupDate}
+                                    title={canNotifyDate ? 'Notificar reportes completados' : 'Solo se pueden notificar reportes del día anterior'}
                                     sx={{
                                       minWidth: 36,
                                       minHeight: 28,
@@ -10808,10 +11054,12 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                       }
                                     }}
                                   >
-                                    {notifyingCompletedDate === String(group.date || '').slice(0, 10)
+                                    {notifyingCompletedDate === groupDate
                                       ? <CircularProgress size={15} sx={{ color: 'currentColor' }} />
                                       : <Send size={16} />}
                                   </Button>
+                                    )
+                                  })()}
                                   <Button
                                     size="small"
                                     variant="text"
@@ -13233,6 +13481,267 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                 }}
               >
                 Cerrar y perder cambios
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Dialog open={Boolean(notifyCompletedConfirm)} onClose={() => setNotifyCompletedConfirm(null)} maxWidth="md" fullWidth>
+            <DialogTitle>Enviar notificación</DialogTitle>
+            <DialogContent>
+              <Stack spacing={1.5}>
+                <Typography sx={{ color: '#475569', fontSize: 14 }}>
+                  Se notificará que los reportes de terreno del {notifyCompletedConfirm?.date || ''} están completados.
+                </Typography>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1.5,
+                    flexWrap: 'wrap',
+                    px: 1.25,
+                    py: 1,
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 1,
+                    bgcolor: '#fff',
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Box sx={{ minWidth: 104, textAlign: 'center', px: 1.1, py: 0.65, borderRadius: 1, bgcolor: '#f8fafc' }}>
+                      <Typography sx={{ color: '#0b5ed7', fontSize: 22, lineHeight: 1, fontWeight: 800 }}>{notifyCompletedConfirm?.reportCount || 0}</Typography>
+                      <Typography sx={{ color: '#64748b', fontSize: 11.5, fontWeight: 700, mt: 0.25 }}>Reportes</Typography>
+                    </Box>
+                    <Box sx={{ minWidth: 104, textAlign: 'center', px: 1.1, py: 0.65, borderRadius: 1, bgcolor: '#f8fafc' }}>
+                      <Typography sx={{ color: '#0b5ed7', fontSize: 22, lineHeight: 1, fontWeight: 800 }}>
+                        {notifyCompletedConfirm?.sendEmail ? notifyCompletedConfirm.emailRecipients.length : 0}
+                      </Typography>
+                      <Typography sx={{ color: '#64748b', fontSize: 11.5, fontWeight: 700, mt: 0.25 }}>Correos</Typography>
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap', ml: 'auto' }}>
+                    <Button
+                      size="small"
+                      variant={notifyCompletedConfirm?.sendInternal ? 'contained' : 'outlined'}
+                      onClick={() => setNotifyCompletedConfirm((current) => current ? { ...current, sendInternal: !current.sendInternal } : current)}
+                      sx={{
+                        minHeight: 36,
+                        px: 1.75,
+                        textTransform: 'none',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Notificación interna
+                    </Button>
+                    <Button
+                      size="small"
+                      variant={notifyCompletedConfirm?.sendEmail ? 'contained' : 'outlined'}
+                      disabled
+                      onClick={() => setNotifyCompletedConfirm((current) => current ? { ...current, sendEmail: !current.sendEmail } : current)}
+                      sx={{
+                        minHeight: 36,
+                        px: 1.75,
+                        textTransform: 'none',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Correo
+                    </Button>
+                  </Box>
+                </Box>
+                {notifyCompletedConfirm?.loading ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: '#475569', fontSize: 14 }}>
+                    <CircularProgress size={16} />
+                    Preparando destinatarios...
+                  </Box>
+                ) : notifyCompletedConfirm?.error ? (
+                  <Alert severity="warning" sx={{ py: 0.5 }}>
+                    {notifyCompletedConfirm.error}
+                  </Alert>
+                ) : (
+                  <Box>
+                    {notifyCompletedConfirm && !notifyCompletedConfirm.sendInternal && !notifyCompletedConfirm.sendEmail ? (
+                      <Alert severity="warning" sx={{ py: 0.5 }}>
+                        Selecciona notificación interna, correo o ambos.
+                      </Alert>
+                    ) : null}
+                    {notifyCompletedConfirm?.sendEmail ? (
+                      <>
+                    <Typography sx={{ color: '#0f172a', fontSize: 13, fontWeight: 700, mb: 0.75 }}>
+                      Correos de envío
+                    </Typography>
+                    <Autocomplete
+                      multiple
+                      freeSolo
+                      size="small"
+                      disabled={!notifyCompletedConfirm?.sendEmail}
+                      options={[]}
+                      value={notifyCompletedConfirm?.emailRecipients || []}
+                      filterOptions={(_, params) => getNotificationEmailOptions(params.inputValue)}
+                      slotProps={{
+                        paper: {
+                          sx: {
+                            boxShadow: 'none',
+                            border: '1px solid #dbe3ef',
+                            borderTop: 0,
+                            borderRadius: '0 0 8px 8px',
+                            mt: 0,
+                          },
+                        },
+                      }}
+                      ListboxProps={{
+                        sx: {
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 0.75,
+                          p: 1,
+                          '& .MuiAutocomplete-option': {
+                            minHeight: 0,
+                            width: 'auto',
+                            borderRadius: '999px',
+                            px: 1.25,
+                            py: 0.45,
+                            bgcolor: '#f1f5f9',
+                            color: '#0f2d5c',
+                            fontSize: 12.5,
+                            fontWeight: 700,
+                            '&[aria-selected="true"]': {
+                              bgcolor: '#dbeafe',
+                            },
+                            '&.Mui-focused': {
+                              bgcolor: '#dbeafe',
+                            },
+                          },
+                        },
+                      }}
+                      onChange={(_, newValue) => {
+                        const next = normalizeNotificationEmailList(newValue)
+                        setNotifyCompletedConfirm((current) => current ? {
+                          ...current,
+                          emailRecipients: next,
+                          emailRecipientCount: next.length,
+                        } : current)
+                      }}
+                      renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                          <Chip
+                            {...getTagProps({ index })}
+                            key={option}
+                            label={option}
+                            size="small"
+                            sx={{
+                              bgcolor: option.endsWith('@pugamujica.cl') ? '#dbeafe' : '#f1f5f9',
+                              color: '#0f2d5c',
+                              fontWeight: 600,
+                            }}
+                          />
+                        ))
+                      }
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          placeholder="correo@pugamujica.cl"
+                        />
+                      )}
+                    />
+                    {notifyCompletedConfirm?.sendEmail && notifyCompletedConfirm.emailRecipients.length === 0 ? (
+                      <Alert severity="warning" sx={{ mt: 1, py: 0.5 }}>
+                        Agrega al menos un correo para enviar la notificación.
+                      </Alert>
+                    ) : null}
+                    <Box sx={{ mt: 1.5 }}>
+                      <Typography sx={{ color: '#0f172a', fontSize: 13, fontWeight: 700, mb: 0.75 }}>
+                        Vista previa del correo
+                      </Typography>
+                      <Box sx={{ bgcolor: '#f6f9fc', border: '1px solid #e2e8f0', borderRadius: 1, p: 1.5 }}>
+                        <Box sx={{ bgcolor: '#fff', borderRadius: 1, boxShadow: '0 2px 6px rgba(16,24,40,.08)', p: 2 }}>
+                          <Typography sx={{ color: '#334155', fontSize: 16, fontWeight: 600, mb: 1 }}>
+                            Reportes de terreno completados - {formatNotificationDate(notifyCompletedConfirm?.date || '')}
+                          </Typography>
+                          <Typography sx={{ color: '#475569', fontSize: 13.5, lineHeight: 1.5, mb: 2 }}>
+                            {`${String((session?.user as any)?.name || session?.user?.email || 'Usuario')} informó que los reportes de terreno del ${formatNotificationDate(notifyCompletedConfirm?.date || '')} están completos (${notifyCompletedConfirm?.reportCount || 0} reporte${(notifyCompletedConfirm?.reportCount || 0) === 1 ? '' : 's'}).`}
+                          </Typography>
+                          <Box sx={{ textAlign: 'center', my: 2 }}>
+                            <Box component="span" sx={{ display: 'inline-block', bgcolor: '#2563eb', color: '#fff', px: 2.5, py: 1, borderRadius: 1, fontSize: 13, fontWeight: 700 }}>
+                              Ver en plataforma
+                            </Box>
+                          </Box>
+                          <Typography sx={{ color: '#94a3b8', fontSize: 12, mb: 0.75, textAlign: 'center' }}>
+                            Si el botón no funciona, pega este enlace en tu navegador:
+                          </Typography>
+                          <Typography sx={{ color: '#2563eb', fontSize: 12, wordBreak: 'break-all', textAlign: 'center' }}>
+                            {`/users/field-reports?date=${notifyCompletedConfirm?.date || ''}`}
+                          </Typography>
+                          {emailLogoUrl ? (
+                            <Box sx={{ borderTop: '1px solid #e2e8f0', mt: 2, pt: 1.5, textAlign: 'center' }}>
+                              <Box
+                                component="img"
+                                src={emailLogoUrl}
+                                alt="Logo correo"
+                                sx={{ display: 'inline-block', maxWidth: 220, maxHeight: 72, width: 'auto', height: 'auto' }}
+                              />
+                            </Box>
+                          ) : null}
+                        </Box>
+                      </Box>
+                    </Box>
+                    <Box
+                      sx={{
+                        mt: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 1,
+                        px: 1.5,
+                        py: 1,
+                        border: '1px solid #dbeafe',
+                        borderRadius: 1,
+                        bgcolor: '#f8fbff',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                        <FileSpreadsheet size={18} color="#0b5ed7" />
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography sx={{ color: '#0f172a', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {getFieldReportsAttachmentName(notifyCompletedConfirm?.date || '')}
+                          </Typography>
+                          <Typography sx={{ color: '#64748b', fontSize: 12 }}>
+                            Se adjuntará un Excel con {notifyCompletedConfirm?.reportCount || 0} hoja{(notifyCompletedConfirm?.reportCount || 0) === 1 ? '' : 's'}, una por reporte, con enlaces a evidencias.
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Typography sx={{ color: '#0b5ed7', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        Adjunto
+                      </Typography>
+                    </Box>
+                      </>
+                    ) : null}
+                  </Box>
+                )}
+              </Stack>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2.5 }}>
+              <Button variant="outlined" onClick={() => setNotifyCompletedConfirm(null)}>Cancelar</Button>
+              <Button
+                variant="contained"
+                disabled={Boolean(
+                  notifyCompletedConfirm?.loading ||
+                  notifyCompletedConfirm?.error ||
+                  (!notifyCompletedConfirm?.sendInternal && !notifyCompletedConfirm?.sendEmail) ||
+                  (notifyCompletedConfirm?.sendEmail && !notifyCompletedConfirm?.emailRecipients.length) ||
+                  (notifyCompletedConfirm?.date && notifyingCompletedDate === notifyCompletedConfirm.date)
+                )}
+                onClick={() => {
+                  const pending = notifyCompletedConfirm
+                  if (!pending) return
+                  setNotifyCompletedConfirm(null)
+                  void notifyFieldReportsDayCompleted(pending.date, pending.reportCount, pending.emailRecipients, {
+                    sendInternal: pending.sendInternal,
+                    sendEmail: pending.sendEmail,
+                    reportsForAttachment: pending.reportsForAttachment,
+                  })
+                }}
+              >
+                Enviar
               </Button>
             </DialogActions>
           </Dialog>
