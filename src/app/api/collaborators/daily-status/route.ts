@@ -96,11 +96,29 @@ const pickRoleForDate = (historyRows: any[], collaboratorId: string, workDate: s
 
 export async function GET(request: NextRequest) {
   try {
-    const access = await requireApiAccess({ resource: 'attendance', aliases: ['daily-report'] })
+    const searchParams = request.nextUrl.searchParams
+    const datesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('dates') || '').trim().toLowerCase()
+    )
+    const turnoDatesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('turno_dates') || '').trim().toLowerCase()
+    )
+    const turnoIdsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('turno_ids') || '').trim().toLowerCase()
+    )
+    const crewsReadMode = String(searchParams.get('source') || '').trim().toLowerCase() === 'crews' &&
+      ((datesOnly && turnoDatesOnly) || turnoIdsOnly)
+
+    const access = await requireApiAccess({ resource: 'attendance', aliases: crewsReadMode ? ['daily-report', 'crews'] : ['daily-report'] })
     if (!access.ok) return access.response
 
+    const permissions = Array.isArray(access.permissions) ? access.permissions : []
+    const hasAttendancePermission = permissions.includes('*') || permissions.includes('attendance') || permissions.includes('daily-report')
+    if (!hasAttendancePermission && !crewsReadMode) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     const session = access.session
-    const searchParams = request.nextUrl.searchParams
     const queryCompanyId = String(searchParams.get('company_id') || '').trim()
     const companyId = String(access.actor.companyId || '').trim()
     if (queryCompanyId && queryCompanyId !== companyId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -111,20 +129,11 @@ export async function GET(request: NextRequest) {
     const dateToRaw = normalizeOptionalDate(searchParams.get('date_to'))
     const collaboratorId = String(searchParams.get('collaborator_id') || '').trim()
     const statusFilter = String(searchParams.get('status') || '').trim()
-    const datesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('dates') || '').trim().toLowerCase()
-    )
-    const turnoDatesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('turno_dates') || '').trim().toLowerCase()
-    )
     const includeBounds = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('include_bounds') || '').trim().toLowerCase()
     )
     const boundsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('bounds') || '').trim().toLowerCase()
-    )
-    const turnoIdsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('turno_ids') || '').trim().toLowerCase()
     )
     const lean = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('lean') || '').trim().toLowerCase()

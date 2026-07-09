@@ -68,6 +68,35 @@ function matchResource(pathname: string, map: Record<string, string>) {
   return null
 }
 
+function apiResourceForRequest(req: NextRequest) {
+  const { pathname, searchParams } = req.nextUrl
+
+  if (pathname === '/api/collaborators') {
+    if (searchParams.get('crews') === '1' && searchParams.get('summary') === '1') return 'crews'
+  }
+
+  if (pathname === '/api/collaborators/specialties' && searchParams.get('source') === 'crews') {
+    return 'crews'
+  }
+
+  if (pathname === '/api/collaborators/daily-status' && searchParams.get('source') === 'crews') {
+    const datesOnly = searchParams.get('dates') === '1'
+    const turnoDatesOnly = searchParams.get('turno_dates') === '1'
+    const turnoIdsOnly = searchParams.get('turno_ids') === '1'
+    if ((datesOnly && turnoDatesOnly) || turnoIdsOnly) return 'crews'
+  }
+
+  if (pathname === '/api/report-fronts' && searchParams.get('source') === 'crews') {
+    return 'crews'
+  }
+
+  if ((pathname === '/api/activities' || pathname.startsWith('/api/activities/')) && searchParams.get('source') === 'crews') {
+    return 'crews'
+  }
+
+  return matchResource(pathname, API_RESOURCE_MAP)
+}
+
 function hasPermission(perms: string[], resource: string) {
   if (perms.includes('*') || perms.includes(resource)) return true
   const aliases = RESOURCE_ALIASES[resource] || []
@@ -106,7 +135,7 @@ async function protectApi(req: NextRequest) {
 
   if (!token?.projectId) return apiError('Missing project context', 400)
 
-  const resource = matchResource(pathname, API_RESOURCE_MAP)
+  const resource = apiResourceForRequest(req)
   if (!resource) return NextResponse.next()
 
   const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
