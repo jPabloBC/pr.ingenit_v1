@@ -32,13 +32,18 @@ export async function GET(_req: NextRequest) {
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
-    const { data, error } = await supabaseAdmin
+    const crewsSource = _req.nextUrl.searchParams.get('source') === 'crews'
+    let query = supabaseAdmin
       .from('pr_program')
       .select('unit')
       .eq('company_id', session.user.companyId)
       .not('unit', 'is', null)
       .order('unit', { ascending: true })
       .limit(5000)
+
+    if (crewsSource) query = query.eq('activity_origin', 'crew_created')
+
+    const { data, error } = await query
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     const uniq = Array.from(

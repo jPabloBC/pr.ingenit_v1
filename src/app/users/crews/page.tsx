@@ -86,6 +86,11 @@ const formatYmdDisplaySlash = (ymd: string) => {
   return `${d}/${m}/${y}`
 }
 
+const CREW_FRONT_FALLBACK_OPTIONS = [
+  { id: null, name: 'CONTRATO BASE CANALETAS', code: 'BASE-CANALETAS', type: 'base' },
+  { id: null, name: 'CONTRATO BASE PISCINAS', code: 'BASE-PISCINAS', type: 'base' },
+]
+
 export default function CrewsPage() {
   const latePolicyFeatureEnabled = false
   const { data: session } = useSession()
@@ -353,7 +358,7 @@ export default function CrewsPage() {
     if (!force && attendanceDatesLoadedRef.current) return
     setAttendanceDatesLoading(true)
     try {
-      const res = await fetch('/api/collaborators/daily-status?dates=1&turno_dates=1', { cache: 'no-store' })
+      const res = await fetch('/api/collaborators/daily-status?dates=1&turno_dates=1&source=crews', { cache: 'no-store' })
       if (!res.ok) {
         setAttendanceWorkDates([])
         attendanceDatesLoadedRef.current = true
@@ -393,7 +398,7 @@ export default function CrewsPage() {
       setReportFrontsLoading(true)
 
       try {
-        const res = await fetch('/api/report-fronts', { cache: 'no-store' })
+        const res = await fetch('/api/report-fronts?source=crews', { cache: 'no-store' })
         const json = await res.json().catch(() => null)
         const fronts = Array.isArray(json?.fronts) ? json.fronts : []
         const seen = new Set<string>()
@@ -412,9 +417,9 @@ export default function CrewsPage() {
             return true
           })
 
-        if (!cancelled) setReportFrontOptions(options)
+        if (!cancelled) setReportFrontOptions(options.length > 0 ? options : CREW_FRONT_FALLBACK_OPTIONS)
       } catch {
-        if (!cancelled) setReportFrontOptions([])
+        if (!cancelled) setReportFrontOptions(CREW_FRONT_FALLBACK_OPTIONS)
       } finally {
         if (!cancelled) setReportFrontsLoading(false)
       }
@@ -719,7 +724,7 @@ export default function CrewsPage() {
     if (!options?.force && collaboratorsInFlightRef.current) return collaboratorsInFlightRef.current
 
     const promise = (async () => {
-      const res = await fetch('/api/collaborators?summary=1')
+      const res = await fetch('/api/collaborators?summary=1&crews=1')
       if (!res.ok) return collaboratorsCacheRef.current || []
       const data = await res.json()
       const dedup = normalizeCollaboratorsList(data || [], { normalizeSpecialty: options?.normalizeSpecialty })
@@ -751,7 +756,7 @@ export default function CrewsPage() {
     if (!force && turnoLoadedDatesRef.current.has(date)) return
     setTurnoLoadingByDate(prev => ({ ...prev, [date]: true }))
     try {
-      const res = await fetch(`/api/collaborators/daily-status?date=${encodeURIComponent(date)}&turno_ids=1`, { cache: 'no-store' })
+      const res = await fetch(`/api/collaborators/daily-status?date=${encodeURIComponent(date)}&turno_ids=1&source=crews`, { cache: 'no-store' })
       if (!res.ok) {
         setTurnoIdsByDate(prev => ({ ...prev, [date]: [] }))
         turnoLoadedDatesRef.current.add(date)
@@ -3095,7 +3100,7 @@ export default function CrewsPage() {
       try {
         let specialtiesFromApi: string[] | null = null
         try {
-          const spRes = await fetch('/api/collaborators/specialties')
+          const spRes = await fetch('/api/collaborators/specialties?source=crews')
           if (spRes.ok) {
             const sp = await spRes.json()
             if (Array.isArray(sp)) {
@@ -3193,6 +3198,9 @@ export default function CrewsPage() {
 
   const buildProgramUrl = (q?: string) => {
     const params = new URLSearchParams()
+    params.set('source', 'crews')
+    params.set('crew_created', '1')
+    params.set('include_crew_created', '1')
     params.set('limit', '200')
     if (q && q.trim()) params.set('q', q.trim())
     if (!showAllProgramDisciplines && userSpecialty) {
@@ -3347,7 +3355,7 @@ export default function CrewsPage() {
         unit: String(toCanonicalUnit(quickEditForm.unit || '') || '').trim() || null,
         quantity: quickEditQuantityRaw ? quickEditQuantityParsed : null
       }
-      const res = await fetch(`/api/activities/${encodeURIComponent(String(quickEditActivity.id))}`, {
+      const res = await fetch(`/api/activities/${encodeURIComponent(String(quickEditActivity.id))}?source=crews`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -3414,9 +3422,9 @@ export default function CrewsPage() {
     ;(async () => {
       try {
         const [discRes, areaRes, unitRes] = await Promise.all([
-          fetch('/api/activities/disciplines'),
-          fetch('/api/activities/areas'),
-          fetch('/api/activities/units')
+          fetch('/api/activities/disciplines?source=crews'),
+          fetch('/api/activities/areas?source=crews'),
+          fetch('/api/activities/units?source=crews')
         ])
         if (discRes.ok) {
           const list = await discRes.json()
@@ -3444,27 +3452,56 @@ export default function CrewsPage() {
 
   const openCreateCrewForm = async () => {
     if (!canManageCrews) return
-    if (openingCreateForm) return
     if (showCreateForm) {
       resetForm()
       setShowCreateForm(false)
       return
     }
+    if (openingCreateForm) return
+
+    resetForm()
+    setShowEditModal(false)
+    setCreateSelectedSpecialty(null)
+    setCreateFName('')
+    if (reportFrontOptions.length === 0) {
+      setReportFrontOptions(CREW_FRONT_FALLBACK_OPTIONS)
+    }
+    setShowCreateForm(true)
+
     setOpeningCreateForm(true)
     try {
+      try {
+        setReportFrontsLoading(true)
+        const res = await fetch('/api/report-fronts?source=crews', { cache: 'no-store' })
+        const json = await res.json().catch(() => null)
+        const fronts = Array.isArray(json?.fronts) ? json.fronts : []
+        const seen = new Set<string>()
+        const options = fronts
+          .map((front: any) => ({
+            id: front?.id ? String(front.id) : null,
+            name: String(front?.name || '').trim(),
+            code: front?.code ? String(front.code) : null,
+            type: front?.type ? String(front.type) : null,
+          }))
+          .filter((front: any) => {
+            const key = normalizeStr(front.name)
+            if (!key || seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+        setReportFrontOptions(options.length > 0 ? options : CREW_FRONT_FALLBACK_OPTIONS)
+        reportFrontsLoadedRef.current = true
+      } catch (e) {
+        setReportFrontOptions((prev) => prev.length > 0 ? prev : CREW_FRONT_FALLBACK_OPTIONS)
+      } finally {
+        setReportFrontsLoading(false)
+      }
       try { await refreshAssignedIds() } catch(e){}
       try { await loadAttendanceWorkDates(true) } catch(e){}
-      resetForm()
-      // ensure edit modal is closed when opening create
-      setShowEditModal(false)
-      // fetch collaborators excluding already assigned
       try {
         // Fetch all collaborators; occupied ones are handled in UI (disabled + crew label)
         await loadCollaboratorsCached({ force: true, normalizeSpecialty: true })
-        setCreateSelectedSpecialty(null)
-        setCreateFName('')
       } catch (e) {}
-      setShowCreateForm(true)
     } finally {
       setOpeningCreateForm(false)
     }
@@ -3477,7 +3514,6 @@ export default function CrewsPage() {
         {isUserRole && canManageCrews ? (
           <Tooltip title={showCreateForm ? "Cerrar formulario" : "Nueva cuadrilla"}>
             <IconButton
-              color="primary"
               onClick={openCreateCrewForm}
               disabled={openingCreateForm}
               sx={{
@@ -3493,6 +3529,19 @@ export default function CrewsPage() {
                 border: `2px solid ${colors.sky300}`,
                 boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
                 transition: 'border-color 160ms ease, box-shadow 160ms ease',
+                outline: 'none',
+                '&:focus': {
+                  outline: 'none',
+                  bgcolor: colors.blue1,
+                  borderColor: colors.sky300,
+                  boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
+                },
+                '&.Mui-focusVisible': {
+                  outline: 'none',
+                  bgcolor: colors.blue1,
+                  borderColor: colors.white,
+                  boxShadow: '0 0 0 3px rgba(0, 42, 82, 0.28), 0 10px 24px rgba(0, 26, 51, 0.32)',
+                },
                 '&:hover': {
                   bgcolor: colors.blue1,
                   borderColor: colors.sky100,
@@ -3503,9 +3552,11 @@ export default function CrewsPage() {
                   },
                 },
                 '&.Mui-disabled': {
-                  bgcolor: colors.blue300,
-                  color: colors.sky50,
-                  borderColor: colors.sky100,
+                  bgcolor: colors.blue1,
+                  color: colors.white,
+                  borderColor: colors.sky300,
+                  opacity: 0.78,
+                  boxShadow: '0 10px 24px rgba(0, 26, 51, 0.24)',
                 },
               }}
             >
@@ -4691,7 +4742,7 @@ export default function CrewsPage() {
                             quantity: quickQuantityRaw ? quickQuantityParsed : null,
                             activity_origin: 'crew_created',
                           }
-                          const res = await fetch('/api/activities', {
+                          const res = await fetch('/api/activities?source=crews', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
@@ -4882,7 +4933,7 @@ export default function CrewsPage() {
                 <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                   <TextField
                     size="small"
-                    label="Buscar en Programa (mín. 3 caracteres)"
+                    label="Buscar actividades creadas (mín. 3 caracteres)"
                     value={programQuery}
                     onChange={(e) => {
                       const v = e.target.value

@@ -53,6 +53,8 @@ export async function GET(req: NextRequest) {
         .trim()
     const excludeCrewCreated = ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('exclude_crew_created') || '').toLowerCase())
     const includeCrewCreated = ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('include_crew_created') || '').toLowerCase())
+    const crewCreatedOnly = req.nextUrl.searchParams.get('source') === 'crews' ||
+      ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('crew_created') || '').toLowerCase())
     const shouldExcludeCrewCreated = excludeCrewCreated && !includeCrewCreated
 
     const buildQuery = (useOriginFilter: boolean) => {
@@ -79,6 +81,10 @@ export async function GET(req: NextRequest) {
         // Excluir solo actividades creadas en cuadrilla, pero mantener legacy rows
         // donde activity_origin es NULL.
         query = query.or('activity_origin.is.null,activity_origin.neq.crew_created')
+      }
+
+      if (crewCreatedOnly) {
+        query = query.eq('activity_origin', 'crew_created')
       }
 
       if (q) {
@@ -131,6 +137,7 @@ export async function POST(req: NextRequest) {
     const area = body?.area == null ? null : String(body.area).trim() || null
     const discipline = body?.discipline == null ? null : String(body.discipline).trim() || null
     const unit = toCanonicalUnit(body?.unit)
+    const crewsSource = req.nextUrl.searchParams.get('source') === 'crews'
 
     if (!activity) {
       return NextResponse.json({ error: 'Actividad es obligatoria' }, { status: 400 })
@@ -150,12 +157,16 @@ export async function POST(req: NextRequest) {
     }
 
     // Anti-dup: avoid creating the same activity/area/discipline within company.
-    const { data: maybeDupRows, error: dupErr } = await supabaseAdmin
+    let duplicateQuery = supabaseAdmin
       .from('pr_program')
       .select('id, activity, area, discipline')
       .eq('company_id', session.user.companyId)
       .ilike('activity', activity)
       .limit(100)
+
+    if (crewsSource) duplicateQuery = duplicateQuery.eq('activity_origin', 'crew_created')
+
+    const { data: maybeDupRows, error: dupErr } = await duplicateQuery
     if (dupErr) return NextResponse.json({ error: dupErr.message }, { status: 500 })
     const targetKey = `${normalizeTextKey(activity)}|${normalizeTextKey(area)}|${normalizeTextKey(discipline)}`
     const dup = (maybeDupRows || []).find((r: any) =>
@@ -166,7 +177,7 @@ export async function POST(req: NextRequest) {
     }
 
     const requestedOrigin = String(body?.activity_origin || body?.origin || '').trim().toLowerCase()
-    const activityOrigin = requestedOrigin === 'crew_created' ? 'crew_created' : 'program'
+    const activityOrigin = crewsSource || requestedOrigin === 'crew_created' ? 'crew_created' : 'program'
 
     const payload: any = {
       company_id: session.user.companyId,

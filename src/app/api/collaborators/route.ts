@@ -315,8 +315,18 @@ const recordCollaboratorRoleHistory = async (params: {
 
 export async function GET(request: NextRequest) {
   try {
-    const access = await requireApiAccess({ resource: 'collaborators' })
+    const url = new URL(request.url)
+    const summary = url.searchParams.get('summary') === '1'
+    const attendance = url.searchParams.get('attendance') === '1'
+    const crewsMode = url.searchParams.get('crews') === '1'
+    const access = await requireApiAccess({ resource: 'collaborators', aliases: crewsMode && summary ? ['crews'] : [] })
     if (!access.ok) return access.response
+
+    const permissions = Array.isArray(access.permissions) ? access.permissions : []
+    const hasCollaboratorsPermission = permissions.includes('*') || permissions.includes('collaborators')
+    if (!hasCollaboratorsPermission && (!crewsMode || !summary)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     const companyId = access.actor.companyId
 
@@ -335,14 +345,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Check query params: excludeAssigned and allowCrewId
-    const url = new URL(request.url)
     const excludeAssigned = url.searchParams.get('excludeAssigned') === 'true'
     const allowCrewIdRaw = url.searchParams.get('allowCrewId') || null
     const allowCrewId = allowCrewIdRaw ? cleanUuid(allowCrewIdRaw) : null
     if (allowCrewIdRaw && !allowCrewId) return NextResponse.json({ error: 'Invalid allowCrewId' }, { status: 400 })
-    const summary = url.searchParams.get('summary') === '1'
-    const attendance = url.searchParams.get('attendance') === '1'
-    const crewsMode = url.searchParams.get('crews') === '1'
     const asOfDate = cleanYmd(url.searchParams.get('as_of_date'))
     // ids to exclude (populated when excludeAssigned processing runs)
     let excludedAssignedIds: string[] = []
