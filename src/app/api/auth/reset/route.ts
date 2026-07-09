@@ -2,11 +2,32 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
+import { checkAuthRateLimit, getRequestIp, recordAuthAttempt } from '../../../../lib/authRateLimit'
 
 export async function POST(request: NextRequest) {
   try {
     const { token, password } = await request.json()
     if (!token || !password) return NextResponse.json({ error: 'Token y contraseña son requeridos' }, { status: 400 })
+    if (String(password).length < 8) {
+      return NextResponse.json({ error: 'La contraseña debe tener al menos 8 caracteres' }, { status: 400 })
+    }
+
+    const ip = getRequestIp(request.headers)
+    const rateLimit = await checkAuthRateLimit({
+      action: 'reset_password',
+      ip,
+      maxAttempts: 10,
+      windowSeconds: 60 * 60,
+    })
+    if (!rateLimit.allowed) {
+      await recordAuthAttempt({
+        action: 'reset_password',
+        ip,
+        success: false,
+        metadata: { reason: 'rate_limited' },
+      })
+      return NextResponse.json({ error: 'Demasiados intentos. Intenta más tarde.' }, { status: 429 })
+    }
 
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
 
@@ -18,9 +39,15 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (tokenErr) return NextResponse.json({ error: 'Error al verificar token' }, { status: 500 })
-    if (!resetRow) return NextResponse.json({ error: 'Token inválido' }, { status: 400 })
-    if (resetRow.used) return NextResponse.json({ error: 'Token ya usado' }, { status: 400 })
-    if (new Date(resetRow.expires_at) < new Date()) return NextResponse.json({ error: 'Token expirado' }, { status: 400 })
+    if (!resetRow || resetRow.used || new Date(resetRow.expires_at) < new Date()) {
+      await recordAuthAttempt({
+        action: 'reset_password',
+        ip,
+        success: false,
+        metadata: { reason: 'invalid_or_expired_token' },
+      })
+      return NextResponse.json({ error: 'Token inválido o expirado' }, { status: 400 })
+    }
 
     // Buscar usuario para obtener auth_id
     const { data: user, error: userErr } = await supabaseAdmin
@@ -42,6 +69,12 @@ export async function POST(request: NextRequest) {
       const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(user.auth_id, { password })
       if (updateErr) {
         console.error('supabase admin update error', updateErr)
+        await recordAuthAttempt({
+          action: 'reset_password',
+          ip,
+          success: false,
+          metadata: { reason: 'supabase_update_error' },
+        })
         return NextResponse.json({ error: 'No se pudo actualizar la contraseña' }, { status: 500 })
       }
 
@@ -56,6 +89,13 @@ export async function POST(request: NextRequest) {
         .from('pr_password_resets')
         .update({ used: true, used_at: new Date().toISOString() })
         .eq('id', resetRow.id)
+
+      await recordAuthAttempt({
+        action: 'reset_password',
+        ip,
+        success: true,
+        metadata: { user_id: user.id },
+      })
 
       return NextResponse.json({ ok: true })
     } catch (err) {

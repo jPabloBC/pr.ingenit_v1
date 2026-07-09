@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '../../../../lib/auth'
 import { normalizeText } from '../../../../lib/normalize'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
+import { requireApiAccess } from '@/lib/apiAccess'
 
 const normalizeKey = (value: unknown) => {
   if (value === undefined || value === null) return ''
@@ -241,8 +240,11 @@ const parseInputDateToISO = (value: unknown): string | null => {
 
 export async function POST(req: NextRequest) {
   try {
-    const session = (await getServerSession(authOptions as any)) as any
-    if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
+
+    const session = access.session
+    if (!access.actor.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const body = await req.json()
     const rows: any[] = body.rows || []
     const options = body.options || {

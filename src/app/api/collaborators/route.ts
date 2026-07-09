@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
 import { resolveCurrentActor } from '@/lib/currentActor'
+import { requireApiAccess } from '@/lib/apiAccess'
+import { cleanUuid, cleanYmd } from '@/lib/querySafety'
 
 const getSupabaseAdminClient = () => {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -158,9 +158,9 @@ const isMissingTableError = (error: any) =>
   String(error?.message || '').toLowerCase().includes('does not exist')
 
 const normalizeYmd = (value: unknown) => {
-  const raw = String(value || '').trim()
+  const raw = cleanYmd(value)
   if (!raw) return new Date().toISOString().slice(0, 10)
-  return raw.slice(0, 10)
+  return raw
 }
 
 const fetchRoleHistoryByCollaborator = async (
@@ -315,11 +315,10 @@ const recordCollaboratorRoleHistory = async (params: {
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions)
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
 
-    const role = String((session?.user as any)?.role || '').trim().toLowerCase()
-    const isDev = role === 'dev'
-    const companyId = session?.user?.companyId || null
+    const companyId = access.actor.companyId
 
     let supabaseAdmin
     try {
@@ -331,18 +330,20 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    if (!companyId && !isDev) {
+    if (!companyId) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
     // Check query params: excludeAssigned and allowCrewId
     const url = new URL(request.url)
     const excludeAssigned = url.searchParams.get('excludeAssigned') === 'true'
-    const allowCrewId = url.searchParams.get('allowCrewId') || null
+    const allowCrewIdRaw = url.searchParams.get('allowCrewId') || null
+    const allowCrewId = allowCrewIdRaw ? cleanUuid(allowCrewIdRaw) : null
+    if (allowCrewIdRaw && !allowCrewId) return NextResponse.json({ error: 'Invalid allowCrewId' }, { status: 400 })
     const summary = url.searchParams.get('summary') === '1'
     const attendance = url.searchParams.get('attendance') === '1'
     const crewsMode = url.searchParams.get('crews') === '1'
-    const asOfDate = String(url.searchParams.get('as_of_date') || '').trim().slice(0, 10)
+    const asOfDate = cleanYmd(url.searchParams.get('as_of_date'))
     // ids to exclude (populated when excludeAssigned processing runs)
     let excludedAssignedIds: string[] = []
 
@@ -354,9 +355,7 @@ export async function GET(request: NextRequest) {
         .order('last_name', { ascending: true })
         .order('first_name', { ascending: true })
 
-      if (!isDev && companyId) {
-        query = query.eq('company_id', companyId)
-      }
+      query = query.eq('company_id', companyId)
 
       return query
     }
@@ -682,14 +681,17 @@ export async function POST(request: NextRequest) {
   try {
     if (COLLABORATORS_DEBUG) console.log('🚀 POST /api/collaborators - Iniciando...')
     
-    const session = await getServerSession(authOptions)
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
+
+    const session = access.session
     if (COLLABORATORS_DEBUG) console.log('👤 Sesión obtenida:', session?.user?.email)
     
     if (!session?.user?.companyId) {
       if (COLLABORATORS_DEBUG) console.log('❌ No autorizado - falta companyId')
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
-    const actor = await resolveCurrentActor(session)
+    const actor = access.actor
     void actor
 
     if (COLLABORATORS_DEBUG) console.log('📥 Parseando body...')
@@ -1008,14 +1010,17 @@ export async function PUT(request: NextRequest) {
   try {
     if (COLLABORATORS_DEBUG) console.log('🚀 PUT /api/collaborators - Iniciando actualización...')
     
-    const session = await getServerSession(authOptions)
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
+
+    const session = access.session
     if (COLLABORATORS_DEBUG) console.log('👤 Sesión obtenida:', session?.user?.email)
     
     if (!session?.user?.companyId) {
       if (COLLABORATORS_DEBUG) console.log('❌ No autorizado - falta companyId')
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
-    const actor = await resolveCurrentActor(session)
+    const actor = access.actor
     void actor
 
     if (COLLABORATORS_DEBUG) console.log('📥 Parseando body...')

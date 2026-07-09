@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { normalizeUppercaseDisplayText } from '@/lib/normalize'
+import { cleanYmd } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -937,10 +938,12 @@ const fetchRoleHistoryForRows = async (companyId: string, rows: any[]) => {
   const collaboratorIds = Array.from(new Set(rows.map((row: any) => String(row?.collaborator_id || '').trim()).filter(Boolean)))
   const minDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
+    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b))[0]
   const maxDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
+    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => b.localeCompare(a))[0]
   if (!companyId || collaboratorIds.length === 0 || !minDate || !maxDate) return []

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
+import { cleanPostgrestSearch } from '@/lib/querySafety'
 
 const normalizeTextKey = (value: any) =>
   String(value || '')
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
 
-    const q = req.nextUrl.searchParams.get('q') || ''
+    const q = cleanPostgrestSearch(req.nextUrl.searchParams.get('q') || '')
     const limitRaw = req.nextUrl.searchParams.get('limit')
     const limitParam = limitRaw ? parseInt(limitRaw, 10) : NaN
     const disciplineParam = (req.nextUrl.searchParams.get('discipline') || '').trim()
@@ -80,8 +81,8 @@ export async function GET(req: NextRequest) {
         query = query.or('activity_origin.is.null,activity_origin.neq.crew_created')
       }
 
-      if (q && q.trim()) {
-        const like = `%${q.trim()}%`
+      if (q) {
+        const like = `%${q}%`
         query = query.or(`item_id.ilike.${like},activity.ilike.${like},description.ilike.${like},area.ilike.${like},tree_path.ilike.${like},tree_level_1.ilike.${like},tree_level_2.ilike.${like},tree_level_3.ilike.${like},tree_level_4.ilike.${like},tree_level_5.ilike.${like}`)
       }
 

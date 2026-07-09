@@ -5,13 +5,7 @@ type InternalNotificationEmailInput = {
   logoDataUrl?: string | null
 }
 
-const escapeHtml = (value: string) =>
-  String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
+import { escapeHtml } from '@/lib/sanitizeHtml'
 
 export function internalNotificationEmail({ title, body, actionUrl, logoDataUrl }: InternalNotificationEmailInput) {
   const appName = process.env.APP_NAME || 'IngenIT'

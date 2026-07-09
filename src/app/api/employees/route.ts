@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '../../../lib/supabaseClient'
 import { z } from 'zod'
+import { requireApiAccess, resolveScopedCompanyId } from '@/lib/apiAccess'
 
 const employeeSchema = z.object({
   rut: z.string().min(1, 'RUT es requerido'),
@@ -20,19 +21,19 @@ const employeeSchema = z.object({
 // GET - Obtener empleados
 export async function GET(request: NextRequest) {
   try {
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
+
     const { searchParams } = new URL(request.url)
-    const companyId = searchParams.get('companyId')
+    const scope = resolveScopedCompanyId(access.actor, searchParams.get('companyId'))
+    if (scope.response) return scope.response
     const search = searchParams.get('search')
     const departmentId = searchParams.get('departmentId')
     const page = parseInt(searchParams.get('page') || '1')
     const limit = parseInt(searchParams.get('limit') || '10')
     
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
-
     const where = {
-      companyId,
+      companyId: scope.companyId,
       isActive: true,
       ...(search && {
         OR: [
@@ -82,13 +83,12 @@ export async function GET(request: NextRequest) {
 // POST - Crear empleado
 export async function POST(request: NextRequest) {
   try {
+    const access = await requireApiAccess({ resource: 'collaborators' })
+    if (!access.ok) return access.response
+
     const body = await request.json()
-    
-    // Obtener companyId de la sesión o del body
-    const companyId = body.companyId
-    if (!companyId) {
-      return NextResponse.json({ error: 'Company ID required' }, { status: 400 })
-    }
+    const scope = resolveScopedCompanyId(access.actor, body.companyId)
+    if (scope.response) return scope.response
 
     const validatedData = employeeSchema.parse(body)
 
@@ -127,7 +127,7 @@ export async function POST(request: NextRequest) {
     // Crear empleado en Supabase
     const { data: employee, error: createError } = await supabase
       .from('employees')
-      .insert([{ ...validatedData, companyId }])
+      .insert([{ ...validatedData, companyId: scope.companyId }])
       .select()
     if (createError) throw createError
 

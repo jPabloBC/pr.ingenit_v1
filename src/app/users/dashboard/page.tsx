@@ -21,7 +21,11 @@ import {
   QueryStats,
   TrendingUp,
   WarningAmber,
-  Payments
+  Payments,
+  Hotel,
+  ErrorOutline,
+  PersonOff,
+  MoreHoriz
 } from '@mui/icons-material'
 import {
   Area,
@@ -44,8 +48,12 @@ import { colors } from '../../../theme/theme'
 interface DashboardStats {
   totalCollaborators: number
   activeCollaborators: number
+  terminatedCollaborators: number
   presentToday: number
   absentToday: number
+  restToday: number
+  failureToday: number
+  otherToday: number
   expiredEPP: number
   pendingPayroll: number
   specialtyBreakdown?: { specialty: string; total: number; active: number }[]
@@ -227,13 +235,19 @@ export default function Dashboard() {
   const clampPercent = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))
   const totalCollaborators = Number(stats?.totalCollaborators || 0)
   const activeCollaborators = Number(stats?.activeCollaborators || 0)
+  const terminatedCollaborators = Number(stats?.terminatedCollaborators || 0)
   const presentToday = Number(stats?.presentToday || 0)
-  const absentToday = Number(stats?.absentToday || 0)
+  const restToday = Number(stats?.restToday || 0)
+  const failureToday = Number(stats?.failureToday || 0)
+  const otherToday = Number(stats?.otherToday || 0)
   const expiredEPP = Number(stats?.expiredEPP || 0)
   const pendingPayroll = Number(stats?.pendingPayroll || 0)
   const activeRate = totalCollaborators > 0 ? (activeCollaborators / totalCollaborators) * 100 : 0
+  const terminatedRate = totalCollaborators > 0 ? (terminatedCollaborators / totalCollaborators) * 100 : 0
   const attendanceRate = activeCollaborators > 0 ? (presentToday / activeCollaborators) * 100 : 0
-  const absenceRate = activeCollaborators > 0 ? (absentToday / activeCollaborators) * 100 : 0
+  const restRate = activeCollaborators > 0 ? (restToday / activeCollaborators) * 100 : 0
+  const failureRate = activeCollaborators > 0 ? (failureToday / activeCollaborators) * 100 : 0
+  const otherRate = activeCollaborators > 0 ? (otherToday / activeCollaborators) * 100 : 0
   const eppRiskRate = activeCollaborators > 0 ? (expiredEPP / activeCollaborators) * 100 : 0
   const payrollRiskRate = activeCollaborators > 0 ? (pendingPayroll / activeCollaborators) * 100 : 0
 
@@ -266,13 +280,40 @@ export default function Dashboard() {
       progress: attendanceRate
     },
     {
-      title: 'Ausentes Hoy',
-      value: absentToday,
-      icon: <AccessTime />,
+      title: 'Finiquitados',
+      value: terminatedCollaborators,
+      icon: <PersonOff />,
       color: '#d32f2f',
       bg: '#fff1f1',
-      helper: `${formatDecimal(absenceRate)}% de activos`,
-      progress: absenceRate
+      helper: `${formatDecimal(terminatedRate)}% del total`,
+      progress: terminatedRate
+    },
+    {
+      title: 'Descanso Hoy',
+      value: restToday,
+      icon: <Hotel />,
+      color: '#6d4c41',
+      bg: '#f7f1ee',
+      helper: restToday > 0 ? `${formatDecimal(restRate)}% de activos` : 'Sin descanso hoy',
+      progress: restRate
+    },
+    {
+      title: 'Falla Hoy',
+      value: failureToday,
+      icon: <ErrorOutline />,
+      color: '#d99a00',
+      bg: '#fff8e6',
+      helper: failureToday > 0 ? `${formatDecimal(failureRate)}% de activos` : 'Sin falla hoy',
+      progress: failureRate
+    },
+    {
+      title: 'Otros Hoy',
+      value: otherToday,
+      icon: <MoreHoriz />,
+      color: '#6f42c1',
+      bg: '#f4efff',
+      helper: otherToday > 0 ? `${formatDecimal(otherRate)}% de activos` : 'Sin otros hoy',
+      progress: otherRate
     },
     {
       title: 'EPP Vencidos',
@@ -281,7 +322,8 @@ export default function Dashboard() {
       color: '#d99a00',
       bg: '#fff8e6',
       helper: expiredEPP > 0 ? `${formatDecimal(eppRiskRate)}% con riesgo` : 'Sin vencidos',
-      progress: eppRiskRate
+      progress: eppRiskRate,
+      hidden: true
     },
     {
       title: 'Nóminas Pendientes',
@@ -290,9 +332,10 @@ export default function Dashboard() {
       color: '#0b73d9',
       bg: '#eef6ff',
       helper: pendingPayroll > 0 ? `${formatDecimal(payrollRiskRate)}% del equipo` : 'Sin pendientes',
-      progress: payrollRiskRate
+      progress: payrollRiskRate,
+      hidden: true
     }
-  ]
+  ].filter((card) => !card.hidden)
 
   const latestHhByFront = Array.from(
     hhHistory.reduce((acc, row) => {
@@ -407,7 +450,7 @@ export default function Dashboard() {
 
             <Box
               display="grid"
-              gridTemplateColumns={{ xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(6, minmax(0, 1fr))' }}
+              gridTemplateColumns={{ xs: 'repeat(2, minmax(0, 1fr))', md: 'repeat(3, minmax(0, 1fr))', lg: 'repeat(7, minmax(0, 1fr))' }}
               gap={{ xs: 1.25, md: 1.5 }}
               mb={3}
             >

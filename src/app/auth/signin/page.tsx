@@ -85,25 +85,7 @@ export default function SignIn() {
     setLoading(true)
     let keepBusyUntilRedirect = false
 
-    // Check if email exists in pr_users or in Supabase Auth to give specific messages
     const normalizedEmail = String(email || '').trim().toLowerCase()
-    let existsInPrUsers = false
-    let existsInAuth = false
-    try {
-      const checkRes = await fetch(`/api/auth/check-email?email=${encodeURIComponent(normalizedEmail)}`)
-      if (checkRes.ok) {
-        const j = await checkRes.json()
-        existsInPrUsers = !!j.inPrUsers
-        existsInAuth = !!j.inAuth
-        if (!existsInPrUsers && !existsInAuth) {
-          setError('Usuario no existente')
-          setLoading(false)
-          return
-        }
-      }
-    } catch (err) {
-      // ignore check errors and continue with signin attempt
-    }
 
     try {
       const result = await signIn('credentials', {
@@ -150,11 +132,7 @@ export default function SignIn() {
         } else if (result.error === 'email_provider_disabled') {
           setError('Inicio de sesión por correo deshabilitado en la configuración del servidor. Contacta al administrador.')
         } else {
-          if (existsInPrUsers || existsInAuth) {
-            setError('Contraseña incorrecta')
-          } else {
-            setError('Usuario no existente')
-          }
+          setError('Credenciales inválidas')
         }
 
         // No redirigir automáticamente; mostramos enlace de restablecer cuando next >= 3

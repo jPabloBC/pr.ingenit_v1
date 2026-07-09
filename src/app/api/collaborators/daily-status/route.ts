@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { todayYmd } from '@/lib/staffing/availableCollaborators'
+import { requireApiAccess } from '@/lib/apiAccess'
+import { cleanYmd } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,10 +57,12 @@ const fetchRoleHistoryForRows = async (companyId: string, rows: any[]) => {
   const collaboratorIds = Array.from(new Set(rows.map((row: any) => String(row?.collaborator_id || '').trim()).filter(Boolean)))
   const minDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
+    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b))[0]
   const maxDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
+    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => b.localeCompare(a))[0]
   if (!companyId || collaboratorIds.length === 0 || !minDate || !maxDate) return []
@@ -94,14 +96,14 @@ const pickRoleForDate = (historyRows: any[], collaboratorId: string, workDate: s
 
 export async function GET(request: NextRequest) {
   try {
-    const session = (await getServerSession(authOptions as any)) as any
-    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const access = await requireApiAccess({ resource: 'attendance', aliases: ['daily-report'] })
+    if (!access.ok) return access.response
 
-    const role = String(session.user.role || '').trim().toLowerCase()
-    const isDev = role === 'dev'
+    const session = access.session
     const searchParams = request.nextUrl.searchParams
     const queryCompanyId = String(searchParams.get('company_id') || '').trim()
-    const companyId = isDev ? (queryCompanyId || String(session.user.companyId || '').trim()) : String(session.user.companyId || '').trim()
+    const companyId = String(access.actor.companyId || '').trim()
+    if (queryCompanyId && queryCompanyId !== companyId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     if (!companyId) return NextResponse.json({ error: 'Missing company_id' }, { status: 400 })
 
     const workDate = normalizeDate(searchParams.get('date'))
@@ -401,13 +403,13 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const session = (await getServerSession(authOptions as any)) as any
-    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const access = await requireApiAccess({ resource: 'attendance', aliases: ['daily-report'] })
+    if (!access.ok) return access.response
 
+    const session = access.session
     const role = String(session.user.role || '').trim().toLowerCase()
-    const isDev = role === 'dev'
-    const companyId = String(session.user.companyId || '').trim()
-    if (!isDev && !companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const companyId = String(access.actor.companyId || '').trim()
+    if (!companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
     const date = normalizeDate(body?.date)
@@ -449,7 +451,7 @@ export async function PUT(request: NextRequest) {
       .select('id, company_id')
       .in('id', collaboratorIds)
 
-    if (!isDev) collabQuery = collabQuery.eq('company_id', companyId)
+    collabQuery = collabQuery.eq('company_id', companyId)
     const { data: collabs, error: collabErr } = await collabQuery
     if (collabErr) return NextResponse.json({ error: collabErr.message }, { status: 500 })
 

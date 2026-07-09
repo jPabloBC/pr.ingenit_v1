@@ -14,17 +14,56 @@ const RESOURCE_MAP: Record<string, string> = {
   '/users/profile': 'profile',
   '/users/admin/permissions': 'admin-permissions',
   '/users/management': 'management',
-  '/users/settings': 'settings'
+  '/users/settings': 'settings',
 }
 
-// Keep middleware aligned with Aside/API during permission key migrations.
 const RESOURCE_ALIASES: Record<string, string[]> = {
-  'daily-report': ['admin-daily-report']
+  'daily-report': ['admin-daily-report'],
+  attendance: ['daily-report'],
 }
 
-function matchResource(pathname: string) {
-  for (const pattern of Object.keys(RESOURCE_MAP)) {
-    if (pathname === pattern || pathname.startsWith(pattern + '/')) return RESOURCE_MAP[pattern]
+const API_RESOURCE_MAP: Record<string, string> = {
+  '/api/admin': 'admin-permissions',
+  '/api/activities': 'program',
+  '/api/attendance': 'attendance',
+  '/api/collaborators/daily-status': 'attendance',
+  '/api/collaborators/assets': 'collaborators',
+  '/api/collaborators/import': 'collaborators',
+  '/api/collaborators/role-history': 'collaborators',
+  '/api/collaborators/specialties': 'collaborators',
+  '/api/collaborators/me': 'profile',
+  '/api/collaborators': 'collaborators',
+  '/api/company-assets': 'settings',
+  '/api/companies': 'settings',
+  '/api/crews': 'crews',
+  '/api/daily-reports': 'daily-report',
+  '/api/dashboard': 'dashboard',
+  '/api/departments': 'management',
+  '/api/employees': 'collaborators',
+  '/api/field-reports': 'field-reports',
+  '/api/management': 'management',
+  '/api/report-fronts': 'daily-report',
+  '/api/staffing-activities': 'staffing-activities',
+  '/api/storage': 'settings',
+  '/api/users/profile': 'profile',
+}
+
+const PUBLIC_API_PREFIXES = [
+  '/api/auth',
+  '/api/version',
+  '/api/attendance/logo',
+  '/api/collaborators/session',
+]
+
+const TOKEN_ONLY_API_PREFIXES = [
+  '/api/session',
+  '/api/internal-notifications',
+  '/api/pdf/render',
+]
+
+function matchResource(pathname: string, map: Record<string, string>) {
+  for (const pattern of Object.keys(map)) {
+    if (pathname === pattern || pathname.startsWith(pattern + '/')) return map[pattern]
   }
   return null
 }
@@ -32,90 +71,99 @@ function matchResource(pathname: string) {
 function hasPermission(perms: string[], resource: string) {
   if (perms.includes('*') || perms.includes(resource)) return true
   const aliases = RESOURCE_ALIASES[resource] || []
-  return aliases.some((k) => perms.includes(k))
+  return aliases.some((key) => perms.includes(key))
+}
+
+function redirectToSignin(req: NextRequest, error = 'access_denied') {
+  const url = new URL('/auth/signin', req.nextUrl.origin)
+  url.searchParams.set('error', error)
+  return NextResponse.redirect(url)
+}
+
+function apiError(error: string, status: number) {
+  return NextResponse.json({ error }, { status })
+}
+
+async function protectApi(req: NextRequest) {
+  const { pathname } = req.nextUrl
+
+  if (PUBLIC_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))) {
+    return NextResponse.next()
+  }
+
+  if (pathname.startsWith('/api/dev')) {
+    return apiError('Not found', 404)
+  }
+
+  const token = (await getToken({ req, secret: process.env.NEXTAUTH_SECRET })) as any
+  if (!token) return apiError('Unauthorized', 401)
+
+  const role = String(token.role || '').trim().toLowerCase()
+  if (role === 'dev') return apiError('Forbidden', 403)
+
+  const requiresOnlyToken = TOKEN_ONLY_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))
+  if (requiresOnlyToken) return NextResponse.next()
+
+  if (!token?.projectId) return apiError('Missing project context', 400)
+
+  const resource = matchResource(pathname, API_RESOURCE_MAP)
+  if (!resource) return NextResponse.next()
+
+  const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
+  if (hasPermission(perms, resource)) return NextResponse.next()
+
+  return apiError('Forbidden', 403)
 }
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Dev area is managed in ingenit_v2, so /dev is disabled in this app.
   if (pathname.startsWith('/dev')) {
-    const url = new URL('/auth/signin', req.nextUrl.origin)
-    url.searchParams.set('error', 'dev_area_moved_to_ingenit_v2')
-    return NextResponse.redirect(url)
+    return redirectToSignin(req, 'dev_area_moved_to_ingenit_v2')
   }
 
-  // Only protect /users routes
+  if (pathname.startsWith('/api')) {
+    return protectApi(req)
+  }
+
   if (!pathname.startsWith('/users')) return NextResponse.next()
 
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET }) as any
-  if (!token) {
-    const url = new URL('/auth/signin', req.nextUrl.origin)
-    url.searchParams.set('error', 'access_denied')
-    return NextResponse.redirect(url)
-  }
+  const token = (await getToken({ req, secret: process.env.NEXTAUTH_SECRET })) as any
+  if (!token) return redirectToSignin(req)
 
-  // Dev no longer operates in this app.
   if (token.role === 'dev') {
-    const url = new URL('/auth/signin', req.nextUrl.origin)
-    url.searchParams.set('error', 'dev_area_moved_to_ingenit_v2')
-    return NextResponse.redirect(url)
+    return redirectToSignin(req, 'dev_area_moved_to_ingenit_v2')
   }
 
-  // Require project selection for non-dev users before entering protected user modules.
   if (pathname !== '/users/select-project' && !token?.projectId) {
     return NextResponse.redirect(new URL('/users/select-project', req.nextUrl.origin))
   }
 
-  // Selector page must stay accessible even without menu permissions.
   if (pathname === '/users/select-project') return NextResponse.next()
 
-  const resource = matchResource(pathname)
-  if (!resource) {
-    const url = new URL('/auth/signin', req.nextUrl.origin)
-    url.searchParams.set('error', 'access_denied')
-    return NextResponse.redirect(url)
-  }
+  const resource = matchResource(pathname, RESOURCE_MAP)
+  if (!resource) return redirectToSignin(req)
 
   const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
   const role = String(token.role || '').trim().toLowerCase()
 
-  // Direct access: allow user/viewer roles into daily report screen
-  // even when project permissions are not yet assigned.
   if (resource === 'daily-report' && (role === 'user' || role === 'viewer')) {
     return NextResponse.next()
   }
-  
-  // Check if user has permission: wildcard, explicit resource, or legacy alias.
-  const allowed = hasPermission(perms, resource)
 
-  if (!allowed) {
-    // Find a fallback route the user *does* have access to.
-    let fallback = '/users/dashboard'
-    for (const [p, r] of Object.entries(RESOURCE_MAP)) {
-      if (hasPermission(perms, r)) {
-        fallback = p
-        break
-      }
-    }
-
-    // If fallback is the same as the requested path or user has no perms,
-    // redirect to signin. Otherwise redirect to the fallback page.
-    if (!fallback || fallback === pathname) {
-      const url = new URL('/auth/signin', req.nextUrl.origin)
-      url.searchParams.set('error', 'access_denied')
-      return NextResponse.redirect(url)
-    }
-
-    return NextResponse.redirect(new URL(fallback, req.nextUrl.origin))
+  if (hasPermission(perms, resource)) {
+    return NextResponse.next()
   }
 
-  return NextResponse.next()
+  for (const [path, mappedResource] of Object.entries(RESOURCE_MAP)) {
+    if (hasPermission(perms, mappedResource)) {
+      return NextResponse.redirect(new URL(path, req.nextUrl.origin))
+    }
+  }
+
+  return redirectToSignin(req)
 }
 
 export const config = {
-  matcher: [
-    '/users/:path*',
-    '/dev/:path*'
-  ]
+  matcher: ['/users/:path*', '/dev/:path*', '/api/:path*'],
 }

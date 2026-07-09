@@ -1,12 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '../../../../lib/supabaseClient'
 import bcrypt from 'bcrypt'
+import { checkAuthRateLimit, getRequestIp, recordAuthAttempt } from '../../../../lib/authRateLimit'
 
 export async function POST(request: NextRequest) {
   try {
     const { companyId, document, password } = await request.json();
     if (!companyId || !document || !password) {
       return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
+    }
+    const ip = getRequestIp(request.headers)
+    const authIdentifier = `${companyId}:${document}`
+    const rateLimit = await checkAuthRateLimit({
+      action: 'collaborator_signin',
+      email: authIdentifier,
+      ip,
+      maxAttempts: 8,
+      windowSeconds: 15 * 60,
+    })
+    if (!rateLimit.allowed) {
+      await recordAuthAttempt({
+        action: 'collaborator_signin',
+        email: authIdentifier,
+        ip,
+        success: false,
+        metadata: { reason: 'rate_limited' },
+      })
+      return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
     }
 
     // Buscar colaborador activo por documento y empresa
@@ -22,14 +42,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Error en la consulta' }, { status: 500 });
     }
     if (!collaborator) {
-      return NextResponse.json({ error: 'Colaborador no encontrado o inactivo' }, { status: 401 });
+      await recordAuthAttempt({
+        action: 'collaborator_signin',
+        email: authIdentifier,
+        ip,
+        success: false,
+        metadata: { reason: 'not_found_or_inactive' },
+      })
+      return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
     }
 
     // Comparar contraseña
-    const passwordMatch = await bcrypt.compare(password, collaborator.password_hash);
+    const passwordMatch = collaborator.password_hash
+      ? await bcrypt.compare(password, collaborator.password_hash)
+      : false;
     if (!passwordMatch) {
-      return NextResponse.json({ error: 'Contraseña incorrecta' }, { status: 401 });
+      await recordAuthAttempt({
+        action: 'collaborator_signin',
+        email: authIdentifier,
+        ip,
+        success: false,
+        metadata: { reason: 'invalid_credentials' },
+      })
+      return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
     }
+
+    await recordAuthAttempt({
+      action: 'collaborator_signin',
+      email: authIdentifier,
+      ip,
+      success: true,
+    })
 
     // Puedes generar un token JWT aquí si lo necesitas
     return NextResponse.json({

@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { internalNotificationEmail } from '@/lib/emailTemplates/internalNotification'
 import { sendNotificationMail } from '@/lib/notificationMailer'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
+import { isSafeImageContentType } from '@/lib/sanitizeHtml'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,7 +69,7 @@ const loadEmailLogoDataUrl = async (companyId: string) => {
     const response = await fetch(signed.url, { cache: 'no-store' })
     if (!response.ok) return null
     const contentType = response.headers.get('content-type') || String(asset.content_type || 'image/png')
-    if (!contentType.startsWith('image/')) return null
+    if (!isSafeImageContentType(contentType)) return null
     const buffer = Buffer.from(await response.arrayBuffer())
     return `data:${contentType};base64,${buffer.toString('base64')}`
   } catch (error) {

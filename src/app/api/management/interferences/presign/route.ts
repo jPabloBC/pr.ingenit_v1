@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../../lib/auth'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
+import { isSafeImageContentType } from '@/lib/sanitizeHtml'
 
 const sanitizeFileName = (name: string) =>
   name
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
     const contentType = String(body?.contentType || 'application/octet-stream').trim().slice(0, 128)
     const fileSize = Number(body?.fileSize || 0)
     if (!fileName) return NextResponse.json({ error: 'Missing fileName' }, { status: 400 })
-    if (!contentType.startsWith('image/')) return NextResponse.json({ error: 'Solo se permiten imagenes' }, { status: 400 })
+    if (!isSafeImageContentType(contentType)) return NextResponse.json({ error: 'Formato de imagen no permitido' }, { status: 400 })
     if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > 10 * 1024 * 1024) {
       return NextResponse.json({ error: 'Tamano invalido. Maximo 10MB por imagen' }, { status: 400 })
     }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { sanitizeHtmlForPdf } from '@/lib/sanitizeHtml'
 
 function requireRole(role: string) {
   return role === 'admin' || role === 'dev' || role === 'user'
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest) {
     if (!requireRole(role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await req.json()
-    const html = String(body?.html || '').trim()
+    const html = sanitizeHtmlForPdf(String(body?.html || '').trim())
     const title = String(body?.title || 'reporte')
     if (!html) return NextResponse.json({ error: 'html es requerido' }, { status: 400 })
 
@@ -32,7 +33,18 @@ export async function POST(req: NextRequest) {
     const page = await browser.newPage({
       viewport: { width: 2000, height: 2600 }
     })
-    await page.setContent(html, { waitUntil: 'networkidle' })
+    await page.route('**/*', async (route: any) => {
+      const request = route.request()
+      const url = request.url()
+      const type = request.resourceType()
+      if (url === 'about:blank' || url.startsWith('data:') || url.startsWith('blob:')) {
+        return route.continue()
+      }
+      if (type === 'document') return route.continue()
+      return route.abort()
+    })
+    await page.setJavaScriptEnabled(false)
+    await page.setContent(html, { waitUntil: 'domcontentloaded' })
     await page.emulateMedia({ media: 'screen' })
 
     const pdf = await page.pdf({
@@ -58,4 +70,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(err?.message || err || 'Error generando PDF') }, { status: 500 })
   }
 }
-
