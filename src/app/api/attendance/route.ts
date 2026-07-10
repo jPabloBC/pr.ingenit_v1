@@ -1,12 +1,8 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '../../../lib/supabaseClient';
-import { requireApiAccess } from '@/lib/apiAccess';
 
 export async function GET() {
   try {
-    const access = await requireApiAccess({ resource: 'attendance' });
-    if (!access.ok) return access.response;
-
     const { data, error } = await supabase
       .from('pr_attendance')
       .select(`
@@ -19,7 +15,7 @@ export async function GET() {
         longitude_in,
         latitude_out,
         longitude_out,
-        collaborators:collaborator_id!inner (
+        collaborators:collaborator_id (
           first_name,
           last_name,
           email,
@@ -27,8 +23,7 @@ export async function GET() {
           position,
           document
         )
-      `)
-      .eq('collaborators.company_id', access.actor.companyId);
+      `);
 
     if (error) {
       console.debug('Error fetching attendance data:', error);

@@ -6,7 +6,6 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { normalizeText } from '@/lib/normalize'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { writeAuditLog } from '@/lib/audit/writeAuditLog'
-import { cleanYmd } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +44,7 @@ const isMissingColumnError = (error: any) =>
   String(error?.code || '') === '42703' ||
   String(error?.message || '').toLowerCase().includes('column')
 
-const normalizeYmd = (value: any) => cleanYmd(value)
+const normalizeYmd = (value: any) => String(value || '').trim().slice(0, 10)
 
 const toChileDateKey = (value: any) => {
   const date = value instanceof Date ? value : new Date(String(value || ''))

@@ -7,7 +7,6 @@ export async function GET(req: NextRequest, ctx: any) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const crewsSource = req.nextUrl.searchParams.get('source') === 'crews'
 
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
@@ -22,9 +21,6 @@ export async function GET(req: NextRequest, ctx: any) {
       .single()
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    if (crewsSource && String(data?.activity_origin || '').toLowerCase() !== 'crew_created') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
     return NextResponse.json(data || null)
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
@@ -35,27 +31,12 @@ export async function PUT(req: NextRequest, ctx: any) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const crewsSource = req.nextUrl.searchParams.get('source') === 'crews'
 
     const body = await req.json()
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
-
-    if (crewsSource) {
-      const { data: current, error: currentError } = await supabaseAdmin
-        .from('pr_program')
-        .select('id, activity_origin')
-        .eq('company_id', session.user.companyId)
-        .eq('id', ctx.params.id)
-        .single()
-
-      if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 })
-      if (String(current?.activity_origin || '').toLowerCase() !== 'crew_created') {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-      }
-    }
 
     const payload: any = {
         item_id: body.item_id || null,
@@ -96,26 +77,11 @@ export async function DELETE(req: NextRequest, ctx: any) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const crewsSource = req.nextUrl.searchParams.get('source') === 'crews'
 
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (!serviceRoleKey) return NextResponse.json({ error: 'Missing service role key' }, { status: 500 })
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
-
-    if (crewsSource) {
-      const { data: current, error: currentError } = await supabaseAdmin
-        .from('pr_program')
-        .select('id, activity_origin')
-        .eq('company_id', session.user.companyId)
-        .eq('id', ctx.params.id)
-        .single()
-
-      if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 })
-      if (String(current?.activity_origin || '').toLowerCase() !== 'crew_created') {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-      }
-    }
 
     const { data, error } = await supabaseAdmin
       .from('pr_program')

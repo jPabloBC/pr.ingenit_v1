@@ -245,13 +245,6 @@ const oneDecimalFormValue = (value: unknown) => {
   return hasDecimals ? normalized.toFixed(1).replace(".", ",") : String(Math.round(normalized))
 }
 
-const compactDecimalValue = (value: unknown, decimals = 2) => {
-  const n = Number(String(value ?? "").replace(",", "."))
-  if (!Number.isFinite(n)) return "0"
-  const normalized = Number(n.toFixed(decimals))
-  return String(normalized)
-}
-
 type CollaboratorLite = {
   id?: string
   first_name?: string | null
@@ -13773,9 +13766,9 @@ export default function DailyReportPage() {
                           {rowFront || "-"}
                         </td>
                         <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}` }}>{r.project_name || "-"}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{compactDecimalValue(hhDir)}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{compactDecimalValue(hhInd)}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{compactDecimalValue(hhTotal)}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhDir}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhInd}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{hhTotal}</td>
                         <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>
                           <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                             <Tooltip title="Ver">

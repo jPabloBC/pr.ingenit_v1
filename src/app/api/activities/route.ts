@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
-import { cleanPostgrestSearch } from '@/lib/querySafety'
 
 const normalizeTextKey = (value: any) =>
   String(value || '')
@@ -41,7 +40,7 @@ export async function GET(req: NextRequest) {
 
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
 
-    const q = cleanPostgrestSearch(req.nextUrl.searchParams.get('q') || '')
+    const q = req.nextUrl.searchParams.get('q') || ''
     const limitRaw = req.nextUrl.searchParams.get('limit')
     const limitParam = limitRaw ? parseInt(limitRaw, 10) : NaN
     const disciplineParam = (req.nextUrl.searchParams.get('discipline') || '').trim()
@@ -53,8 +52,6 @@ export async function GET(req: NextRequest) {
         .trim()
     const excludeCrewCreated = ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('exclude_crew_created') || '').toLowerCase())
     const includeCrewCreated = ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('include_crew_created') || '').toLowerCase())
-    const crewCreatedOnly = req.nextUrl.searchParams.get('source') === 'crews' ||
-      ['1', 'true', 'yes'].includes((req.nextUrl.searchParams.get('crew_created') || '').toLowerCase())
     const shouldExcludeCrewCreated = excludeCrewCreated && !includeCrewCreated
 
     const buildQuery = (useOriginFilter: boolean) => {
@@ -83,12 +80,8 @@ export async function GET(req: NextRequest) {
         query = query.or('activity_origin.is.null,activity_origin.neq.crew_created')
       }
 
-      if (crewCreatedOnly) {
-        query = query.eq('activity_origin', 'crew_created')
-      }
-
-      if (q) {
-        const like = `%${q}%`
+      if (q && q.trim()) {
+        const like = `%${q.trim()}%`
         query = query.or(`item_id.ilike.${like},activity.ilike.${like},description.ilike.${like},area.ilike.${like},tree_path.ilike.${like},tree_level_1.ilike.${like},tree_level_2.ilike.${like},tree_level_3.ilike.${like},tree_level_4.ilike.${like},tree_level_5.ilike.${like}`)
       }
 
@@ -137,7 +130,6 @@ export async function POST(req: NextRequest) {
     const area = body?.area == null ? null : String(body.area).trim() || null
     const discipline = body?.discipline == null ? null : String(body.discipline).trim() || null
     const unit = toCanonicalUnit(body?.unit)
-    const crewsSource = req.nextUrl.searchParams.get('source') === 'crews'
 
     if (!activity) {
       return NextResponse.json({ error: 'Actividad es obligatoria' }, { status: 400 })
@@ -157,16 +149,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Anti-dup: avoid creating the same activity/area/discipline within company.
-    let duplicateQuery = supabaseAdmin
+    const { data: maybeDupRows, error: dupErr } = await supabaseAdmin
       .from('pr_program')
       .select('id, activity, area, discipline')
       .eq('company_id', session.user.companyId)
       .ilike('activity', activity)
       .limit(100)
-
-    if (crewsSource) duplicateQuery = duplicateQuery.eq('activity_origin', 'crew_created')
-
-    const { data: maybeDupRows, error: dupErr } = await duplicateQuery
     if (dupErr) return NextResponse.json({ error: dupErr.message }, { status: 500 })
     const targetKey = `${normalizeTextKey(activity)}|${normalizeTextKey(area)}|${normalizeTextKey(discipline)}`
     const dup = (maybeDupRows || []).find((r: any) =>
@@ -177,7 +165,7 @@ export async function POST(req: NextRequest) {
     }
 
     const requestedOrigin = String(body?.activity_origin || body?.origin || '').trim().toLowerCase()
-    const activityOrigin = crewsSource || requestedOrigin === 'crew_created' ? 'crew_created' : 'program'
+    const activityOrigin = requestedOrigin === 'crew_created' ? 'crew_created' : 'program'
 
     const payload: any = {
       company_id: session.user.companyId,

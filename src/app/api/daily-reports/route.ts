@@ -4,7 +4,6 @@ import { authOptions } from '../../../lib/auth'
 import { writeAuditLog } from '../../../lib/audit/writeAuditLog'
 import { assertCanMutateResource } from '../../../lib/authz/assertCanMutateResource'
 import { createClient } from '@supabase/supabase-js'
-import { cleanYmd } from '@/lib/querySafety'
 import {
   getCurrentWorkdayMetadata,
   resolveCalculationVersion,
@@ -253,15 +252,13 @@ async function buildEvidenceManifestForReport(
     rows = Array.isArray(byIds.data) ? byIds.data : []
   }
   if (rows.length === 0) {
-    const safeReportDate = cleanYmd(reportDate)
-    if (!safeReportDate) return collectEvidenceManifest([])
-    const dayStart = `${safeReportDate}T00:00:00.000Z`
-    const dayEnd = `${safeReportDate}T23:59:59.999Z`
+    const dayStart = `${reportDate}T00:00:00.000Z`
+    const dayEnd = `${reportDate}T23:59:59.999Z`
     const byDate = await supabaseAdmin
       .from('pr_field_reports')
       .select('id, date, created_at, assignments, activities, activity_observations')
       .eq('company_id', companyId)
-      .or(`date.eq.${safeReportDate},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
+      .or(`date.eq.${reportDate},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
       .order('created_at', { ascending: false })
       .limit(500)
     rows = Array.isArray(byDate.data) ? byDate.data : []

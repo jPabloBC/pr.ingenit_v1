@@ -2,7 +2,6 @@ import { NextAuthOptions } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { supabase } from './supabaseClient'
 import { supabaseAdmin } from './supabaseAdmin'
-import { checkAuthRateLimit, getRequestIp, recordAuthAttempt } from './authRateLimit'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -12,33 +11,12 @@ export const authOptions: NextAuthOptions = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' }
       },
-      async authorize(credentials, req) {
+      async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const normalizedEmail = String(credentials.email || '').trim().toLowerCase()
-        const normalizedPassword = String(credentials.password || '')
-        const requestHeaders = new Headers((req as any)?.headers || {})
-        const requestIp = getRequestIp(requestHeaders)
-
         try {
-          const rateLimit = await checkAuthRateLimit({
-            action: 'signin',
-            email: normalizedEmail,
-            ip: requestIp,
-            maxAttempts: 8,
-            windowSeconds: 15 * 60,
-          })
-
-          if (!rateLimit.allowed) {
-            await recordAuthAttempt({
-              action: 'signin',
-              email: normalizedEmail,
-              ip: requestIp,
-              success: false,
-              metadata: { reason: 'rate_limited' },
-            })
-            return null
-          }
+          const normalizedEmail = String(credentials.email || '').trim().toLowerCase()
+          const normalizedPassword = String(credentials.password || '')
 
           const tryPasswordSignIn = async () =>
             supabase.auth.signInWithPassword({
@@ -77,53 +55,98 @@ export const authOptions: NextAuthOptions = {
             // If email provider disabled, throw specific error to surface to UI
             if (authError && authError.code === 'email_provider_disabled') {
               console.error('Supabase Auth error: email provider disabled')
-              return null
+                // allow a dev bypass when explicitly enabled
+                if (process.env.DEV_AUTH_BYPASS === 'true' && process.env.DEV_BYPASS_SECRET) {
+                  if (credentials.password === process.env.DEV_BYPASS_SECRET) {
+                    try {
+                      const { data: devUser, error: devUserErr } = await supabaseAdmin
+                        .from('pr_users')
+                        .select('id')
+                        .eq('email', normalizedEmail)
+                        .maybeSingle();
+                      if (!devUserErr && devUser) {
+                        authUserId = `dev-${devUser.id}`
+                      } else {
+                        console.error('Dev bypass: no pr_users row found for', normalizedEmail)
+                        return null
+                      }
+                    } catch (e) {
+                      console.error('Dev bypass lookup error:', e)
+                      return null
+                    }
+                  } else {
+                    return null
+                  }
+                } else {
+                  // normal behavior: cannot proceed
+                  return null
+                }
             }
             // Log full error for debugging; still avoid noisy logs for invalid creds
             if (!isInvalidCreds) console.error('Supabase Auth error:', authError)
             else console.debug('Supabase auth returned invalid credentials for email:', normalizedEmail)
-            await recordAuthAttempt({
-              action: 'signin',
-              email: normalizedEmail,
-              ip: requestIp,
-              success: false,
-              metadata: { reason: 'invalid_credentials' },
-            })
             return null
           }
 
-          // Use admin client to bypass RLS during auth (user not yet authenticated).
-          // The internal account must already be linked to this Supabase Auth user.
-          const authenticatedUserId = String(authData.user.id || '')
-          const authenticatedEmail = String(authData.user.email || normalizedEmail).trim().toLowerCase()
+          // Use admin client to bypass RLS during auth (user not yet authenticated)
           let { data: user, error: userError } = await supabaseAdmin
             .from('pr_users')
-            .select('id, email, first_name, last_name, role, company_id, auth_id')
-            .eq('email', authenticatedEmail)
+            .select('id, email, name, role, company_id')
+            .eq('auth_id', authUserId)
             .maybeSingle();
 
-          if ((!user || userError) && authenticatedUserId) {
-            const { data: byAuthId, error: byAuthIdError } = await supabaseAdmin
-              .from('pr_users')
-              .select('id, email, first_name, last_name, role, company_id, auth_id')
-              .eq('auth_id', authenticatedUserId)
-              .maybeSingle()
+          // If mapping by auth_id missing, attempt to find by email and link automatically
+          if ((!user || userError) && normalizedEmail) {
+            try {
+              const { data: byEmail, error: byEmailErr } = await supabaseAdmin
+                .from('pr_users')
+                .select('id, email, name, role, company_id')
+                .eq('email', normalizedEmail)
+                .maybeSingle();
 
-            if (!byAuthIdError && byAuthId) {
-              user = byAuthId
-              userError = null
+              if (!byEmailErr && byEmail) {
+                // try to update pr_users.auth_id using admin client
+                try {
+                  const { error: updErr } = await supabaseAdmin
+                    .from('pr_users')
+                    .update({ auth_id: authData.user.id })
+                    .eq('id', byEmail.id)
+                  if (updErr) {
+                    console.error('Failed to link pr_users.auth_id via admin client:', updErr.message)
+                  } else {
+                    // re-fetch the user row now that auth_id is set
+                    const { data: refetched, error: refetchErr } = await supabaseAdmin
+                      .from('pr_users')
+                      .select('id, email, name, role, company_id')
+                      .eq('auth_id', authData.user.id)
+                      .maybeSingle();
+                    if (!refetchErr && refetched) {
+                      user = refetched
+                    }
+                  }
+                } catch (e) {
+                  console.error('Error updating pr_users auth_id:', e)
+                }
+              }
+            } catch (e) {
+              console.error('Error looking up pr_users by email during authorize:', e)
             }
           }
 
-          if (!user || userError || String((user as any).auth_id || '') !== authenticatedUserId) {
-            await recordAuthAttempt({
-              action: 'signin',
+          if (!user || userError) {
+            // Fallback: allow auth user to sign in with limited session when pr_users mapping missing
+            // Support explicit dev-only accounts via DEV_SUPER_USERS env (comma separated emails)
+            const devEmailsRaw = process.env.DEV_SUPER_USERS || ''
+            const devEmails = devEmailsRaw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean)
+            const isDevEmail = normalizedEmail && devEmails.includes(normalizedEmail)
+
+            user = {
+              id: authData.user.id,
               email: normalizedEmail,
-              ip: requestIp,
-              success: false,
-              metadata: { reason: 'missing_pr_user', has_auth_user: Boolean(authenticatedUserId), has_pr_user: Boolean(user) },
-            })
-            return null
+              name: (authData.user.user_metadata as any)?.full_name || (authData.user.user_metadata as any)?.name || undefined,
+              role: isDevEmail ? 'dev' : 'member',
+              company_id: null
+            } as any
           }
 
           let company: any = null
@@ -163,18 +186,10 @@ export const authOptions: NextAuthOptions = {
             // ignore specialty fetch errors
           }
 
-          await recordAuthAttempt({
-            action: 'signin',
-            email: normalizedEmail,
-            ip: requestIp,
-            success: true,
-            metadata: { role: user!.role || null },
-          })
-
           return {
             id: user!.id,
             email: user!.email,
-            name: [user!.first_name, user!.last_name].map((part: any) => String(part || '').trim()).filter(Boolean).join(' ') || undefined,
+            name: user!.name || undefined,
             role: user!.role,
             companyId: company?.id,
             companyName: company?.name,
@@ -254,7 +269,7 @@ export const authOptions: NextAuthOptions = {
           const { data: mapped, error: mapErr } = await supabaseAdmin
             .from('pr_users')
             .select('id, role, company_id')
-            .eq('id', user.id)
+            .or(`auth_id.eq.${user.id},email.eq.${user.email}`)
             .maybeSingle()
 
           if (!mapErr && mapped) {
@@ -318,8 +333,8 @@ export const authOptions: NextAuthOptions = {
       return session
     },
     redirect: async ({ url, baseUrl }) => {
-      if (url.startsWith('/')) return `${baseUrl}${url}`
-      if (url.startsWith(baseUrl)) return url
+      // Respect explicit callback URLs. Fall back to project selector.
+      if (url) return url
       return baseUrl + '/users/select-project'
     }
   },

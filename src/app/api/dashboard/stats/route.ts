@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '../../../../lib/auth'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
-import { requireApiAccess } from '@/lib/apiAccess'
 
 const normalizeText = (value: any) =>
   String(value || '')
@@ -27,33 +28,15 @@ const isPresentDailyStatus = (row: any) => {
   return status === 'turno' || status === 'presente' || reason === '11' || reason === 'turno' || reason === 'presente'
 }
 
-const isRestDailyStatus = (row: any) => {
-  const status = normalizeText(row?.status)
-  return status === 'descanso'
-}
-
-const isFailureDailyStatus = (row: any) => {
-  const status = normalizeText(row?.status)
-  return status === 'falla'
-}
-
-const isOtherDailyStatus = (row: any) => {
-  const status = normalizeText(row?.status)
-  if (!status) return false
-  return !isPresentDailyStatus(row) && !isRestDailyStatus(row) && !isFailureDailyStatus(row)
-}
-
 export async function GET() {
   try {
-    const access = await requireApiAccess({ resource: 'dashboard' })
-    if (!access.ok) return access.response
-
-    const session = access.session
+    const session = await getServerSession(authOptions) as any
 
     const userRole = session?.user?.role
-    const companyId = access.actor.companyId
+    const isDev = userRole === 'dev'
+    const companyId = session?.user?.companyId
 
-    if (!companyId) {
+    if (!isDev && !companyId) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     const userSpecialty = session.user.specialty
@@ -84,7 +67,6 @@ export async function GET() {
 
     // Contar colaboradores activos directamente de pr_collaborators
     const activeCollaborators = (collaborators || []).filter((c: any) => c.is_active === true).length
-    const terminatedCollaborators = (collaborators || []).filter((c: any) => c.is_active === false).length
 
     // Para admin: calcular desglose por disciplina
     let specialtyBreakdown: { specialty: string; total: number; active: number }[] = []
@@ -119,9 +101,6 @@ export async function GET() {
       .filter(Boolean)
 
     let presentToday = 0
-    let restToday = 0
-    let failureToday = 0
-    let otherToday = 0
     if (activeCollaboratorIds.length > 0) {
       let dailyStatusQuery = supabaseAdmin
         .from('pr_collaborator_daily_status')
@@ -136,11 +115,7 @@ export async function GET() {
       const { data: dailyStatusRows, error: dailyStatusError } = await dailyStatusQuery
 
       if (!dailyStatusError) {
-        const rows = dailyStatusRows || []
-        presentToday = rows.filter(isPresentDailyStatus).length
-        restToday = rows.filter(isRestDailyStatus).length
-        failureToday = rows.filter(isFailureDailyStatus).length
-        otherToday = rows.filter(isOtherDailyStatus).length
+        presentToday = (dailyStatusRows || []).filter(isPresentDailyStatus).length
       } else {
         const { data: attendance } = await supabaseAdmin
           .from('pr_attendance')
@@ -203,12 +178,8 @@ export async function GET() {
     const stats: any = {
       totalCollaborators,
       activeCollaborators,
-      terminatedCollaborators,
       presentToday,
       absentToday,
-      restToday,
-      failureToday,
-      otherToday,
       expiredEPP,
       pendingPayroll
     }

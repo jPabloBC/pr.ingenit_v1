@@ -1,19 +1,18 @@
 import { NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '../../../../lib/auth'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
-import { requireApiAccess } from '@/lib/apiAccess'
 
 export async function GET() {
   try {
-    const access = await requireApiAccess({ resource: 'dashboard' })
-    if (!access.ok) return access.response
-
-    const session = access.session
+    const session = await getServerSession(authOptions) as any
 
     const userRole = session?.user?.role
-    const companyId = access.actor.companyId
+    const isDev = userRole === 'dev'
+    const companyId = session?.user?.companyId
 
-    if (!companyId) {
+    if (!isDev && !companyId) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
     const userSpecialty = session.user.specialty
@@ -118,3 +117,4 @@ export async function GET() {
     return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
 }
+

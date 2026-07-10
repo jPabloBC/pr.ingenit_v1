@@ -1,6 +1,5 @@
 import { readdirSync, statSync } from 'fs'
 import path from 'path'
-import { requireApiAccess } from '@/lib/apiAccess'
 
 function humanize(name: string) {
   if (!name) return name
@@ -12,9 +11,6 @@ function humanize(name: string) {
 
 export async function GET() {
   try {
-    const access = await requireApiAccess({ resource: 'admin-permissions' })
-    if (!access.ok) return access.response
-
     const base = path.join(process.cwd(), 'src', 'app', 'dev')
     const entries = readdirSync(base, { withFileTypes: true })
     const routes: Array<{ path: string; text: string }> = []

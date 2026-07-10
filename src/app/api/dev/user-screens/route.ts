@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs/promises'
 import path from 'path'
-import { requireApiAccess } from '@/lib/apiAccess'
 
 function humanize(name: string) {
   return name.replace(/[-_]/g, ' ')
@@ -47,9 +46,6 @@ async function walkDir(dir: string, baseRoute = '/users') {
 
 export async function GET() {
   try {
-    const access = await requireApiAccess({ resource: 'admin-permissions' })
-    if (!access.ok) return access.response
-
     const usersDir = path.join(process.cwd(), 'src', 'app', 'users')
     const screens = await walkDir(usersDir)
 

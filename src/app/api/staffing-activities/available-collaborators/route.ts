@@ -5,7 +5,6 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { isValidYmdDate } from '@/lib/staffing/validateStaffingPayload'
 import { fetchAvailableCollaborators, resolveTurnoSourceDate, todayYmd } from '@/lib/staffing/availableCollaborators'
-import { cleanYmd } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,7 +55,7 @@ const fetchCollaboratorsByIds = async (companyId: string, collaboratorIds: strin
 
 const fetchRoleHistoryByCollaborator = async (companyId: string, collaboratorIds: string[], workDate: string) => {
   const ids = uniqueIds(collaboratorIds)
-  const date = cleanYmd(workDate)
+  const date = clean(workDate).slice(0, 10)
   if (!ids.length || !date) return new Map<string, any>()
 
   const rows: any[] = []

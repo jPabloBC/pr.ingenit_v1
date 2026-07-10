@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { requireApiAccess } from '@/lib/apiAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,13 +18,13 @@ const isMissingTableError = (error: any) =>
 
 export async function POST(request: NextRequest) {
   try {
-    const access = await requireApiAccess({ resource: 'collaborators' })
-    if (!access.ok) return access.response
+    const session = (await getServerSession(authOptions as any)) as any
+    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const session = access.session
     const role = String(session.user.role || '').trim().toLowerCase()
-    const sessionCompanyId = String(access.actor.companyId || '').trim()
-    if (!sessionCompanyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const isDev = role === 'dev'
+    const sessionCompanyId = String(session.user.companyId || '').trim()
+    if (!isDev && !sessionCompanyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json().catch(() => null)
     const collaboratorId = String(body?.collaborator_id || '').trim()
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     if (collabError || !collab) return NextResponse.json({ error: 'Colaborador no encontrado' }, { status: 404 })
 
     const companyId = String(collab.company_id || '')
-    if (companyId !== sessionCompanyId) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
+    if (!isDev && companyId !== sessionCompanyId) return NextResponse.json({ error: 'No autorizado' }, { status: 403 })
 
     const { data, error } = await supabaseAdmin
       .from('pr_collaborator_role_history')
@@ -77,3 +78,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 })
   }
 }
+

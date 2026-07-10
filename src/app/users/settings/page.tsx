@@ -8,7 +8,6 @@ import {
   Chip,
   CircularProgress,
   Container,
-  Divider,
   IconButton,
   MenuItem,
   Paper,
@@ -89,7 +88,6 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [uploadingKey, setUploadingKey] = useState('')
   const [selectedContextByType, setSelectedContextByType] = useState<Record<string, string>>({})
-  const [activeAssetType, setActiveAssetType] = useState(ASSET_TYPES[0].value)
   const [snackbar, setSnackbar] = useState<SnackbarState>({ open: false, message: '', severity: 'info' })
   const fileInputsRef = useRef<Record<string, HTMLInputElement | null>>({})
 
@@ -128,13 +126,6 @@ export default function SettingsPage() {
     })
     return map
   }, [assets])
-
-  const activeTypeConfig = ASSET_TYPES.find((type) => type.value === activeAssetType) || ASSET_TYPES[0]
-  const activeAssets = assetsByType.get(activeTypeConfig.value) || []
-  const activeUsageContext = selectedContextByType[activeTypeConfig.value] || 'general'
-  const activeUploadKey = `${activeTypeConfig.value}:${activeUsageContext}`
-  const activeIsUploading = uploadingKey === activeUploadKey
-  const defaultAssetsCount = assets.filter((asset) => asset.is_default).length
 
   const uploadAsset = async (assetType: string, file: File) => {
     const usageContext = selectedContextByType[assetType] || 'general'
@@ -222,307 +213,175 @@ export default function SettingsPage() {
       <Container
         maxWidth={false}
         disableGutters
-        sx={{
-          width: '100%',
-          maxWidth: '100% !important',
-          px: { xs: 2, sm: 3, md: 4 },
-          py: 3,
-          bgcolor: '#f6f8fb',
-          minHeight: 'calc(100vh - 72px)',
-        }}
+        sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}
       >
-        <Paper
-          elevation={0}
-          sx={{
-            border: '1px solid #d8e2ef',
-            borderRadius: 2,
-            overflow: 'hidden',
-            mb: 2,
-          }}
-        >
-          <Stack
-            direction={{ xs: 'column', lg: 'row' }}
-            alignItems={{ xs: 'stretch', lg: 'center' }}
-            justifyContent="space-between"
-            gap={2}
-            sx={{ px: { xs: 2, md: 3 }, py: 2.25, bgcolor: colors.white }}
-          >
+        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 }, mb: 3 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" gap={2}>
             <Box>
-              <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 900, mb: 0.35 }}>
+              <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 800, mb: 0.75 }}>
                 Ajustes
               </Typography>
-              <Typography sx={{ color: colors.gray3, fontSize: 14 }}>
-                Administración de identidad visual para correos, reportes y presentaciones.
+              <Typography sx={{ color: colors.blue7 }}>
+                Configuraciones de empresa y plataforma.
               </Typography>
             </Box>
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'stretch', sm: 'center' }} gap={1.25}>
-              {[
-                { label: 'Tipos', value: ASSET_TYPES.length },
-                { label: 'Archivos', value: assets.length },
-                { label: 'Default', value: defaultAssetsCount },
-              ].map((item) => (
-                <Box
-                  key={item.label}
-                  sx={{
-                    minWidth: 92,
-                    px: 1.4,
-                    py: 0.9,
-                    border: '1px solid #dbe6f3',
-                    borderRadius: 1,
-                    bgcolor: '#fbfdff',
-                  }}
-                >
-                  <Typography sx={{ color: colors.blue7, fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>
-                    {item.label}
-                  </Typography>
-                  <Typography sx={{ color: colors.blue1, fontSize: 20, fontWeight: 900, lineHeight: 1.05 }}>
-                    {item.value}
-                  </Typography>
-                </Box>
-              ))}
-              <Button
-                variant="outlined"
-                startIcon={loading ? <CircularProgress size={16} /> : <RefreshCw size={16} />}
-                onClick={() => void loadAssets()}
-                disabled={loading}
-                sx={{ minHeight: 42 }}
-              >
-                Actualizar
-              </Button>
-            </Stack>
+            <Button
+              variant="outlined"
+              startIcon={loading ? <CircularProgress size={16} /> : <RefreshCw size={16} />}
+              onClick={() => void loadAssets()}
+              disabled={loading}
+            >
+              Actualizar
+            </Button>
           </Stack>
         </Paper>
 
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', lg: '280px minmax(0, 1fr)' },
-            gap: 2,
-            alignItems: 'start',
-          }}
-        >
-          <Paper elevation={0} sx={{ border: '1px solid #d8e2ef', borderRadius: 2, overflow: 'hidden' }}>
-            <Box sx={{ px: 2, py: 1.5, bgcolor: colors.white, borderBottom: '1px solid #e6edf6' }}>
-              <Typography sx={{ color: colors.blue1, fontWeight: 900 }}>
+        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 } }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
+            <Box>
+              <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 800 }}>
                 Imágenes corporativas
               </Typography>
-              <Typography sx={{ color: colors.gray4, fontSize: 12.5 }}>
-                Selecciona una categoría.
+              <Typography sx={{ color: colors.blue7, fontSize: 14 }}>
+                Assets disponibles para reportes, asistencia y presentaciones.
               </Typography>
             </Box>
+            {!canManage ? (
+              <Chip label="Solo lectura" size="small" />
+            ) : null}
+          </Stack>
 
-            <Stack sx={{ p: 1 }}>
+          {loading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 4 }}>
+              <CircularProgress size={22} />
+              <Typography sx={{ color: colors.blue7 }}>Cargando imágenes...</Typography>
+            </Box>
+          ) : (
+            <Stack gap={2}>
               {ASSET_TYPES.map((assetType) => {
-                const count = (assetsByType.get(assetType.value) || []).length
-                const selected = assetType.value === activeTypeConfig.value
+                const list = assetsByType.get(assetType.value) || []
+                const usageContext = selectedContextByType[assetType.value] || 'general'
+                const uploadKey = `${assetType.value}:${usageContext}`
+                const isUploading = uploadingKey === uploadKey
+
                 return (
-                  <Button
-                    key={assetType.value}
-                    fullWidth
-                    onClick={() => setActiveAssetType(assetType.value)}
-                    sx={{
-                      justifyContent: 'flex-start',
-                      minHeight: 48,
-                      px: 1.25,
-                      borderRadius: 1,
-                      color: selected ? colors.blue1 : colors.gray2,
-                      bgcolor: selected ? '#eaf3ff' : 'transparent',
-                      border: selected ? '1px solid #c5dcf7' : '1px solid transparent',
-                      '&:hover': { bgcolor: selected ? '#eaf3ff' : '#f3f7fc' },
-                    }}
-                  >
-                    <Stack direction="row" alignItems="center" gap={1.1} sx={{ width: '100%' }}>
-                      <Box sx={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: 1,
-                        display: 'grid',
-                        placeItems: 'center',
-                        bgcolor: selected ? colors.blue6 : '#edf2f7',
-                        color: selected ? colors.white : colors.blue5,
-                        flexShrink: 0,
-                      }}>
-                        <ImageIcon size={16} />
-                      </Box>
-                      <Box sx={{ minWidth: 0, textAlign: 'left', flex: 1 }}>
-                        <Typography sx={{ fontSize: 13.5, fontWeight: 800, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {assetType.label}
-                        </Typography>
-                        <Typography sx={{ fontSize: 11.5, color: selected ? colors.blue7 : colors.gray5 }}>
-                          {count} archivo{count === 1 ? '' : 's'}
-                        </Typography>
-                      </Box>
-                      <Chip label={count} size="small" sx={{ height: 22, minWidth: 30, bgcolor: selected ? colors.white : '#eef2f7', color: colors.blue1, fontWeight: 800 }} />
+                  <Box key={assetType.value} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, p: 2 }}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
+                      <Stack direction="row" alignItems="center" gap={1.25}>
+                        <Box sx={{ width: 34, height: 34, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: '#eef2f7', color: colors.blue4 }}>
+                          <ImageIcon size={18} />
+                        </Box>
+                        <Box>
+                          <Typography sx={{ fontWeight: 800, color: colors.blue1 }}>
+                            {assetType.label}
+                          </Typography>
+                          <Typography sx={{ color: colors.blue7, fontSize: 13 }}>
+                            {list.length} archivo{list.length === 1 ? '' : 's'}
+                          </Typography>
+                        </Box>
+                      </Stack>
+
+                      {canManage ? (
+                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                          <Select
+                            size="small"
+                            value={usageContext}
+                            onChange={(event) => {
+                              setSelectedContextByType((prev) => ({ ...prev, [assetType.value]: String(event.target.value) }))
+                            }}
+                            sx={{ minWidth: 170 }}
+                          >
+                            {USAGE_CONTEXTS.map((context) => (
+                              <MenuItem key={context.value} value={context.value}>{context.label}</MenuItem>
+                            ))}
+                          </Select>
+                          <input
+                            ref={(node) => { fileInputsRef.current[assetType.value] = node }}
+                            type="file"
+                            accept="image/*"
+                            hidden
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null
+                              event.target.value = ''
+                              void handleFileChange(assetType.value, file)
+                            }}
+                          />
+                          <Button
+                            variant="contained"
+                            startIcon={isUploading ? <CircularProgress size={16} color="inherit" /> : <Upload size={16} />}
+                            onClick={() => fileInputsRef.current[assetType.value]?.click()}
+                            disabled={Boolean(uploadingKey)}
+                          >
+                            Subir
+                          </Button>
+                        </Stack>
+                      ) : null}
                     </Stack>
-                  </Button>
+
+                    {list.length === 0 ? (
+                      <Box sx={{ border: '1px dashed #cbd5e1', borderRadius: 1, p: 2, color: colors.blue7, fontSize: 14 }}>
+                        Sin imágenes registradas.
+                      </Box>
+                    ) : (
+                      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
+                        {list.map((asset) => (
+                          <Box key={asset.id} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflow: 'hidden', bgcolor: '#fff' }}>
+                            <Box sx={{ height: 118, bgcolor: '#f8fafc', display: 'grid', placeItems: 'center', borderBottom: '1px solid #e5e7eb' }}>
+                              <Box
+                                component="img"
+                                src={`/api/company-assets/file?key=${encodeURIComponent(asset.r2_key)}`}
+                                alt={asset.name}
+                                sx={{ maxWidth: '100%', maxHeight: 104, objectFit: 'contain', p: 1 }}
+                              />
+                            </Box>
+                            <Box sx={{ p: 1.5 }}>
+                              <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1}>
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography sx={{ fontWeight: 700, color: colors.blue1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {asset.name}
+                                  </Typography>
+                                  <Typography sx={{ color: colors.blue7, fontSize: 12 }}>
+                                    {asset.usage_context || 'general'} · {formatBytes(asset.file_size_bytes)}
+                                  </Typography>
+                                  {asset.width_px && asset.height_px ? (
+                                    <Typography sx={{ color: colors.blue7, fontSize: 12 }}>
+                                      {asset.width_px} x {asset.height_px}px
+                                    </Typography>
+                                  ) : null}
+                                </Box>
+                                {asset.is_default ? <Chip label="Default" color="primary" size="small" /> : null}
+                              </Stack>
+
+                              {canManage ? (
+                                <Stack direction="row" justifyContent="flex-end" gap={0.5} sx={{ mt: 1 }}>
+                                  <IconButton
+                                    size="small"
+                                    title="Marcar predeterminada"
+                                    disabled={Boolean(asset.is_default)}
+                                    onClick={() => void patchAsset(asset.id, 'set_default')}
+                                  >
+                                    <Star size={17} />
+                                  </IconButton>
+                                  <IconButton
+                                    size="small"
+                                    title="Desactivar"
+                                    onClick={() => void patchAsset(asset.id, 'deactivate')}
+                                  >
+                                    <Trash2 size={16} />
+                                  </IconButton>
+                                </Stack>
+                              ) : null}
+                            </Box>
+                          </Box>
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
                 )
               })}
             </Stack>
-          </Paper>
-
-          <Paper elevation={0} sx={{ border: '1px solid #d8e2ef', borderRadius: 2, overflow: 'hidden', minWidth: 0 }}>
-            <Stack
-              direction={{ xs: 'column', md: 'row' }}
-              alignItems={{ xs: 'stretch', md: 'center' }}
-              justifyContent="space-between"
-              gap={1.5}
-              sx={{ px: { xs: 2, md: 2.5 }, py: 2, bgcolor: colors.white, borderBottom: '1px solid #e6edf6' }}
-            >
-              <Stack direction="row" alignItems="center" gap={1.25}>
-                <Box sx={{ width: 42, height: 42, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: '#eaf3ff', color: colors.blue5 }}>
-                  <ImageIcon size={21} />
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ color: colors.blue1, fontWeight: 900, fontSize: 20, lineHeight: 1.15 }}>
-                    {activeTypeConfig.label}
-                  </Typography>
-                  <Typography sx={{ color: colors.gray4, fontSize: 13 }}>
-                    {activeAssets.length} archivo{activeAssets.length === 1 ? '' : 's'} disponible{activeAssets.length === 1 ? '' : 's'}
-                  </Typography>
-                </Box>
-              </Stack>
-
-              {canManage ? (
-                <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-                  <Select
-                    size="small"
-                    value={activeUsageContext}
-                    onChange={(event) => {
-                      setSelectedContextByType((prev) => ({ ...prev, [activeTypeConfig.value]: String(event.target.value) }))
-                    }}
-                    sx={{ minWidth: { xs: '100%', sm: 190 }, bgcolor: colors.white }}
-                  >
-                    {USAGE_CONTEXTS.map((context) => (
-                      <MenuItem key={context.value} value={context.value}>{context.label}</MenuItem>
-                    ))}
-                  </Select>
-                  <input
-                    ref={(node) => { fileInputsRef.current[activeTypeConfig.value] = node }}
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    onChange={(event) => {
-                      const file = event.target.files?.[0] || null
-                      event.target.value = ''
-                      void handleFileChange(activeTypeConfig.value, file)
-                    }}
-                  />
-                  <Button
-                    variant="contained"
-                    startIcon={activeIsUploading ? <CircularProgress size={16} color="inherit" /> : <Upload size={16} />}
-                    onClick={() => fileInputsRef.current[activeTypeConfig.value]?.click()}
-                    disabled={Boolean(uploadingKey)}
-                    sx={{ minWidth: 116 }}
-                  >
-                    Subir
-                  </Button>
-                </Stack>
-              ) : (
-                <Chip label="Solo lectura" size="small" />
-              )}
-            </Stack>
-
-            <Box sx={{ p: { xs: 2, md: 2.5 } }}>
-              {loading ? (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 6 }}>
-                  <CircularProgress size={22} />
-                  <Typography sx={{ color: colors.blue7 }}>Cargando imágenes...</Typography>
-                </Box>
-              ) : activeAssets.length === 0 ? (
-                <Box
-                  sx={{
-                    minHeight: 280,
-                    border: '1px dashed #b9c8dc',
-                    borderRadius: 2,
-                    bgcolor: '#fbfdff',
-                    display: 'grid',
-                    placeItems: 'center',
-                    textAlign: 'center',
-                    px: 2,
-                  }}
-                >
-                  <Box>
-                    <Box sx={{ width: 54, height: 54, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: '#edf4fb', color: colors.blue5, mx: 'auto', mb: 1.25 }}>
-                      <ImageIcon size={25} />
-                    </Box>
-                    <Typography sx={{ color: colors.blue1, fontWeight: 900 }}>
-                      Sin imágenes registradas
-                    </Typography>
-                    <Typography sx={{ color: colors.gray4, fontSize: 13 }}>
-                      {canManage ? 'Sube un archivo para habilitar esta categoría.' : 'No hay archivos visibles para esta categoría.'}
-                    </Typography>
-                  </Box>
-                </Box>
-              ) : (
-                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
-                  {activeAssets.map((asset) => (
-                    <Box
-                      key={asset.id}
-                      sx={{
-                        border: '1px solid #dce5f0',
-                        borderRadius: 1,
-                        overflow: 'hidden',
-                        bgcolor: colors.white,
-                        minWidth: 0,
-                      }}
-                    >
-                      <Box sx={{ height: 150, bgcolor: '#f3f6fa', display: 'grid', placeItems: 'center', borderBottom: '1px solid #e2e8f0' }}>
-                        <Box
-                          component="img"
-                          src={`/api/company-assets/file?key=${encodeURIComponent(asset.r2_key)}`}
-                          alt={asset.name}
-                          sx={{ maxWidth: '100%', maxHeight: 130, objectFit: 'contain', p: 1 }}
-                        />
-                      </Box>
-                      <Box sx={{ p: 1.5 }}>
-                        <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1}>
-                          <Box sx={{ minWidth: 0 }}>
-                            <Typography sx={{ fontWeight: 900, color: colors.blue1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {asset.name}
-                            </Typography>
-                            <Typography sx={{ color: colors.gray4, fontSize: 12 }}>
-                              {asset.usage_context || 'general'} · {formatBytes(asset.file_size_bytes)}
-                            </Typography>
-                            {asset.width_px && asset.height_px ? (
-                              <Typography sx={{ color: colors.gray4, fontSize: 12 }}>
-                                {asset.width_px} x {asset.height_px}px
-                              </Typography>
-                            ) : null}
-                          </Box>
-                          {asset.is_default ? <Chip label="Default" size="small" sx={{ bgcolor: '#dceaf7', color: colors.blue1, fontWeight: 800 }} /> : null}
-                        </Stack>
-
-                        {canManage ? (
-                          <>
-                            <Divider sx={{ my: 1.1 }} />
-                            <Stack direction="row" justifyContent="flex-end" gap={0.5}>
-                              <IconButton
-                                size="small"
-                                title="Marcar predeterminada"
-                                disabled={Boolean(asset.is_default)}
-                                onClick={() => void patchAsset(asset.id, 'set_default')}
-                              >
-                                <Star size={17} />
-                              </IconButton>
-                              <IconButton
-                                size="small"
-                                title="Desactivar"
-                                onClick={() => void patchAsset(asset.id, 'deactivate')}
-                              >
-                                <Trash2 size={16} />
-                              </IconButton>
-                            </Stack>
-                          </>
-                        ) : null}
-                      </Box>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </Box>
-          </Paper>
-        </Box>
+          )}
+        </Paper>
       </Container>
 
       <Snackbar

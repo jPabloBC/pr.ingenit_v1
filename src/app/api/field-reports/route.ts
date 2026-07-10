@@ -6,7 +6,6 @@ import { normalizeText } from '@/lib/normalize'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { writeAuditLog } from '@/lib/audit/writeAuditLog'
-import { cleanUuid } from '@/lib/querySafety'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const FIELD_REPORT_BASE_SEQUENCE_ANCHOR_DATE = '2026-05-31'
@@ -1762,12 +1761,8 @@ export async function GET(req: NextRequest) {
     const supabaseAdmin = getSupabaseAdmin()
     const role = String(session?.user?.role || '').toLowerCase()
     const id = req.nextUrl.searchParams.get('id')
-    const historyReportIdRaw = req.nextUrl.searchParams.get('history_report_id')
-    const crewIdRaw = req.nextUrl.searchParams.get('crewId')
-    const historyReportId = historyReportIdRaw ? cleanUuid(historyReportIdRaw) : ''
-    const crewId = crewIdRaw ? cleanUuid(crewIdRaw) : ''
-    if (historyReportIdRaw && !historyReportId) return NextResponse.json({ error: 'Invalid history_report_id' }, { status: 400 })
-    if (crewIdRaw && !crewId) return NextResponse.json({ error: 'Invalid crewId' }, { status: 400 })
+    const historyReportId = req.nextUrl.searchParams.get('history_report_id')
+    const crewId = req.nextUrl.searchParams.get('crewId')
     const date = String(req.nextUrl.searchParams.get('date') || '').slice(0, 10)
     const dateFrom = String(req.nextUrl.searchParams.get('date_from') || '').slice(0, 10)
     const dateTo = String(req.nextUrl.searchParams.get('date_to') || '').slice(0, 10)

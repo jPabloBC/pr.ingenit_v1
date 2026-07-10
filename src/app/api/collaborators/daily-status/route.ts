@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { todayYmd } from '@/lib/staffing/availableCollaborators'
-import { requireApiAccess } from '@/lib/apiAccess'
-import { cleanYmd } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,12 +57,10 @@ const fetchRoleHistoryForRows = async (companyId: string, rows: any[]) => {
   const collaboratorIds = Array.from(new Set(rows.map((row: any) => String(row?.collaborator_id || '').trim()).filter(Boolean)))
   const minDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
-    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b))[0]
   const maxDate = rows
     .map((row: any) => String(row?.work_date || '').slice(0, 10))
-    .map(cleanYmd)
     .filter(Boolean)
     .sort((a, b) => b.localeCompare(a))[0]
   if (!companyId || collaboratorIds.length === 0 || !minDate || !maxDate) return []
@@ -96,32 +94,14 @@ const pickRoleForDate = (historyRows: any[], collaboratorId: string, workDate: s
 
 export async function GET(request: NextRequest) {
   try {
+    const session = (await getServerSession(authOptions as any)) as any
+    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const role = String(session.user.role || '').trim().toLowerCase()
+    const isDev = role === 'dev'
     const searchParams = request.nextUrl.searchParams
-    const datesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('dates') || '').trim().toLowerCase()
-    )
-    const turnoDatesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('turno_dates') || '').trim().toLowerCase()
-    )
-    const turnoIdsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
-      String(searchParams.get('turno_ids') || '').trim().toLowerCase()
-    )
-    const crewsReadMode = String(searchParams.get('source') || '').trim().toLowerCase() === 'crews' &&
-      ((datesOnly && turnoDatesOnly) || turnoIdsOnly)
-
-    const access = await requireApiAccess({ resource: 'attendance', aliases: crewsReadMode ? ['daily-report', 'crews'] : ['daily-report'] })
-    if (!access.ok) return access.response
-
-    const permissions = Array.isArray(access.permissions) ? access.permissions : []
-    const hasAttendancePermission = permissions.includes('*') || permissions.includes('attendance') || permissions.includes('daily-report')
-    if (!hasAttendancePermission && !crewsReadMode) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const session = access.session
     const queryCompanyId = String(searchParams.get('company_id') || '').trim()
-    const companyId = String(access.actor.companyId || '').trim()
-    if (queryCompanyId && queryCompanyId !== companyId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    const companyId = isDev ? (queryCompanyId || String(session.user.companyId || '').trim()) : String(session.user.companyId || '').trim()
     if (!companyId) return NextResponse.json({ error: 'Missing company_id' }, { status: 400 })
 
     const workDate = normalizeDate(searchParams.get('date'))
@@ -129,11 +109,20 @@ export async function GET(request: NextRequest) {
     const dateToRaw = normalizeOptionalDate(searchParams.get('date_to'))
     const collaboratorId = String(searchParams.get('collaborator_id') || '').trim()
     const statusFilter = String(searchParams.get('status') || '').trim()
+    const datesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('dates') || '').trim().toLowerCase()
+    )
+    const turnoDatesOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('turno_dates') || '').trim().toLowerCase()
+    )
     const includeBounds = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('include_bounds') || '').trim().toLowerCase()
     )
     const boundsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('bounds') || '').trim().toLowerCase()
+    )
+    const turnoIdsOnly = ['1', 'true', 'yes', 'si', 'on'].includes(
+      String(searchParams.get('turno_ids') || '').trim().toLowerCase()
     )
     const lean = ['1', 'true', 'yes', 'si', 'on'].includes(
       String(searchParams.get('lean') || '').trim().toLowerCase()
@@ -412,13 +401,13 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
-    const access = await requireApiAccess({ resource: 'attendance', aliases: ['daily-report'] })
-    if (!access.ok) return access.response
+    const session = (await getServerSession(authOptions as any)) as any
+    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const session = access.session
     const role = String(session.user.role || '').trim().toLowerCase()
-    const companyId = String(access.actor.companyId || '').trim()
-    if (!companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const isDev = role === 'dev'
+    const companyId = String(session.user.companyId || '').trim()
+    if (!isDev && !companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
     const date = normalizeDate(body?.date)
@@ -460,7 +449,7 @@ export async function PUT(request: NextRequest) {
       .select('id, company_id')
       .in('id', collaboratorIds)
 
-    collabQuery = collabQuery.eq('company_id', companyId)
+    if (!isDev) collabQuery = collabQuery.eq('company_id', companyId)
     const { data: collabs, error: collabErr } = await collabQuery
     if (collabErr) return NextResponse.json({ error: collabErr.message }, { status: 500 })
 

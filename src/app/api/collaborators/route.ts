@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
 import { resolveCurrentActor } from '@/lib/currentActor'
-import { requireApiAccess } from '@/lib/apiAccess'
-import { cleanUuid, cleanYmd } from '@/lib/querySafety'
 
 const getSupabaseAdminClient = () => {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -158,9 +158,9 @@ const isMissingTableError = (error: any) =>
   String(error?.message || '').toLowerCase().includes('does not exist')
 
 const normalizeYmd = (value: unknown) => {
-  const raw = cleanYmd(value)
+  const raw = String(value || '').trim()
   if (!raw) return new Date().toISOString().slice(0, 10)
-  return raw
+  return raw.slice(0, 10)
 }
 
 const fetchRoleHistoryByCollaborator = async (
@@ -315,20 +315,11 @@ const recordCollaboratorRoleHistory = async (params: {
 
 export async function GET(request: NextRequest) {
   try {
-    const url = new URL(request.url)
-    const summary = url.searchParams.get('summary') === '1'
-    const attendance = url.searchParams.get('attendance') === '1'
-    const crewsMode = url.searchParams.get('crews') === '1'
-    const access = await requireApiAccess({ resource: 'collaborators', aliases: crewsMode && summary ? ['crews'] : [] })
-    if (!access.ok) return access.response
+    const session = await getServerSession(authOptions)
 
-    const permissions = Array.isArray(access.permissions) ? access.permissions : []
-    const hasCollaboratorsPermission = permissions.includes('*') || permissions.includes('collaborators')
-    if (!hasCollaboratorsPermission && (!crewsMode || !summary)) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-
-    const companyId = access.actor.companyId
+    const role = String((session?.user as any)?.role || '').trim().toLowerCase()
+    const isDev = role === 'dev'
+    const companyId = session?.user?.companyId || null
 
     let supabaseAdmin
     try {
@@ -340,16 +331,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    if (!companyId) {
+    if (!companyId && !isDev) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
     // Check query params: excludeAssigned and allowCrewId
+    const url = new URL(request.url)
     const excludeAssigned = url.searchParams.get('excludeAssigned') === 'true'
-    const allowCrewIdRaw = url.searchParams.get('allowCrewId') || null
-    const allowCrewId = allowCrewIdRaw ? cleanUuid(allowCrewIdRaw) : null
-    if (allowCrewIdRaw && !allowCrewId) return NextResponse.json({ error: 'Invalid allowCrewId' }, { status: 400 })
-    const asOfDate = cleanYmd(url.searchParams.get('as_of_date'))
+    const allowCrewId = url.searchParams.get('allowCrewId') || null
+    const summary = url.searchParams.get('summary') === '1'
+    const attendance = url.searchParams.get('attendance') === '1'
+    const crewsMode = url.searchParams.get('crews') === '1'
+    const asOfDate = String(url.searchParams.get('as_of_date') || '').trim().slice(0, 10)
     // ids to exclude (populated when excludeAssigned processing runs)
     let excludedAssignedIds: string[] = []
 
@@ -361,7 +354,9 @@ export async function GET(request: NextRequest) {
         .order('last_name', { ascending: true })
         .order('first_name', { ascending: true })
 
-      query = query.eq('company_id', companyId)
+      if (!isDev && companyId) {
+        query = query.eq('company_id', companyId)
+      }
 
       return query
     }
@@ -687,17 +682,14 @@ export async function POST(request: NextRequest) {
   try {
     if (COLLABORATORS_DEBUG) console.log('🚀 POST /api/collaborators - Iniciando...')
     
-    const access = await requireApiAccess({ resource: 'collaborators' })
-    if (!access.ok) return access.response
-
-    const session = access.session
+    const session = await getServerSession(authOptions)
     if (COLLABORATORS_DEBUG) console.log('👤 Sesión obtenida:', session?.user?.email)
     
     if (!session?.user?.companyId) {
       if (COLLABORATORS_DEBUG) console.log('❌ No autorizado - falta companyId')
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
-    const actor = access.actor
+    const actor = await resolveCurrentActor(session)
     void actor
 
     if (COLLABORATORS_DEBUG) console.log('📥 Parseando body...')
@@ -1016,17 +1008,14 @@ export async function PUT(request: NextRequest) {
   try {
     if (COLLABORATORS_DEBUG) console.log('🚀 PUT /api/collaborators - Iniciando actualización...')
     
-    const access = await requireApiAccess({ resource: 'collaborators' })
-    if (!access.ok) return access.response
-
-    const session = access.session
+    const session = await getServerSession(authOptions)
     if (COLLABORATORS_DEBUG) console.log('👤 Sesión obtenida:', session?.user?.email)
     
     if (!session?.user?.companyId) {
       if (COLLABORATORS_DEBUG) console.log('❌ No autorizado - falta companyId')
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
-    const actor = access.actor
+    const actor = await resolveCurrentActor(session)
     void actor
 
     if (COLLABORATORS_DEBUG) console.log('📥 Parseando body...')

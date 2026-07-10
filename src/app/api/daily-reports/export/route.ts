@@ -4,7 +4,6 @@ import { authOptions } from '../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import ExcelJS from 'exceljs'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
-import { cleanYmd } from '@/lib/querySafety'
 import {
   resolveCalculationVersion,
   resolvePersonWorkdayHours,
@@ -634,15 +633,13 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
     if (sourceIds.length > 0) {
       // Los reportes diarios V2 guardan source_field_report_ids filtrados por frente.
       // Para saber si un cargo especial estuvo en ambos frentes, el Excel debe mirar todo el día.
-      const safeDay = cleanYmd(day)
-      if (!safeDay) throw new Error('Fecha invalida para exportacion')
-      const dayStart = `${safeDay}T00:00:00.000Z`
-      const dayEnd = `${safeDay}T23:59:59.999Z`
+      const dayStart = `${day}T00:00:00.000Z`
+      const dayEnd = `${day}T23:59:59.999Z`
       const byDateRes = await supabaseAdmin
         .from('pr_field_reports')
         .select(fieldReportExportSelect)
         .eq('company_id', companyId)
-        .or(`date.eq.${safeDay},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
+        .or(`date.eq.${day},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
         .order('created_at', { ascending: false })
         .limit(500)
       fieldReportsLoadDebug.byDateCount = Array.isArray(byDateRes.data) ? byDateRes.data.length : 0
@@ -2823,22 +2820,19 @@ async function exportDailyReport(req: NextRequest, reportOverride?: any) {
     if (evidenceItems.length === 0 && sourceIds.length > 0) {
       // Si los IDs guardados no traen evidencia (p. ej. quedaron desfasados),
       // hacemos una segunda consulta completa por fecha para rescatar evidencias reales.
-      const safeDay = cleanYmd(day)
-      if (safeDay) {
-        const dayStart = `${safeDay}T00:00:00.000Z`
-        const dayEnd = `${safeDay}T23:59:59.999Z`
-        const byDateRes = await supabaseAdmin
-          .from('pr_field_reports')
-          .select('id, date, created_at, work_front, specialty, supervisor, crew_name, personnel_ids, personnel, person_hours, capataz_id, area, description, assignments, activities, activity_observations')
-          .eq('company_id', companyId)
-          .or(`date.eq.${safeDay},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
-          .order('created_at', { ascending: false })
-          .limit(500)
-        const byDateRows = Array.isArray(byDateRes.data) ? byDateRes.data : []
-        if (byDateRows.length > 0) {
-          fieldReports = byDateRows
-          evidenceItems = collectEvidenceItems(fieldReports)
-        }
+      const dayStart = `${day}T00:00:00.000Z`
+      const dayEnd = `${day}T23:59:59.999Z`
+      const byDateRes = await supabaseAdmin
+        .from('pr_field_reports')
+        .select('id, date, created_at, work_front, specialty, supervisor, crew_name, personnel_ids, personnel, person_hours, capataz_id, area, description, assignments, activities, activity_observations')
+        .eq('company_id', companyId)
+        .or(`date.eq.${day},and(date.is.null,created_at.gte.${dayStart},created_at.lte.${dayEnd})`)
+        .order('created_at', { ascending: false })
+        .limit(500)
+      const byDateRows = Array.isArray(byDateRes.data) ? byDateRes.data : []
+      if (byDateRows.length > 0) {
+        fieldReports = byDateRows
+        evidenceItems = collectEvidenceItems(fieldReports)
       }
     }
     const evidenceLinks = buildEvidenceLinks(evidenceItems, companyId)

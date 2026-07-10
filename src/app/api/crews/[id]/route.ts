@@ -4,7 +4,6 @@ import { authOptions } from '../../../../lib/auth'
 import { createClient } from '@supabase/supabase-js'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { writeAuditLog } from '@/lib/audit/writeAuditLog'
-import { cleanUuid } from '@/lib/querySafety'
 
 export const dynamic = 'force-dynamic'
 
@@ -99,7 +98,7 @@ const isMissingColumnError = (error: any) => {
 }
 
 const findFieldReportsUsingCrew = async (supabaseAdminClient: any, companyId: string, crewId: string) => {
-  const id = cleanUuid(crewId)
+  const id = String(crewId || '').trim()
   if (!companyId || !id) return []
 
   const mapRows = (rows: any[] = []) => rows.map((row: any) => ({
@@ -245,8 +244,7 @@ export async function GET(req: NextRequest, ctx: any) {
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
     await writeCrewScreenViewOnce(supabaseAdmin, session)
 
-    const id = cleanUuid(ctx.params.id)
-    if (!id) return NextResponse.json({ error: 'Invalid crew id' }, { status: 400 })
+    const id = ctx.params.id
     const { data, error } = await supabaseAdmin
       .from('pr_crews')
       .select('*')
@@ -341,8 +339,7 @@ export async function PUT(req: NextRequest, ctx: any) {
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
 
     // Update crew basic fields (name, description only — supervisors/foremen/members are in pr_crew_members table)
-    const id = cleanUuid(ctx.params.id)
-    if (!id) return NextResponse.json({ error: 'Invalid crew id' }, { status: 400 })
+    const id = ctx.params.id
     let beforeCrew: any = null
     let beforeMembers: any[] = []
     try {
@@ -565,8 +562,7 @@ export async function DELETE(req: NextRequest, ctx: any) {
     const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey)
 
     // Delete members then crew
-    const id = cleanUuid(ctx.params.id)
-    if (!id) return NextResponse.json({ error: 'Invalid crew id' }, { status: 400 })
+    const id = ctx.params.id
     let beforeCrew: any = null
     let beforeMembers: any[] = []
     try {

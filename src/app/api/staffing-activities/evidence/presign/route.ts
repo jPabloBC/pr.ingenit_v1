@@ -3,7 +3,6 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { resolveCurrentActor } from '@/lib/currentActor'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
-import { isSafeImageContentType } from '@/lib/sanitizeHtml'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,7 +44,10 @@ export async function POST(req: NextRequest) {
     const normalizedContentType = contentType.toLowerCase()
 
     if (!fileName) return NextResponse.json({ error: 'Missing fileName' }, { status: 400 })
-    if (!isSafeImageContentType(normalizedContentType)) return NextResponse.json({ error: 'Formato de imagen no permitido' }, { status: 400 })
+    if (!contentType.startsWith('image/')) return NextResponse.json({ error: 'Solo se permiten imagenes' }, { status: 400 })
+    if (normalizedContentType.includes('svg')) {
+      return NextResponse.json({ error: 'Formato de imagen no permitido' }, { status: 400 })
+    }
     if (!Number.isFinite(fileSize) || fileSize <= 0 || fileSize > 10 * 1024 * 1024) {
       return NextResponse.json({ error: 'Tamano invalido. Maximo 10MB por imagen' }, { status: 400 })
     }
