@@ -48,6 +48,7 @@ import { PickersDay, PickersDayProps } from '@mui/x-date-pickers/PickersDay';
 import { es } from 'date-fns/locale';
 import {
   Add,
+  AssignmentTurnedIn,
   CloudUpload,
   CalendarMonth,
   ChevronLeft,
@@ -75,6 +76,7 @@ import {
   YAxis,
 } from 'recharts';
 import UserHeader from '@/components/layout/UserHeader';
+import ConfirmActionDialog from '@/components/ui/ConfirmActionDialog';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
 
@@ -491,6 +493,7 @@ type ReportFrontRow = {
   date_anchor?: string | null;
   date_anchor_sequence_no?: number | null;
   is_active: boolean;
+  include_in_daily_activities?: boolean;
   sort_order?: number | null;
 };
 
@@ -505,6 +508,7 @@ type ReportFrontDraft = {
   date_anchor: string;
   date_anchor_sequence_no: string;
   is_active: boolean;
+  include_in_daily_activities: boolean;
   sort_order: string;
 };
 
@@ -868,6 +872,7 @@ const DEFAULT_REPORT_FRONT_DRAFT: ReportFrontDraft = {
   date_anchor: '',
   date_anchor_sequence_no: '',
   is_active: true,
+  include_in_daily_activities: false,
   sort_order: '999',
 };
 
@@ -1556,6 +1561,7 @@ export default function ManagementPage() {
   const [reportFrontDialogOpen, setReportFrontDialogOpen] = useState(false);
   const [reportFrontSaving, setReportFrontSaving] = useState(false);
   const [reportFrontDraft, setReportFrontDraft] = useState<ReportFrontDraft>(DEFAULT_REPORT_FRONT_DRAFT);
+  const [dailyActivitiesConfirmFront, setDailyActivitiesConfirmFront] = useState<ReportFrontRow | null>(null);
   const [photoCoverTitle, setPhotoCoverTitle] = useState('P-4291: "Contratos de Construccion GPRO 2025_2026"');
   const [photoPeriodStartDate, setPhotoPeriodStartDate] = useState('');
   const [photoPeriodEndDate, setPhotoPeriodEndDate] = useState('');
@@ -3306,6 +3312,7 @@ export default function ManagementPage() {
           date_anchor: row?.date_anchor ? String(row.date_anchor).slice(0, 10) : '',
           date_anchor_sequence_no: row?.date_anchor_sequence_no === null || row?.date_anchor_sequence_no === undefined ? null : Number(row.date_anchor_sequence_no || 0),
           is_active: row?.is_active !== false,
+          include_in_daily_activities: row?.include_in_daily_activities === true,
           sort_order: row?.sort_order === null || row?.sort_order === undefined ? null : Number(row.sort_order || 0),
         })));
     } catch (err: any) {
@@ -3339,6 +3346,7 @@ export default function ManagementPage() {
       date_anchor: front.date_anchor ? String(front.date_anchor).slice(0, 10) : '',
       date_anchor_sequence_no: front.date_anchor_sequence_no == null ? '' : String(front.date_anchor_sequence_no),
       is_active: front.is_active !== false,
+      include_in_daily_activities: front.include_in_daily_activities === true,
       sort_order: front.sort_order == null ? '999' : String(front.sort_order),
     });
     setReportFrontDialogOpen(true);
@@ -3404,6 +3412,41 @@ export default function ManagementPage() {
       await loadReportFronts();
     } catch (err: any) {
       setNotice({ message: err?.message || 'No se pudo desactivar el frente.', severity: 'error' });
+    } finally {
+      setReportFrontSaving(false);
+    }
+  };
+
+  const requestToggleReportFrontDailyActivities = (front: ReportFrontRow) => {
+    const id = String(front.id || '').trim();
+    if (!id || String(front.type || '').toLowerCase() === 'base') return;
+    setDailyActivitiesConfirmFront(front);
+  };
+
+  const toggleReportFrontDailyActivities = async () => {
+    const front = dailyActivitiesConfirmFront;
+    const id = String(front?.id || '').trim();
+    if (!front || !id || String(front.type || '').toLowerCase() === 'base') return;
+    const nextValue = front.include_in_daily_activities !== true;
+    setReportFrontSaving(true);
+    try {
+      const response = await fetch('/api/report-fronts', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, include_in_daily_activities: nextValue }),
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || 'No se pudo actualizar el frente.');
+      setNotice({
+        message: nextValue
+          ? 'Frente habilitado para la hoja Actividades.'
+          : 'Frente excluido de la hoja Actividades.',
+        severity: 'success',
+      });
+      setDailyActivitiesConfirmFront(null);
+      await loadReportFronts();
+    } catch (err: any) {
+      setNotice({ message: err?.message || 'No se pudo actualizar el frente.', severity: 'error' });
     } finally {
       setReportFrontSaving(false);
     }
@@ -6607,14 +6650,31 @@ export default function ManagementPage() {
                                     Referencia
                                   </Typography>
                                 ) : (
-                                  <>
+                                  <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+                                    <IconButton
+                                      size="small"
+                                      disabled={!front.is_active || !front.id || reportFrontSaving}
+                                      onClick={() => requestToggleReportFrontDailyActivities(front)}
+                                      sx={{
+                                        color: front.include_in_daily_activities ? colors.blue600 : colors.gray6,
+                                        opacity: 1,
+                                        '&:hover': {
+                                          bgcolor: alpha(front.include_in_daily_activities ? colors.blue600 : colors.gray6, 0.08),
+                                          opacity: 1,
+                                        },
+                                      }}
+                                      aria-label={front.include_in_daily_activities ? 'Excluir de Actividades' : 'Incluir en Actividades'}
+                                      title={front.include_in_daily_activities ? 'Excluir de Actividades' : 'Incluir en Actividades'}
+                                    >
+                                      <AssignmentTurnedIn sx={{ fontSize: 17 }} />
+                                    </IconButton>
                                     <IconButton size="small" onClick={() => openEditReportFrontDialog(front)} aria-label="Editar frente" title="Editar" sx={{ color: colors.blue600 }}>
                                       <EditOutlined sx={{ fontSize: 18 }} />
                                     </IconButton>
                                     <IconButton size="small" disabled={!front.is_active || !front.id || reportFrontSaving} onClick={() => deactivateReportFront(front)} aria-label="Desactivar frente" title="Desactivar" sx={{ color: colors.red500 }}>
                                       <Trash2 size={16} />
                                     </IconButton>
-                                  </>
+                                  </Stack>
                                 )}
                               </TableCell>
                             </TableRow>
@@ -8966,6 +9026,22 @@ export default function ManagementPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      <ConfirmActionDialog
+        open={!!dailyActivitiesConfirmFront}
+        title={dailyActivitiesConfirmFront?.include_in_daily_activities ? 'Desactivar inclusión' : 'Activar inclusión'}
+        message={
+          dailyActivitiesConfirmFront?.include_in_daily_activities
+            ? 'Se dejará de incluir en Reporte diario.'
+            : 'Se incluirá en Reporte diario.'
+        }
+        detail={String(dailyActivitiesConfirmFront?.name || dailyActivitiesConfirmFront?.title_prefix || '').trim()}
+        confirmLabel={dailyActivitiesConfirmFront?.include_in_daily_activities ? 'Desactivar' : 'Activar'}
+        cancelLabel="Cancelar"
+        loading={reportFrontSaving}
+        variant={dailyActivitiesConfirmFront?.include_in_daily_activities ? 'warning' : 'info'}
+        onCancel={() => setDailyActivitiesConfirmFront(null)}
+        onConfirm={toggleReportFrontDailyActivities}
+      />
       <Snackbar
         open={!!notice}
         autoHideDuration={3500}

@@ -35,52 +35,12 @@ export async function GET(req: NextRequest) {
     const isAdmin = ['admin', 'dev', 'hr_manager', 'supervisor'].includes(role)
     const userSpec = session?.user?.specialty ? normalizeText(String(session.user.specialty)) : ''
 
-    let crewIds: string[] = []
-    if (isAdmin || !userSpec) {
-      const { data: crews, error: crewsErr } = await supabaseAdmin
-        .from('pr_crews')
-        .select('id')
-        .eq('company_id', session.user.companyId)
-      if (crewsErr) return NextResponse.json({ error: crewsErr.message }, { status: 500 })
-      crewIds = (crews || []).map((c: any) => String(c.id)).filter(Boolean)
-    } else {
-      let crews: any[] = []
-      try {
-        const { data, error } = await supabaseAdmin
-          .from('pr_crews')
-          .select('id, specialty, especialidad, discipline')
-          .eq('company_id', session.user.companyId)
-        if (error) throw error
-        crews = data || []
-      } catch (e: any) {
-        const msg = String(e?.message || e)
-        const missingCol = /column\s+.*(especialidad|discipline).*does not exist/i.test(msg) || String(e?.code) === '42703'
-        if (!missingCol) return NextResponse.json({ error: msg }, { status: 500 })
-        const { data, error } = await supabaseAdmin
-          .from('pr_crews')
-          .select('id, specialty')
-          .eq('company_id', session.user.companyId)
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        crews = data || []
-      }
-      crewIds = (crews || [])
-        .filter((c: any) => {
-          const raw = c.specialty || c.especialidad || c.discipline || ''
-          return normalizeText(String(raw)) === userSpec
-        })
-        .map((c: any) => String(c.id))
-        .filter(Boolean)
-    }
-
-    if (crewIds.length === 0) return NextResponse.json({ dates: [] }, { status: 200 })
-
     let crews: any[] = []
     try {
       const { data, error } = await supabaseAdmin
         .from('pr_crews')
-        .select('work_date, created_at')
+        .select('id, specialty, work_date, created_at')
         .eq('company_id', session.user.companyId)
-        .in('id', crewIds)
       if (error) throw error
       crews = data || []
     } catch (e: any) {
@@ -89,15 +49,19 @@ export async function GET(req: NextRequest) {
       if (!missingCol) return NextResponse.json({ error: msg }, { status: 500 })
       const { data, error } = await supabaseAdmin
         .from('pr_crews')
-        .select('created_at')
+        .select('id, specialty, created_at')
         .eq('company_id', session.user.companyId)
-        .in('id', crewIds)
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
       crews = (data || []).map((row: any) => ({ ...row, work_date: null }))
     }
 
     const uniq = new Set<string>()
-    ;(crews || []).forEach((row: any) => {
+    ;(crews || [])
+      .filter((row: any) => {
+        if (isAdmin || !userSpec) return true
+        return normalizeText(String(row?.specialty || '')) === userSpec
+      })
+      .forEach((row: any) => {
       if (row?.work_date) {
         uniq.add(String(row.work_date))
         return

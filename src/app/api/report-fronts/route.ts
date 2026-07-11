@@ -16,6 +16,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: 54,
     is_active: true,
     sort_order: 10,
+    include_in_daily_activities: false,
   },
   {
     id: null,
@@ -29,6 +30,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: 54,
     is_active: true,
     sort_order: 20,
+    include_in_daily_activities: false,
   },
   {
     id: null,
@@ -42,6 +44,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: null,
     is_active: true,
     sort_order: 40,
+    include_in_daily_activities: false,
   },
   {
     id: null,
@@ -55,6 +58,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: null,
     is_active: true,
     sort_order: 50,
+    include_in_daily_activities: false,
   },
   {
     id: null,
@@ -68,6 +72,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: null,
     is_active: true,
     sort_order: 60,
+    include_in_daily_activities: false,
   },
   {
     id: null,
@@ -81,6 +86,7 @@ const DEFAULT_REPORT_FRONTS = [
     date_anchor_sequence_no: null,
     is_active: true,
     sort_order: 70,
+    include_in_daily_activities: false,
   },
 ]
 
@@ -110,6 +116,14 @@ const requireAdminSession = async () => {
   return { session, error: null }
 }
 
+const requireWritableSession = async () => {
+  const session = (await getServerSession(authOptions as any)) as any
+  if (!session?.user?.companyId) return { session: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+  const role = String(session?.user?.role || '').toLowerCase()
+  if (role === 'viewer') return { session: null, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
+  return { session, error: null }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
@@ -117,17 +131,35 @@ export async function GET(req: NextRequest) {
     const includeInactive = req.nextUrl.searchParams.get('include_inactive') === '1'
 
     const supabaseAdmin = getSupabaseAdmin()
+    const baseSelect = 'id, code, name, title_prefix, type, sequence_mode, next_sequence_no, date_anchor, date_anchor_sequence_no, is_active, sort_order'
+    const withDailyActivitiesSelect = `${baseSelect}, include_in_daily_activities`
     let query = supabaseAdmin
       .from('pr_report_fronts')
-      .select('id, code, name, title_prefix, type, sequence_mode, next_sequence_no, date_anchor, date_anchor_sequence_no, is_active, sort_order')
+      .select(withDailyActivitiesSelect)
       .eq('company_id', session.user.companyId)
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true })
     if (!includeInactive) query = query.eq('is_active', true).neq('type', 'ifa')
-    const { data, error } = await query
+    let { data, error } = await query
+
+    if (error && String(error.message || '').includes('include_in_daily_activities')) {
+      let fallbackQuery = supabaseAdmin
+        .from('pr_report_fronts')
+        .select(baseSelect)
+        .eq('company_id', session.user.companyId)
+        .order('sort_order', { ascending: true })
+        .order('name', { ascending: true })
+      if (!includeInactive) fallbackQuery = fallbackQuery.eq('is_active', true).neq('type', 'ifa')
+      const fallbackResult = await fallbackQuery
+      data = Array.isArray(fallbackResult.data)
+        ? fallbackResult.data.map((row: any) => ({ ...row, include_in_daily_activities: false }))
+        : fallbackResult.data
+      error = fallbackResult.error
+    }
 
     if (error) return fallbackResponse()
-    return NextResponse.json({ fronts: data || [], source: 'table' })
+    if (!data || data.length === 0) return fallbackResponse()
+    return NextResponse.json({ fronts: data, source: 'table' })
   } catch {
     return fallbackResponse()
   }
@@ -162,6 +194,7 @@ export async function POST(req: NextRequest) {
         date_anchor: body?.date_anchor || null,
         date_anchor_sequence_no: body?.date_anchor_sequence_no == null ? null : Math.trunc(Number(body.date_anchor_sequence_no) || 0),
         is_active: body?.is_active === undefined ? true : Boolean(body.is_active),
+        include_in_daily_activities: Boolean(body?.include_in_daily_activities),
         sort_order: Math.trunc(Number(body?.sort_order || 999)),
       })
       .select('*')
@@ -205,11 +238,41 @@ export async function PUT(req: NextRequest) {
         date_anchor: body?.date_anchor || null,
         date_anchor_sequence_no: body?.date_anchor_sequence_no == null ? null : Math.trunc(Number(body.date_anchor_sequence_no) || 0),
         is_active: body?.is_active === undefined ? true : Boolean(body.is_active),
+        include_in_daily_activities: Boolean(body?.include_in_daily_activities),
         sort_order: Math.trunc(Number(body?.sort_order || 999)),
         updated_at: new Date().toISOString(),
       })
       .eq('company_id', session.user.companyId)
       .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ front: data })
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 })
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const { session, error: authError } = await requireWritableSession()
+    if (authError) return authError
+
+    const body = await req.json().catch(() => ({}))
+    const id = String(body?.id || '').trim()
+    if (!id) return NextResponse.json({ error: 'ID de frente requerido' }, { status: 400 })
+
+    const supabaseAdmin = getSupabaseAdmin()
+    const { data, error } = await supabaseAdmin
+      .from('pr_report_fronts')
+      .update({
+        include_in_daily_activities: Boolean(body?.include_in_daily_activities),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('company_id', session.user.companyId)
+      .eq('id', id)
+      .neq('type', 'base')
       .select('*')
       .single()
 

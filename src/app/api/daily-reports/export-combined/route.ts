@@ -40,6 +40,148 @@ const normalizeBaseActivityFront = (value: any): 'CANALETAS' | 'PISCINAS' | null
   return null
 }
 
+type DynamicFrontColumn = {
+  key: string
+  label: string
+  sourceReportIds: string[]
+}
+
+type IncludedDailyActivityFront = {
+  id: string
+  name: string
+  code: string
+  title_prefix: string
+  sourceReportIds: string[]
+}
+
+const normalizeDynamicFrontKey = (value: any) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const extractNocNumber = (value: any) => {
+  const normalized = normalizeDynamicFrontKey(value)
+  const match = normalized.match(/(?:^|\s)NOC(?:\s+N)?\s*0*(\d+)/)
+  const parsed = Number(match?.[1] || 0)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+const parseDynamicFrontColumns = (value: any): DynamicFrontColumn[] => {
+  const raw = (() => {
+    if (Array.isArray(value)) return value
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    }
+    return []
+  })()
+  return raw
+    .map((column: any) => {
+      const label = String(column?.label || '').replace(/\s+/g, ' ').trim()
+      const key = String(column?.key || column?.label || '').replace(/\s+/g, ' ').trim()
+      const sourceReportIds = Array.isArray(column?.sourceReportIds)
+        ? column.sourceReportIds.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : []
+      return label && key ? { key, label, sourceReportIds } : null
+    })
+    .filter(Boolean) as DynamicFrontColumn[]
+}
+
+const parseDynamicFrontColumnsByBlock = (value: any): Record<'CANALETAS' | 'PISCINAS', DynamicFrontColumn[]> | null => {
+  const raw = (() => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value)
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+      } catch {
+        return null
+      }
+    }
+    return null
+  })()
+  if (!raw) return null
+  return {
+    CANALETAS: parseDynamicFrontColumns(raw.CANALETAS),
+    PISCINAS: parseDynamicFrontColumns(raw.PISCINAS),
+  }
+}
+
+const splitDynamicFrontColumns = (columns: DynamicFrontColumn[]) => {
+  const firstCount = Math.ceil((columns || []).length / 2)
+  return {
+    CANALETAS: (columns || []).slice(0, firstCount),
+    PISCINAS: (columns || []).slice(firstCount),
+  }
+}
+
+const aliasesForReportFront = (front: Partial<IncludedDailyActivityFront>) =>
+  [front.id, front.name, front.code, front.title_prefix]
+    .map((value) => normalizeDynamicFrontKey(value))
+    .filter(Boolean)
+
+const reportFrontMatchesColumn = (front: Partial<IncludedDailyActivityFront>, column: DynamicFrontColumn) => {
+  const columnText = normalizeDynamicFrontKey(`${column.key || ''} ${column.label || ''}`)
+  if (!columnText) return false
+  const aliases = aliasesForReportFront(front)
+  if (aliases.some((alias) => alias && (columnText === alias || columnText.includes(alias) || alias.includes(columnText)))) {
+    return true
+  }
+  const frontNoc = extractNocNumber(`${front.name || ''} ${front.code || ''} ${front.title_prefix || ''}`)
+  const columnNoc = extractNocNumber(columnText)
+  return Boolean(frontNoc && columnNoc && frontNoc === columnNoc)
+}
+
+const reportValueMatchesIncludedFront = (value: any, fronts: IncludedDailyActivityFront[]) => {
+  const text = normalizeDynamicFrontKey(value)
+  if (!text) return false
+  const textNoc = extractNocNumber(text)
+  return (fronts || []).some((front) => {
+    if (aliasesForReportFront(front).some((alias) => alias && (text === alias || text.includes(alias) || alias.includes(text)))) {
+      return true
+    }
+    const frontNoc = extractNocNumber(`${front.name} ${front.code} ${front.title_prefix}`)
+    return Boolean(frontNoc && textNoc && frontNoc === textNoc)
+  })
+}
+
+async function loadIncludedDailyActivityFronts(companyId: string, columns: DynamicFrontColumn[]): Promise<IncludedDailyActivityFront[]> {
+  if (!companyId || columns.length === 0) return []
+  const { data, error } = await supabaseAdmin
+    .from('pr_report_fronts')
+    .select('id, code, name, title_prefix, type, is_active, include_in_daily_activities')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .eq('include_in_daily_activities', true)
+    .neq('type', 'base')
+  if (error) {
+    if (String(error.message || '').includes('include_in_daily_activities')) return []
+    throw new Error(error.message)
+  }
+
+  return (Array.isArray(data) ? data : [])
+    .map((front: any) => {
+      const matchedColumns = columns.filter((column) => reportFrontMatchesColumn(front, column))
+      if (matchedColumns.length === 0) return null
+      return {
+        id: String(front?.id || '').trim(),
+        name: String(front?.name || '').trim(),
+        code: String(front?.code || '').trim(),
+        title_prefix: String(front?.title_prefix || '').trim(),
+        sourceReportIds: Array.from(new Set(matchedColumns.flatMap((column) => column.sourceReportIds || []))),
+      }
+    })
+    .filter(Boolean) as IncludedDailyActivityFront[]
+}
+
 const weekFromReportNo = (reportNo: number) => {
   if (!reportNo) return null
   if (reportNo <= 5) return 1
@@ -648,12 +790,40 @@ async function resolveReportContext(req: NextRequest, body?: any) {
     }
     return ''
   }
+  const workFront = normalizeFront(body?.reportOverride?.work_front || body?.reportOverride?.notes?.work_front || data.work_front)
+  const dynamicColumns = parseDynamicFrontColumns(
+    body?.reportOverride?.v2_dynamic_front_columns ??
+    overrideRuntimeSnapshot?.v2_dynamic_front_columns ??
+    overrideFormSnapshot?.v2_dynamic_front_columns ??
+    overrideNotes?.v2_dynamic_front_columns ??
+    (data as any)?.v2_dynamic_front_columns ??
+    runtimeSnapshot?.v2_dynamic_front_columns ??
+    formSnapshot?.v2_dynamic_front_columns ??
+    dbNotes?.v2_dynamic_front_columns
+  )
+  const dynamicColumnsByBlock = parseDynamicFrontColumnsByBlock(
+    body?.reportOverride?.v2_dynamic_front_columns_by_block ??
+    overrideRuntimeSnapshot?.v2_dynamic_front_columns_by_block ??
+    overrideFormSnapshot?.v2_dynamic_front_columns_by_block ??
+    overrideNotes?.v2_dynamic_front_columns_by_block ??
+    (data as any)?.v2_dynamic_front_columns_by_block ??
+    runtimeSnapshot?.v2_dynamic_front_columns_by_block ??
+    formSnapshot?.v2_dynamic_front_columns_by_block ??
+    dbNotes?.v2_dynamic_front_columns_by_block
+  )
+  const activeDynamicFrontColumns = dynamicColumnsByBlock
+    ? dynamicColumnsByBlock[workFront === 'PISCINAS' ? 'PISCINAS' : 'CANALETAS']
+    : splitDynamicFrontColumns(dynamicColumns)[workFront === 'PISCINAS' ? 'PISCINAS' : 'CANALETAS']
+  const includedDailyActivityFronts = await loadIncludedDailyActivityFronts(companyId, activeDynamicFrontColumns)
+
   return {
     companyId,
     reportId: id,
     reportNo: Number(data.report_no || body?.reportOverride?.report_no || 0),
     reportDate: String(body?.reportOverride?.report_date || data.report_date || '').slice(0, 10),
-    workFront: normalizeFront(body?.reportOverride?.work_front || body?.reportOverride?.notes?.work_front || data.work_front),
+    workFront,
+    activeDynamicFrontColumns,
+    includedDailyActivityFronts,
     sourceFieldReportIds: Array.from(new Set([
       ...parseJsonArray(data.source_field_report_ids),
       ...parseJsonArray((parseJsonMaybe(data.notes) || {})?.source_field_report_ids),
@@ -814,14 +984,44 @@ async function buildHistoricalHhRows(companyId: string, maxReportNo: number) {
 
 async function loadActivityReports(context: Awaited<ReturnType<typeof resolveReportContext>>) {
   const select = '*'
+  const includedFronts = Array.isArray(context.includedDailyActivityFronts) ? context.includedDailyActivityFronts : []
+  const includedSourceIds = Array.from(new Set(includedFronts.flatMap((front) => front.sourceReportIds || [])))
+  const reportMatchesExport = (report: any) => {
+    const frontValue = report?.work_front || report?.front || report?.frente || report?.report_title || report?.crew_name || ''
+    return normalizeBaseActivityFront(frontValue) === context.workFront || reportValueMatchesIncludedFront(frontValue, includedFronts)
+  }
+
   if (context.sourceFieldReportIds.length > 0) {
+    const idsToLoad = Array.from(new Set([...context.sourceFieldReportIds, ...includedSourceIds]))
     const { data, error } = await supabaseAdmin
       .from('pr_field_reports')
       .select(select)
       .eq('company_id', context.companyId)
-      .in('id', context.sourceFieldReportIds)
+      .in('id', idsToLoad)
     if (error) throw new Error(error.message)
-    return Array.isArray(data) ? data : []
+    const loaded = Array.isArray(data) ? data : []
+    if (includedFronts.length === 0) return loaded
+
+    const { data: sameDateData, error: sameDateError } = await supabaseAdmin
+      .from('pr_field_reports')
+      .select(select)
+      .eq('company_id', context.companyId)
+      .eq('date', context.reportDate)
+      .order('created_at', { ascending: true })
+      .limit(500)
+    if (sameDateError) throw new Error(sameDateError.message)
+    const byId = new Map<string, any>()
+    loaded.forEach((report: any) => {
+      const id = String(report?.id || '').trim()
+      if (id) byId.set(id, report)
+    })
+    ;(Array.isArray(sameDateData) ? sameDateData : [])
+      .filter((report: any) => reportMatchesExport(report))
+      .forEach((report: any) => {
+        const id = String(report?.id || '').trim()
+        if (id && !byId.has(id)) byId.set(id, report)
+      })
+    return Array.from(byId.values())
   }
 
   const { data, error } = await supabaseAdmin
@@ -833,7 +1033,7 @@ async function loadActivityReports(context: Awaited<ReturnType<typeof resolveRep
     .limit(500)
   if (error) throw new Error(error.message)
   return (Array.isArray(data) ? data : [])
-    .filter((report: any) => normalizeFront(report?.work_front || report?.front || '') === context.workFront)
+    .filter((report: any) => reportMatchesExport(report))
 }
 
 async function addActivitiesSheet(
@@ -938,7 +1138,12 @@ async function addActivitiesSheet(
       const activityFront = normalizeBaseActivityFront(explicitActivityFront)
       const reportFront = normalizeBaseActivityFront(report?.work_front || report?.front || report?.frente || '')
       const front = explicitActivityFront ? activityFront : reportFront
-      if (front !== context.workFront) return
+      const dynamicFrontSource = explicitActivityFront || report?.work_front || report?.front || report?.frente || report?.report_title || report?.crew_name || ''
+      const matchesIncludedDynamicFront = reportValueMatchesIncludedFront(
+        dynamicFrontSource,
+        Array.isArray(context.includedDailyActivityFronts) ? context.includedDailyActivityFronts : []
+      )
+      if (front !== context.workFront && !matchesIncludedDynamicFront) return
       const hasPositiveQuantity = hasPositiveActivityQuantity(activity)
       const { quantity, unit } = hasPositiveQuantity
         ? getActivityQuantityUnit(activity)

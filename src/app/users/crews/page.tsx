@@ -6,9 +6,7 @@ import { DateCalendar } from '@mui/x-date-pickers'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AssignmentTurnedInOutlinedIcon from '@mui/icons-material/AssignmentTurnedInOutlined'
-import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
-import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Info, Plus, Trash2 } from 'lucide-react'
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
 import { normalizeText } from "../../../lib/normalize"
@@ -73,6 +71,24 @@ const getProjectWeekNumber = (value: string) => {
   if (target == null || anchor == null) return PROJECT_WEEK_ANCHOR_NUMBER
   return PROJECT_WEEK_ANCHOR_NUMBER + Math.floor((target - anchor) / 7)
 }
+
+const HIDDEN_CREW_SPECIALTY_KEYS = new Set([
+  'administrador',
+  'bodega',
+  'calidad',
+  'hsec',
+  'oficinatecnica',
+  'rrll',
+])
+
+const DEFAULT_CREW_FRONT_OPTIONS = [
+  { id: null, code: 'BASE-PISCINAS', name: 'CONTRATO BASE PISCINAS', type: 'base' },
+  { id: null, code: 'BASE-CANALETAS', name: 'CONTRATO BASE CANALETAS', type: 'base' },
+  { id: null, code: 'NOC-001-CALAMINAS', name: 'USO DE RECURSOS NOC Nº001 CALAMINAS', type: 'udr' },
+  { id: null, code: 'NOC-002-PISCINA-AGUA-SALADA', name: 'USO DE RECURSOS NOC Nº002 PISCINA AGUA SALADA', type: 'udr' },
+  { id: null, code: 'NOC-006-TRABAJOS-ELECTRICOS-FASE-1', name: 'USO DE RECURSOS NOC Nº006 TRABAJOS ELECTRICOS FASE 1', type: 'udr' },
+  { id: null, code: 'NOC-007-VERTEDERO-PISCINA-ILS-2', name: 'USO DE RECURSOS NOC Nº007 VERTEDERO PISCINA ILS 2', type: 'udr' },
+]
 
 const formatYmdDisplay = (ymd: string) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd))) return ymd
@@ -317,6 +333,14 @@ export default function CrewsPage() {
   const [openingCreateForm, setOpeningCreateForm] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [assignmentInfoPopover, setAssignmentInfoPopover] = useState<{
+    anchorEl: HTMLElement | null
+    candidateId: string
+    candidateName: string
+    assignedCrews: string[]
+    overrideEnabled: boolean
+    setOverride: (enabled: boolean) => void
+  } | null>(null)
   // Shared legacy states kept for safety (but new forms use create/edit-prefixed states)
   const [fName, setFName] = useState("")
   const [fDescription, setFDescription] = useState("")
@@ -351,6 +375,7 @@ export default function CrewsPage() {
 
   const loadAttendanceWorkDates = useCallback(async (force = false) => {
     if (!force && attendanceDatesLoadedRef.current) return
+    if (force) turnoLoadedDatesRef.current.clear()
     setAttendanceDatesLoading(true)
     try {
       const res = await fetch('/api/collaborators/daily-status?dates=1&turno_dates=1', { cache: 'no-store' })
@@ -393,7 +418,7 @@ export default function CrewsPage() {
       setReportFrontsLoading(true)
 
       try {
-        const res = await fetch('/api/report-fronts', { cache: 'no-store' })
+        const res = await fetch('/api/report-fronts?source=crews', { cache: 'no-store' })
         const json = await res.json().catch(() => null)
         const fronts = Array.isArray(json?.fronts) ? json.fronts : []
         const seen = new Set<string>()
@@ -412,9 +437,9 @@ export default function CrewsPage() {
             return true
           })
 
-        if (!cancelled) setReportFrontOptions(options)
+        if (!cancelled) setReportFrontOptions(options.length > 0 ? options : DEFAULT_CREW_FRONT_OPTIONS)
       } catch {
-        if (!cancelled) setReportFrontOptions([])
+        if (!cancelled) setReportFrontOptions(DEFAULT_CREW_FRONT_OPTIONS)
       } finally {
         if (!cancelled) setReportFrontsLoading(false)
       }
@@ -494,7 +519,7 @@ export default function CrewsPage() {
   const [viewAssignedActivities, setViewAssignedActivities] = useState<any[]>([])
   const [viewLoading, setViewLoading] = useState(false)
   const viewLoadSeqRef = useRef(0)
-  const [reportFrontOptions, setReportFrontOptions] = useState<Array<{ id?: string | null; name: string; code?: string | null; type?: string | null }>>([])
+  const [reportFrontOptions, setReportFrontOptions] = useState<Array<{ id?: string | null; name: string; code?: string | null; type?: string | null }>>(DEFAULT_CREW_FRONT_OPTIONS)
   const [reportFrontsLoading, setReportFrontsLoading] = useState(false)
   const [collapsedDateGroups, setCollapsedDateGroups] = useState<Set<string>>(new Set())
   const knownDateGroupKeysRef = useRef<Set<string>>(new Set())
@@ -795,6 +820,25 @@ export default function CrewsPage() {
       setTurnoLoadingByDate(prev => ({ ...prev, [date]: false }))
     }
   }, [])
+
+  useEffect(() => {
+    if (!showCreateForm && !showEditModal) return
+
+    const refreshVisibleAttendance = () => {
+      if (document.visibilityState && document.visibilityState !== 'visible') return
+      void loadAttendanceWorkDates(true)
+      const visibleDate = showCreateForm ? createWorkDate : editWorkDate
+      if (visibleDate) void loadTurnoByDate(visibleDate, true)
+    }
+
+    window.addEventListener('focus', refreshVisibleAttendance)
+    document.addEventListener('visibilitychange', refreshVisibleAttendance)
+
+    return () => {
+      window.removeEventListener('focus', refreshVisibleAttendance)
+      document.removeEventListener('visibilitychange', refreshVisibleAttendance)
+    }
+  }, [showCreateForm, showEditModal, createWorkDate, editWorkDate, loadAttendanceWorkDates, loadTurnoByDate])
 
   useEffect(() => {
     if (!showCreateForm) return
@@ -1984,7 +2028,8 @@ export default function CrewsPage() {
       items: any[],
       selected: string[],
       onToggle: (id: string) => void,
-      keyPrefix: string
+      keyPrefix: string,
+      options?: { columns?: number }
     ) => {
       const groups = groupCandidatesByDiscipline(items)
       return groups.map((group, gIdx) => (
@@ -1992,6 +2037,11 @@ export default function CrewsPage() {
           <Typography sx={{ fontSize: 12, fontWeight: 700, color: colors.slate600, mb: 0.5 }}>
             {toDisplayUpper(group.key)}
           </Typography>
+          <Box sx={{
+            display: 'grid',
+            gridTemplateColumns: options?.columns === 2 ? { xs: '1fr', xl: 'repeat(2, minmax(0, 1fr))' } : '1fr',
+            columnGap: 1.5,
+          }}>
           {group.items.map((c: any, idx: number) => {
             const idStr = String(c.id)
             const checked = selected.includes(idStr)
@@ -2000,96 +2050,138 @@ export default function CrewsPage() {
             const assignedCrews = getAssignedCrewsForCandidate(c).slice().sort((a, b) =>
               String(a || '').localeCompare(String(b || ''), 'es', { numeric: true, sensitivity: 'base' })
             )
-            const assignmentMsg = assignedCrews.length
-              ? `${checked ? 'También asignado a' : 'Asignado a'}:\n${assignedCrews.join('\n')}`
-              : ''
+            const rowDisabled = lockedByOtherCrew && !checked && !isOverrideEnabled
+            const candidateName = formatCollaboratorName(c.first_name, c.last_name)
             return (
-              <FormControlLabel
+              <Box
                 key={`${keyPrefix}-${group.key}-${c.id}-${idx}`}
-                sx={{
-                  alignItems: 'flex-start',
-                  width: '100%',
-                  mx: 0,
-                  my: 0,
-                  px: 0.5,
-                  py: 0.75,
-                  borderBottom: idx < group.items.length - 1 ? `1px solid ${colors.gray200}` : 'none',
-                  '.MuiFormControlLabel-label': { width: '100%', minWidth: 0 }
+                role="button"
+                tabIndex={rowDisabled ? -1 : 0}
+                aria-pressed={checked}
+                onClick={() => {
+                  if (rowDisabled) return
+                  onToggle(idStr)
                 }}
-                control={<Checkbox checked={checked} disabled={lockedByOtherCrew && !checked && !isOverrideEnabled} onChange={() => onToggle(idStr)} />}
-                label={
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%', minWidth: 0 }}>
-                    <span
-                      style={{
-                        fontWeight: 600,
+                onKeyDown={(e) => {
+                  if (rowDisabled) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onToggle(idStr)
+                  }
+                }}
+                sx={{
+                  width: '100%',
+                  minWidth: 0,
+                  px: 1,
+                  py: 0.9,
+                  borderBottom: idx < group.items.length - 1 ? `1px solid ${colors.gray200}` : 'none',
+                  borderLeft: 'none',
+                  borderRadius: checked ? 1 : 0,
+                  boxShadow: checked ? `inset 0 0 0 1px ${colors.blue200}` : 'none',
+                  bgcolor: checked ? colors.blue50 : rowDisabled ? colors.gray50 : colors.white,
+                  color: rowDisabled ? colors.gray6 : colors.gray1,
+                  cursor: rowDisabled ? 'not-allowed' : 'pointer',
+                  transition: 'background-color 140ms ease, box-shadow 140ms ease',
+                  '&:hover': {
+                    bgcolor: rowDisabled ? colors.gray50 : (checked ? colors.blue100 : colors.slate50),
+                  },
+                  '&:focus-visible': {
+                    outline: `2px solid ${colors.sky300}`,
+                    outlineOffset: -2,
+                  },
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, minWidth: 0 }}>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Box
+                      component="span"
+                      title={candidateName}
+                      sx={{
+                        fontWeight: 700,
                         width: '100%',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        display: 'block'
+                        display: 'block',
                       }}
-                      title={formatCollaboratorName(c.first_name, c.last_name)}
                     >
-                      {formatCollaboratorName(c.first_name, c.last_name)}
-                    </span>
-                    <small
-                      style={{
-                        color: colors.gray4,
-                        marginTop: 2,
+                      {candidateName}
+                    </Box>
+                    <Box
+                      component="small"
+                      title={formatPositionLabel(c.position || '')}
+                      sx={{
+                        color: rowDisabled ? colors.gray6 : colors.gray4,
+                        mt: 0.25,
                         width: '100%',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        display: 'block'
+                        display: 'block',
                       }}
-                      title={formatPositionLabel(c.position || '')}
                     >
                       {formatPositionLabel(c.position || '')}
-                    </small>
-                    {assignmentMsg ? (
-                      <small
-                        style={{
-                          color: colors.amber700,
-                          marginTop: 2,
-                          width: '100%',
-                          whiteSpace: 'pre-line',
-                          display: 'block'
-                        }}
-                        title={assignmentMsg}
-                      >
-                        {assignmentMsg}
-                      </small>
-                    ) : null}
-                    {assignmentMsg ? (
-                      <FormControlLabel
-                        sx={{ mt: 0.25, ml: 0 }}
-                        control={
-                          <Checkbox
-                            size="small"
-                            checked={isOverrideEnabled}
-                            onChange={(e) => {
-                              const enabled = e.target.checked
+                    </Box>
+                  </Box>
+                  {assignedCrews.length > 0 ? (
+                    <Tooltip title="Ver asignación">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setAssignmentInfoPopover({
+                            anchorEl: e.currentTarget,
+                            candidateId: idStr,
+                            candidateName,
+                            assignedCrews,
+                            overrideEnabled: isOverrideEnabled,
+                            setOverride: (enabled: boolean) => {
                               setMultiAssignOverrides((prev) => {
                                 const next = new Set(Array.from(prev || []).map(String))
                                 if (enabled) next.add(idStr)
                                 else next.delete(idStr)
                                 return next
                               })
-                            }}
-                          />
-                        }
-                        label={
-                          <span style={{ fontSize: 12, color: colors.amber800 }}>
-                            Permitir en esta cuadrilla
-                          </span>
-                        }
-                      />
-                    ) : null}
-                  </div>
-                }
-              />
+                            }
+                          })
+                        }}
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          color: colors.amber700,
+                          flex: '0 0 auto',
+                          mt: 0.1,
+                          '&:hover': { bgcolor: colors.amber50 },
+                        }}
+                      >
+                        <Info size={15} />
+                      </IconButton>
+                    </Tooltip>
+                  ) : null}
+                  {checked ? (
+                    <Box
+                      sx={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        bgcolor: colors.blue6,
+                        color: colors.white,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flex: '0 0 auto',
+                        mt: 0.1,
+                      }}
+                    >
+                      <Check size={15} strokeWidth={3} />
+                    </Box>
+                  ) : null}
+                </Box>
+              </Box>
             )
           })}
+          </Box>
         </Box>
       ))
     }
@@ -2262,6 +2354,23 @@ export default function CrewsPage() {
     const frmCandidatesFiltered = filterRoleList(frmCandidates, frmSelected)
     const indirectCandidatesFiltered = filterRoleList(indirectCandidatesRaw, indirectSelected)
     const memCandidatesFiltered = filterRoleList(memCandidates, memSelected)
+    const filterSelectedRows = (items: any[], selectedIds: string[]) => {
+      const selectedSet = new Set((selectedIds || []).map(String))
+      return (items || []).filter((item: any) => selectedSet.has(String(item?.id || '')))
+    }
+    const filterAvailableRows = (items: any[], selectedIds: string[]) => {
+      const selectedSet = new Set((selectedIds || []).map(String))
+      return (items || []).filter((item: any) => !selectedSet.has(String(item?.id || '')))
+    }
+    const supSelectedRows = filterSelectedRows(supCandidates, supSelected)
+    const frmSelectedRows = filterSelectedRows(frmCandidates, frmSelected)
+    const indirectSelectedRows = filterSelectedRows(indirectCandidatesRaw, indirectSelected)
+    const memSelectedRows = filterSelectedRows(memCandidates, memSelected)
+    const selectedRowsCount = supSelectedRows.length + frmSelectedRows.length + indirectSelectedRows.length + memSelectedRows.length
+    const supAvailableRows = filterAvailableRows(supCandidatesFiltered, supSelected)
+    const frmAvailableRows = filterAvailableRows(frmCandidatesFiltered, frmSelected)
+    const indirectAvailableRows = filterAvailableRows(indirectCandidatesFiltered, indirectSelected)
+    const memAvailableRows = filterAvailableRows(memCandidatesFiltered, memSelected)
     const getRoleStats = (items: any[]) => {
       const occupied = (items || []).filter((c: any) => isBlockedByOtherCrew(c)).length
       const available = Math.max(0, (items || []).length - occupied)
@@ -2271,12 +2380,52 @@ export default function CrewsPage() {
     const frmStats = getRoleStats(frmCandidates)
     const indirectStats = getRoleStats(indirectCandidatesRaw)
     const memStats = getRoleStats(memCandidates)
+    const rolePanelSx = (accent: string, bg: string) => ({
+      minWidth: 0,
+      border: `1px solid ${colors.gray8}`,
+      borderTop: `3px solid ${accent}`,
+      borderRadius: 1,
+      bgcolor: colors.white,
+      overflow: 'hidden',
+      boxShadow: 'none',
+      '& .MuiFormGroup-root': {
+        px: 1.25,
+        pb: 1,
+      },
+      '& .MuiButton-root': {
+        ml: 1.25,
+        mb: 1,
+      },
+      '& .MuiTypography-colorTextSecondary': {
+        px: 1.25,
+        pb: 1,
+        fontSize: 14,
+      },
+      '& .role-section-header': {
+        px: 1.25,
+        py: 0.9,
+        mb: 1,
+        bgcolor: bg,
+        borderBottom: `1px solid ${colors.gray8}`,
+        fontWeight: 700,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 1,
+      },
+    })
+    const roleMetaSx = {
+      fontWeight: 500,
+      color: colors.gray6,
+      fontSize: 12,
+      whiteSpace: 'nowrap',
+    }
 
     // No cross-role filtering - each role is completely independent
 
     return (
       <Box sx={{ mb: 2, p: 2, border: `1px solid ${colors.gray9}`, borderRadius: 1 }}>
-        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" }, mt: 1 }}>
+        <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", xl: "repeat(5, minmax(0, 1fr))" }, mt: 1 }}>
           <FormControl fullWidth required={!isEdit} error={!isEdit && createFieldBossAttempted && !fieldBossId}>
             <InputLabel id={`field-boss-label-${mode}`}>Jefe de Terreno</InputLabel>
             <Select
@@ -2313,7 +2462,10 @@ export default function CrewsPage() {
               }}
             >
               <MenuItem value="ALL">Todas</MenuItem>
-              {(specialtyOptions || []).map(s => (
+              {(specialtyOptions || []).filter((s) => {
+                const key = normalizeText(String(s || '')).replace(/[^a-z0-9]/g, '')
+                return !HIDDEN_CREW_SPECIALTY_KEYS.has(key)
+              }).map(s => (
                 <MenuItem key={s} value={s}>{toDisplayUpper(formatDisciplineLabel(s))}</MenuItem>
               ))}
             </Select>
@@ -2324,7 +2476,7 @@ export default function CrewsPage() {
               labelId={`crew-front-name-label-${mode}`}
               value={frontSelectValue}
               label="Nombre"
-              disabled={reportFrontsLoading || reportFrontOptions.length === 0}
+              disabled={reportFrontOptions.length === 0}
               displayEmpty
               renderValue={(value) => {
                 const frontBase = String(value || '').trim()
@@ -2358,31 +2510,30 @@ export default function CrewsPage() {
               fullWidth
             />
           ) : (
-            <Box>
-              <Typography sx={{ mb: 0.5, fontSize: 12, fontWeight: 600, color: colors.slate600 }}>
-                Fecha de trabajo
-              </Typography>
-              <Button
-                variant="outlined"
-                disabled={attendanceDatesLoading || attendanceWorkDates.length === 0}
-                onClick={(e) => setCreateWorkDateAnchorEl(e.currentTarget)}
-                fullWidth
-                sx={{
-                  justifyContent: 'flex-start',
-                  minHeight: 56,
-                  px: 1.75,
-                  borderColor: colors.slate300,
-                  color: workDate ? colors.slate900 : colors.slate500,
-                  fontSize: '1rem',
-                  fontWeight: 400,
-                  lineHeight: 1.4375,
-                  textAlign: 'left',
-                  textTransform: 'none',
-                  '&:hover': { borderColor: colors.blue6, bgcolor: colors.managementPanelBgSoft }
-                }}
-              >
-                <span>{attendanceDatesLoading ? 'Cargando fechas...' : (workDate ? formatDateLabel(workDate) : 'Sin fechas de asistencia')}</span>
-              </Button>
+            <Box sx={{ minWidth: 0 }}>
+              <FormControl fullWidth disabled={attendanceDatesLoading}>
+                <InputLabel shrink htmlFor={`crew-work-date-${mode}`}>Fecha de trabajo</InputLabel>
+                <OutlinedInput
+                  id={`crew-work-date-${mode}`}
+                  notched
+                  label="Fecha de trabajo"
+                  value={attendanceDatesLoading ? 'Cargando fechas...' : (workDate ? formatDateLabel(workDate) : 'Sin fechas de asistencia')}
+                  readOnly
+                  onClick={(e) => {
+                    if (attendanceDatesLoading) return
+                    setCreateWorkDateAnchorEl(e.currentTarget)
+                    void loadAttendanceWorkDates(true)
+                    if (workDate) void loadTurnoByDate(workDate, true)
+                  }}
+                  sx={{
+                    cursor: attendanceDatesLoading ? 'default' : 'pointer',
+                    '& input': {
+                      cursor: attendanceDatesLoading ? 'default' : 'pointer',
+                      color: workDate ? colors.slate900 : colors.slate500,
+                    },
+                  }}
+                />
+              </FormControl>
               <Popover
                 open={Boolean(createWorkDateAnchorEl)}
                 anchorEl={createWorkDateAnchorEl}
@@ -2411,6 +2562,61 @@ export default function CrewsPage() {
                 ? `Colaboradores en turno para ${formatDateLabel(workDate)}: ${turnoIdsForDate.size}`
                 : 'Seleccione una fecha existente en asistencia para cargar colaboradores en turno.'}
           </Typography>
+          {(isEdit || hasFieldBossSelected) && selectedRowsCount > 0 ? (
+            <Box sx={{ gridColumn: '1/-1', display: 'grid', gap: 1 }}>
+              <Typography sx={{ fontWeight: 700, color: colors.slate800, fontSize: 14 }}>
+                Seleccionados en esta cuadrilla
+              </Typography>
+              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'minmax(320px, 1fr) minmax(0, 2fr)' } }}>
+                <Box sx={{ display: 'grid', gap: 2, alignContent: 'start' }}>
+                  {supSelectedRows.length > 0 ? (
+                    <Box sx={rolePanelSx(colors.blue6, colors.blue50)}>
+                      <Typography className="role-section-header">
+                        <span>Supervisores</span>
+                        <Box component="span" sx={roleMetaSx}>{supSelectedRows.length}</Box>
+                      </Typography>
+                      <FormGroup>
+                        {renderDisciplineGroupedList(supSelectedRows, supSelected, toggleSupLocal, 'selected-sup')}
+                      </FormGroup>
+                    </Box>
+                  ) : null}
+                  {frmSelectedRows.length > 0 ? (
+                    <Box sx={rolePanelSx(colors.gold3, colors.gold7)}>
+                      <Typography className="role-section-header">
+                        <span>Capataces</span>
+                        <Box component="span" sx={roleMetaSx}>{frmSelectedRows.length}</Box>
+                      </Typography>
+                      <FormGroup>
+                        {renderDisciplineGroupedList(frmSelectedRows, frmSelected, toggleFrmLocal, 'selected-frm')}
+                      </FormGroup>
+                    </Box>
+                  ) : null}
+                  {indirectSelectedRows.length > 0 ? (
+                    <Box sx={rolePanelSx(colors.slate600, colors.slate50)}>
+                      <Typography className="role-section-header">
+                        <span>Indirectos</span>
+                        <Box component="span" sx={roleMetaSx}>{indirectSelectedRows.length}</Box>
+                      </Typography>
+                      <FormGroup>
+                        {renderDisciplineGroupedList(indirectSelectedRows, indirectSelected, toggleIndirectLocal, 'selected-ind')}
+                      </FormGroup>
+                    </Box>
+                  ) : null}
+                </Box>
+                {memSelectedRows.length > 0 ? (
+                  <Box sx={rolePanelSx(colors.blue8, colors.blue15)}>
+                    <Typography className="role-section-header">
+                      <span>Colaboradores</span>
+                      <Box component="span" sx={roleMetaSx}>{memSelectedRows.length}</Box>
+                    </Typography>
+                    <FormGroup>
+                      {renderDisciplineGroupedList(memSelectedRows, memSelected, toggleMemLocal, 'selected-mem', { columns: 2 })}
+                    </FormGroup>
+                  </Box>
+                ) : <Box />}
+              </Box>
+            </Box>
+          ) : null}
           <TextField
             label="Buscar colaborador"
             value={candidatesQuery}
@@ -2423,13 +2629,7 @@ export default function CrewsPage() {
             (() => {
               const canLateOverride = latePolicy.allowByUser
               if (chileHour < cutoffHour || workDate !== chileToday) return null
-              if (!canLateOverride) {
-                return (
-                  <Typography sx={{ gridColumn: '1/-1', fontSize: 12, color: colors.gray4 }}>
-                    No tienes permiso para excepción de creación fuera de horario.
-                  </Typography>
-                )
-              }
+              if (!canLateOverride) return null
               return (
                 <FormControlLabel
                   sx={{ gridColumn: '1/-1' }}
@@ -2441,78 +2641,86 @@ export default function CrewsPage() {
           )}
           {(isEdit || hasFieldBossSelected) ? (
             <>
-              <Box sx={{ gridColumn: '1/-1', display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' } }}>
-                {/* Supervisores */}
-                <Box>
-                  <Typography sx={{ mb: 1, px: 1.25, py: 0.75, borderRadius: 1, border: `1px solid ${colors.gray8}`, bgcolor: colors.gray10, fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                    <span>Supervisores</span>
-                    <span style={{ fontWeight: 400, color: colors.gray6, fontSize: 12 }}>
-                      Elegibles: {supStats.available} | Ocupados: {supStats.occupied}
-                    </span>
-                  </Typography>
-                  <FormGroup>
-                    {(() => {
-                      const list = supCandidatesFiltered
-                      if (list.length === 0) return <Typography color="text.secondary">No hay supervisores disponibles.</Typography>
-                      return renderDisciplineGroupedList(list, supSelected, toggleSupLocal, 'sup')
-                    })()}
-                  </FormGroup>
-                  <Button sx={{ mt: 1 }} onClick={() => setSkipSup(true)}>Omitir</Button>
-                </Box>
+              <Box sx={{ gridColumn: '1/-1', display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'minmax(320px, 1fr) minmax(0, 2fr)' } }}>
+                <Box sx={{ display: 'grid', gap: 2, alignContent: 'start' }}>
+                  {/* Supervisores */}
+                  <Box sx={rolePanelSx(colors.blue6, colors.blue50)}>
+                    <Typography className="role-section-header">
+                      <span>Supervisores</span>
+                      <Box component="span" sx={roleMetaSx}>
+                        Elegibles: {supStats.available} | Ocupados: {supStats.occupied}
+                      </Box>
+                    </Typography>
+                    <FormGroup>
+                      {(() => {
+                        const list = supAvailableRows
+                        if (list.length === 0) return <Typography color="text.secondary">No hay supervisores disponibles.</Typography>
+                        return renderDisciplineGroupedList(list, supSelected, toggleSupLocal, 'sup')
+                      })()}
+                    </FormGroup>
+                    <Button sx={{ mt: 1 }} onClick={() => setSkipSup(true)}>Omitir</Button>
+                  </Box>
 
-                {/* Capataces */}
-                <Box>
-                  <Typography sx={{ mb: 1, px: 1.25, py: 0.75, borderRadius: 1, border: `1px solid ${colors.gray8}`, bgcolor: colors.gray10, fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                    <span>Capataces</span>
-                    <span style={{ fontWeight: 400, color: colors.gray6, fontSize: 12 }}>
-                      Elegibles: {frmStats.available} | Ocupados: {frmStats.occupied}
-                    </span>
-                  </Typography>
-                  {(skipSup || supSelected.length > 0) ? (
-                    <>
+                  {/* Capataces */}
+                  <Box sx={rolePanelSx(colors.gold3, colors.gold7)}>
+                    <Typography className="role-section-header">
+                      <span>Capataces</span>
+                      <Box component="span" sx={roleMetaSx}>
+                        Elegibles: {frmStats.available} | Ocupados: {frmStats.occupied}
+                      </Box>
+                    </Typography>
+                    {(skipSup || supSelected.length > 0) ? (
                       <FormGroup>
                         {(() => {
-                          const list = frmCandidatesFiltered
+                          const list = frmAvailableRows
                           if (list.length === 0) return <Typography color="text.secondary">No hay capataces disponibles.</Typography>
                           return renderDisciplineGroupedList(list, frmSelected, toggleFrmLocal, 'frm')
                         })()}
                       </FormGroup>
+                    ) : (
+                      <Typography color="text.secondary">Seleccione al menos un supervisor o presione "Omitir" para continuar.</Typography>
+                    )}
+                    {(skipSup || supSelected.length > 0) ? (
                       <Button sx={{ mt: 1 }} onClick={() => setSkipFrm(true)}>Omitir</Button>
-                      <Box sx={{ mt: 2 }}>
-                        <Typography sx={{ mb: 1, px: 1.25, py: 0.75, borderRadius: 1, border: `1px solid ${colors.gray8}`, bgcolor: colors.gray10, fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                          <span>Indirectos</span>
-                          <span style={{ fontWeight: 400, color: colors.gray6, fontSize: 12 }}>
-                            Elegibles: {indirectStats.available} | Ocupados: {indirectStats.occupied}
-                          </span>
-                        </Typography>
-                        <FormGroup>
-                          {(() => {
-                            const list = indirectCandidatesFiltered
-                            if (list.length === 0) return <Typography color="text.secondary">No hay indirectos disponibles.</Typography>
-                            return renderDisciplineGroupedList(list, indirectSelected, toggleIndirectLocal, 'ind')
-                          })()}
-                        </FormGroup>
+                    ) : null}
+                  </Box>
+
+                  {/* Indirectos */}
+                  <Box sx={rolePanelSx(colors.slate600, colors.slate50)}>
+                    <Typography className="role-section-header">
+                      <span>Indirectos</span>
+                      <Box component="span" sx={roleMetaSx}>
+                        Elegibles: {indirectStats.available} | Ocupados: {indirectStats.occupied}
                       </Box>
-                    </>
-                  ) : (
-                    <Typography color="text.secondary">Seleccione al menos un supervisor o presione "Omitir" para continuar.</Typography>
-                  )}
+                    </Typography>
+                    {(skipSup || supSelected.length > 0) ? (
+                      <FormGroup>
+                        {(() => {
+                          const list = indirectAvailableRows
+                          if (list.length === 0) return <Typography color="text.secondary">No hay indirectos disponibles.</Typography>
+                          return renderDisciplineGroupedList(list, indirectSelected, toggleIndirectLocal, 'ind')
+                        })()}
+                      </FormGroup>
+                    ) : (
+                      <Typography color="text.secondary">Seleccione al menos un supervisor o presione "Omitir" para continuar.</Typography>
+                    )}
+                  </Box>
                 </Box>
 
                 {/* Colaboradores */}
-                <Box>
-                  <Typography sx={{ mb: 1, px: 1.25, py: 0.75, borderRadius: 1, border: `1px solid ${colors.gray8}`, bgcolor: colors.gray10, fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                <Box sx={rolePanelSx(colors.blue8, colors.blue15)}>
+                  <Typography className="role-section-header">
                     <span>Colaboradores</span>
-                    <span style={{ fontWeight: 400, color: colors.gray6, fontSize: 12 }}>
+                    <Box component="span" sx={roleMetaSx}>
                       Elegibles: {memStats.available} | Ocupados: {memStats.occupied}
-                    </span>
+                    </Box>
                   </Typography>
                   {(skipFrm || frmSelected.length > 0) ? (
                     <FormGroup>
                       {(() => {
-                        const list = memCandidatesFiltered
+                        const list = memAvailableRows
                         if (list.length === 0) return <Typography color="text.secondary">No hay colaboradores disponibles.</Typography>
-                        return renderDisciplineGroupedList(list, memSelected, toggleMemLocal, 'mem')
+                        return renderDisciplineGroupedList(list, memSelected, toggleMemLocal, 'mem', { columns: 2 })
                       })()}
                     </FormGroup>
                   ) : (
@@ -3450,24 +3658,50 @@ export default function CrewsPage() {
       setShowCreateForm(false)
       return
     }
-    setOpeningCreateForm(true)
-    try {
-      try { await refreshAssignedIds() } catch(e){}
-      try { await loadAttendanceWorkDates(true) } catch(e){}
-      resetForm()
-      // ensure edit modal is closed when opening create
-      setShowEditModal(false)
-      // fetch collaborators excluding already assigned
-      try {
-        // Fetch all collaborators; occupied ones are handled in UI (disabled + crew label)
-        await loadCollaboratorsCached({ force: true, normalizeSpecialty: true })
-        setCreateSelectedSpecialty(null)
-        setCreateFName('')
-      } catch (e) {}
-      setShowCreateForm(true)
-    } finally {
-      setOpeningCreateForm(false)
+    resetForm()
+    setShowEditModal(false)
+    if (reportFrontOptions.length === 0) {
+      setReportFrontOptions(DEFAULT_CREW_FRONT_OPTIONS)
     }
+    setShowCreateForm(true)
+    setOpeningCreateForm(true)
+    const refreshReportFrontOptions = async () => {
+      setReportFrontsLoading(true)
+      try {
+        const res = await fetch('/api/report-fronts?source=crews', { cache: 'no-store' })
+        const json = await res.json().catch(() => null)
+        const fronts = Array.isArray(json?.fronts) ? json.fronts : []
+        const seen = new Set<string>()
+        const options = fronts
+          .map((front: any) => ({
+            id: front?.id ? String(front.id) : null,
+            name: String(front?.name || '').trim(),
+            code: front?.code ? String(front.code) : null,
+            type: front?.type ? String(front.type) : null,
+          }))
+          .filter((front: any) => {
+            const key = normalizeStr(front.name)
+            if (!key || seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+        setReportFrontOptions(options.length > 0 ? options : DEFAULT_CREW_FRONT_OPTIONS)
+      } catch {
+        setReportFrontOptions(DEFAULT_CREW_FRONT_OPTIONS)
+      } finally {
+        setReportFrontsLoading(false)
+      }
+    }
+    Promise.allSettled([
+      refreshReportFrontOptions(),
+      refreshAssignedIds(),
+      loadAttendanceWorkDates(true),
+      loadCollaboratorsCached({ force: true, normalizeSpecialty: true }),
+    ]).finally(() => {
+      setCreateSelectedSpecialty(null)
+      setCreateFName('')
+      setOpeningCreateForm(false)
+    })
   }
 
   return (
@@ -3479,7 +3713,6 @@ export default function CrewsPage() {
             <IconButton
               color="primary"
               onClick={openCreateCrewForm}
-              disabled={openingCreateForm}
               sx={{
                 position: 'fixed',
                 top: { xs: 64, sm: 70 },
@@ -3971,7 +4204,7 @@ export default function CrewsPage() {
                                       whiteSpace: 'nowrap',
                                       overflow: 'hidden',
                                       textOverflow: 'ellipsis',
-                                      fontSize: { xs: 12.5, sm: 14, md: 15 }
+	                                      fontSize: { xs: 12.5, sm: 13, md: 13, lg: 14 }
                                     }}
                                     title={formatCrewName(c.name)}
                                   >
@@ -4258,11 +4491,14 @@ export default function CrewsPage() {
                   requestCloseCrewModal('create')
                 }}
                 fullWidth
-                maxWidth="xl"
+                maxWidth={false}
                 PaperProps={{
                   sx: {
-                    width: 'min(1400px, 96vw)',
-                    maxWidth: '96vw',
+                    width: '97vw',
+                    maxWidth: '97vw',
+                    height: '95vh',
+                    maxHeight: '95vh',
+                    m: 0,
                   }
                 }}
               >
@@ -4299,11 +4535,14 @@ export default function CrewsPage() {
                   requestCloseCrewModal('edit')
                 }}
                 fullWidth
-                maxWidth="xl"
+                maxWidth={false}
                 PaperProps={{
                   sx: {
-                    width: 'min(1400px, 96vw)',
-                    maxWidth: '96vw',
+                    width: '97vw',
+                    maxWidth: '97vw',
+                    height: '95vh',
+                    maxHeight: '95vh',
+                    m: 0,
                   }
                 }}
               >
@@ -4338,6 +4577,53 @@ export default function CrewsPage() {
                 </DialogActions>
               </Dialog>
             )}
+            <Popover
+              open={Boolean(assignmentInfoPopover?.anchorEl)}
+              anchorEl={assignmentInfoPopover?.anchorEl || null}
+              onClose={() => setAssignmentInfoPopover(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+              PaperProps={{
+                sx: {
+                  width: 320,
+                  maxWidth: 'calc(100vw - 32px)',
+                  p: 1.5,
+                  border: `1px solid ${colors.amber100}`,
+                  boxShadow: '0 10px 24px rgba(15, 23, 42, 0.16)',
+                }
+              }}
+            >
+              <Typography sx={{ fontWeight: 700, color: colors.slate900, fontSize: 14, mb: 0.5 }}>
+                {assignmentInfoPopover?.candidateName || 'Colaborador'}
+              </Typography>
+              <Typography sx={{ fontSize: 12, color: colors.amber800, fontWeight: 700, mb: 0.75 }}>
+                Asignado a:
+              </Typography>
+              <Box component="ul" sx={{ m: 0, pl: 2, color: colors.amber800, fontSize: 13 }}>
+                {(assignmentInfoPopover?.assignedCrews || []).map((crewName) => (
+                  <li key={crewName}>{crewName}</li>
+                ))}
+              </Box>
+              <FormControlLabel
+                sx={{ mt: 1, ml: 0 }}
+                control={
+                  <Checkbox
+                    size="small"
+                    checked={Boolean(assignmentInfoPopover?.overrideEnabled)}
+                    onChange={(e) => {
+                      const enabled = e.target.checked
+                      assignmentInfoPopover?.setOverride(enabled)
+                      setAssignmentInfoPopover((prev) => prev ? { ...prev, overrideEnabled: enabled } : prev)
+                    }}
+                  />
+                }
+                label={
+                  <span style={{ fontSize: 13, color: colors.amber800 }}>
+                    Permitir en esta cuadrilla
+                  </span>
+                }
+              />
+            </Popover>
             <Dialog open={crewCloseConfirmOpen} onClose={() => setCrewCloseConfirmOpen(false)} maxWidth="xs" fullWidth>
               <DialogTitle>¿Cerrar sin guardar?</DialogTitle>
               <DialogContent>
@@ -4381,21 +4667,8 @@ export default function CrewsPage() {
               setProgramLoadError(null)
               setProgramWorkDate(getChileToday())
             }} fullWidth maxWidth={false} PaperProps={{ sx: { width: '97vw', maxWidth: '97vw', height: '95vh', maxHeight: '95vh', m: 0 } }}>
-              <DialogTitle>Seleccionar actividad desde Programa</DialogTitle>
-              <DialogContent>
-                <Typography variant="body2" sx={{ mb: 1 }}>Asignando a: {selectedCrewForProgram ? (crews.find(x => String(x.id) === String(selectedCrewForProgram))?.name || selectedCrewForProgram) : '—'}</Typography>
-                <Box sx={{ mb: 2, maxWidth: 240 }}>
-                  <TextField
-                    label="Fecha de trabajo"
-                    type="date"
-                    size="small"
-                    value={programWorkDate}
-                    onChange={(e) => setProgramWorkDate(e.target.value)}
-                    InputLabelProps={{ shrink: true }}
-                    disabled
-                    fullWidth
-                  />
-                </Box>
+              <DialogTitle sx={{ px: 2, pt: 1.5, pb: 0.75 }}>Actividades / Programa</DialogTitle>
+              <DialogContent sx={{ px: 2, pt: '8px !important', pb: 1 }}>
                 {loadingProgramCrew || programLoadingCrewId ? (
                   <Box sx={{ py: 4 }}>
                     <Typography sx={{ color: colors.gray4 }}>Cargando actividades...</Typography>
@@ -4405,85 +4678,144 @@ export default function CrewsPage() {
                     <Typography sx={{ color: colors.red700 }}>{programLoadError}</Typography>
                   </Box>
                 ) : (
-                <Box
-                  sx={{
-                    display: 'grid',
-                    gap: 2,
-                    gridTemplateColumns: { xs: '1fr', lg: '2fr 3fr' },
-                    alignItems: 'start'
-                  }}
-                >
-                  <Box sx={{ display: 'grid', gap: 2 }}>
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Integrantes</Typography>
-                  {loadingProgramCrew ? (
-                    <Typography variant="body2" color="text.secondary">Cargando...</Typography>
-                  ) : (
-                    (() => {
-                      const byId = new Map((programCrewMembers || []).map((c: any) => [String(c.id), c]))
-                      const roleIds = programCrewRoleIds || { supervisors: [], foremen: [], members: [] }
-                      const renderList = (ids: string[]) => {
-                        if (!ids.length) return <Typography variant="body2" color="text.secondary">—</Typography>
-                        return (
-                          <Box component="ul" sx={{ m: 0, pl: 2, width: '100%' }}>
-                            {ids.map((id) => {
-                              const c = byId.get(String(id)) || null
-                              const name = c ? formatCollaboratorName(c.first_name, c.last_name) : `ID:${id}`
-                              return (
-                                <li key={id} style={{ width: '100%' }}>
-                                  <Typography
-                                    variant="body2"
-                                    sx={{
-                                      display: 'block',
-                                      width: '100%',
-                                      whiteSpace: 'nowrap',
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis'
-                                    }}
-                                    title={`${name}${c?.position ? ` - ${formatPositionLabel(c.position)}` : ''}`}
-                                  >
-                                    {name}{c?.position ? ` - ${formatPositionLabel(c.position)}` : ''}
-                                  </Typography>
-                                </li>
-                              )
-                            })}
-                          </Box>
-                        )
-                      }
-                      return (
-                        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
-                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
-                              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Supervisores</Typography>
-                              {renderList(roleIds.supervisors)}
-                            </Paper>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
-                              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Capataces</Typography>
-                              {renderList(roleIds.foremen)}
-                            </Paper>
-                            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5, bgcolor: colors.slate50 }}>
-                              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Colaboradores</Typography>
-                              {renderList(roleIds.members)}
-                            </Paper>
-                          </Box>
-                          <Box />
-                        </Box>
-                      )
-                    })()
-                  )}
-                </Box>
-                <Box sx={{ mb: 2, p: 2, border: `1px solid ${colors.blue100}`, borderRadius: 2, bgcolor: colors.managementPanelBgSoft }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, color: colors.gray3 }}>Crear actividad rápida</Typography>
-                  <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: '1fr' } }}>
+                <Box sx={{ display: 'grid', gap: 1 }}>
+                  {(() => {
+	                    const selectedCrewName = selectedCrewForProgram
+	                      ? (crews.find(x => String(x.id) === String(selectedCrewForProgram))?.name || selectedCrewForProgram)
+	                      : '—'
+	                    const roleIds = programCrewRoleIds || { supervisors: [], foremen: [], members: [] }
+	                    const byId = new Map((programCrewMembers || []).map((c: any) => [String(c.id), c]))
+		                    const rolePeople = (ids: string[]) => ids
+		                      .map((id) => {
+		                        const c = byId.get(String(id))
+	                        if (!c) return { id: String(id), name: `ID:${id}`, position: '' }
+	                        return {
+	                          id: String(id),
+	                          name: formatCollaboratorName(c.first_name, c.last_name),
+		                          position: c?.position ? formatPositionLabel(c.position) : '',
+		                        }
+		                      })
+		                    const summaryField = (label: string, content: React.ReactNode) => (
+		                      <Box
+		                        sx={{
+		                          position: 'relative',
+		                          height: 48,
+		                          px: 1.25,
+		                          borderRadius: 1,
+		                          bgcolor: colors.white,
+		                          border: `1px solid ${colors.slate200}`,
+		                          minWidth: 0,
+		                          display: 'flex',
+		                          alignItems: 'center',
+		                          boxSizing: 'border-box',
+		                        }}
+		                      >
+		                        <Typography
+		                          component="span"
+		                          sx={{
+		                            position: 'absolute',
+		                            top: -8,
+		                            left: 10,
+		                            px: 0.5,
+		                            maxWidth: 'calc(100% - 20px)',
+		                            bgcolor: colors.slate50,
+		                            fontSize: 12,
+		                            lineHeight: 1,
+		                            fontWeight: 500,
+		                            color: colors.slate500,
+		                            whiteSpace: 'nowrap',
+		                            overflow: 'hidden',
+		                            textOverflow: 'ellipsis',
+		                          }}
+		                        >
+		                          {label}
+		                        </Typography>
+		                        <Box sx={{ width: '100%', minWidth: 0 }}>
+		                          {content}
+		                        </Box>
+		                      </Box>
+		                    )
+		                    const rolePersonCard = (label: string, ids: string[]) => {
+		                      const people = rolePeople(ids)
+		                      const primary = people[0]
+		                      const primaryText = primary
+		                        ? `${primary.name}${primary.position ? ` - ${primary.position}` : ''}`
+		                        : 'Sin registros'
+		                      return summaryField(label, (
+		                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, height: '100%' }}>
+		                          <Typography
+		                            sx={{
+		                              flex: 1,
+		                              minWidth: 0,
+		                              fontSize: 13,
+		                              color: primary ? colors.slate800 : colors.slate500,
+		                              whiteSpace: 'nowrap',
+		                              overflow: 'hidden',
+		                              textOverflow: 'ellipsis',
+		                            }}
+		                            title={primaryText}
+		                          >
+		                            {primary ? (
+		                              <>
+		                                <Box component="span" sx={{ fontWeight: 700 }}>{primary.name}</Box>
+		                                {primary.position ? ` - ${primary.position}` : ''}
+		                                {people.length > 1 ? ` +${people.length - 1} más` : ''}
+		                              </>
+		                            ) : primaryText}
+		                          </Typography>
+		                          <Typography sx={{ flex: '0 0 auto', fontSize: 15, lineHeight: 1, fontWeight: 800, color: colors.blue3 }}>{people.length}</Typography>
+		                        </Box>
+		                      ))
+		                    }
+		                    const countCard = (label: string, value: number) => summaryField(label, (
+		                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+		                        <Typography sx={{ fontSize: 15, lineHeight: 1, fontWeight: 800, color: colors.blue3 }}>{value}</Typography>
+		                      </Box>
+		                    ))
+	                    return (
+		                      <Paper variant="outlined" sx={{ px: 1, pt: 1.75, pb: 1, borderRadius: 1.25, bgcolor: colors.slate50, borderColor: colors.slate200 }}>
+		                        <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', md: 'minmax(190px, 1.25fr) 140px minmax(180px, 1fr) minmax(180px, 1fr) 90px 80px', xl: 'minmax(0, 1.4fr) 190px minmax(220px, 1fr) minmax(220px, 1fr) minmax(120px, 0.45fr) minmax(110px, 0.4fr)' }, alignItems: 'stretch' }}>
+		                          {summaryField('Cuadrilla', (
+		                            <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.blue3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={String(selectedCrewName)}>
+		                              {formatCrewName(String(selectedCrewName))}
+		                            </Typography>
+		                          ))}
+	                          {summaryField('Fecha de trabajo', (
+		                            <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate600, lineHeight: 1, textAlign: 'center', width: '100%' }}>
+	                              {programWorkDate ? formatDateLabel(programWorkDate) : '—'}
+	                            </Typography>
+	                          ))}
+	                          {rolePersonCard('Supervisores', roleIds.supervisors)}
+	                          {rolePersonCard('Capataces', roleIds.foremen)}
+	                          {countCard('Colaboradores', roleIds.members.length)}
+	                          {countCard('Asignadas', programAssignedActivities.length)}
+	                        </Box>
+	                      </Paper>
+                    )
+                  })()}
+	                <Box sx={{ mb: 1, p: 1, border: `1px solid ${colors.blue100}`, borderRadius: 1.25, bgcolor: colors.managementPanelBgSoft }}>
+	                  <Typography variant="subtitle2" sx={{ fontWeight: 700, color: colors.gray3, mb: 0.75 }}>Crear actividad rápida</Typography>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gap: 1,
+                      alignItems: 'center',
+                      gridTemplateColumns: {
+                        xs: '1fr',
+                        md: 'minmax(130px, 0.75fr) minmax(130px, 0.75fr) minmax(110px, 0.5fr) 110px auto',
+                        xl: 'minmax(260px, 1fr) minmax(150px, 0.55fr) minmax(130px, 160px) minmax(110px, 130px) 120px auto',
+                      },
+                    }}
+                  >
                     <TextField
                       size="small"
                       label="Actividad *"
                       value={newActivity.activity}
                       onChange={(e) => setNewActivity((s) => ({ ...s, activity: e.target.value }))}
                       fullWidth
+                      sx={{ gridColumn: { md: '1 / -1', xl: 'auto' } }}
                     />
-                    <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' } }}>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                       <FormControl fullWidth size="small">
                         <InputLabel id="area-select-label">Área</InputLabel>
                         <Select
@@ -4535,13 +4867,18 @@ export default function CrewsPage() {
                         />
                       )}
                     </Box>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                       <FormControl fullWidth size="small">
                         <InputLabel id="discipline-select-label">Disciplina</InputLabel>
                         <Select
                           labelId="discipline-select-label"
                           label="Disciplina"
                           value={disciplineMode === 'other' ? '__other__' : (newActivity.discipline || '')}
+                          MenuProps={{
+                            PaperProps: {
+                              sx: { maxWidth: 220 },
+                            },
+                          }}
                           onChange={(e) => {
                             const v = String(e.target.value)
                             if (v === '__other__') {
@@ -4579,13 +4916,18 @@ export default function CrewsPage() {
                         />
                       )}
                     </Box>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                       <FormControl fullWidth size="small">
                         <InputLabel id="unit-select-label">Unidad</InputLabel>
                         <Select
                           labelId="unit-select-label"
                           label="Unidad"
                           value={unitMode === 'other' ? '__other__' : (newActivity.unit || '__none__')}
+                          MenuProps={{
+                            PaperProps: {
+                              sx: { maxWidth: 180 },
+                            },
+                          }}
                           onChange={(e) => {
                             const v = String(e.target.value)
                             if (v === '__other__') {
@@ -4635,15 +4977,15 @@ export default function CrewsPage() {
                       value={newActivity.quantity}
                       onChange={(e) => setNewActivity((s) => ({ ...s, quantity: e.target.value }))}
                       error={!quickQuantityValid}
-                      helperText={!quickQuantityValid ? 'Debe ser numérica y mayor o igual a 0' : ' '}
+                      helperText={!quickQuantityValid ? 'Debe ser numérica y mayor o igual a 0' : undefined}
                       inputProps={{ inputMode: 'decimal', min: 0, step: 'any' }}
                       fullWidth
                     />
-                    </Box>
-                  </Box>
-                  <Box sx={{ mt: 1, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, whiteSpace: 'nowrap' }}>
                     <Button
                       variant="outlined"
+                      size="medium"
+                      sx={{ height: 40 }}
                       onClick={() => {
                         setNewActivity({ activity: '', area: '', discipline: '', unit: '', quantity: '' })
                         setAreaMode('existing')
@@ -4661,6 +5003,8 @@ export default function CrewsPage() {
                     </Button>
                     <Button
                       variant="contained"
+                      size="medium"
+                      sx={{ height: 40 }}
                       disabled={
                         creatingActivity ||
                         !newActivity.activity.trim() ||
@@ -4746,17 +5090,44 @@ export default function CrewsPage() {
                       {creatingActivity ? 'Creando...' : 'Crear'}
                     </Button>
                   </Box>
-                </Box>
                   </Box>
-                  <Box sx={{ display: 'grid', gap: 2 }}>
+                </Box>
                 <Box sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Actividades asignadas</Typography>
                   {programAssignedActivities.length === 0 ? (
                     <Typography variant="body2" color="text.secondary">Sin actividades asignadas</Typography>
                   ) : (
-                    <Box sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1.5, overflow: 'hidden' }}>
-                      <Box sx={{ maxHeight: 360, overflowX: 'auto', overflowY: 'auto' }}>
-                      <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+	                    <Box
+	                      sx={{
+	                        border: `1px solid ${colors.gray200}`,
+	                        borderRadius: 1.5,
+	                        overflow: 'hidden',
+	                        '& table': { fontSize: '12px !important' },
+	                        '& th, & td': {
+	                          fontSize: '12px !important',
+	                          lineHeight: '1.35 !important',
+	                          padding: '6px 8px !important',
+	                          wordBreak: 'break-word',
+	                        },
+	                        '& th': {
+	                          fontWeight: '700 !important',
+	                          whiteSpace: 'nowrap',
+	                          overflow: 'hidden',
+	                          textOverflow: 'ellipsis',
+	                        },
+	                        '& .MuiIconButton-root': {
+	                          width: 30,
+	                          height: 30,
+	                          p: 0,
+	                        },
+	                        '& .MuiInputBase-root': {
+	                          minHeight: 34,
+	                          fontSize: 12,
+	                        },
+	                      }}
+	                    >
+	                      <Box sx={{ maxHeight: 360, overflowX: 'hidden', overflowY: 'auto' }}>
+	                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
                           <tr style={{ background: colors.slate50, position: 'sticky', top: 0, zIndex: 1 }}>
                             <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', color: colors.gray4, fontWeight: 600, fontSize: 13, width: '8%' }}>Orden</th>
@@ -4776,47 +5147,49 @@ export default function CrewsPage() {
                           {programAssignedActivities.map((a: any, idx: number) => (
                             <tr key={String(a.id || idx)} style={{ background: idx % 2 === 0 ? colors.white : colors.slate50 }}>
                               <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700 }}>
-                                <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                                  <span>{idx + 1}</span>
-                                  <IconButton
-                                    size="small"
-                                    disabled={idx === 0}
-                                    onClick={() => {
-                                      setProgramAssignedActivities((prev) => {
-                                        if (idx <= 0 || idx >= prev.length) return prev
-                                        const next = prev.slice()
-                                        const tmp = next[idx - 1]
-                                        next[idx - 1] = next[idx]
-                                        next[idx] = tmp
-                                        return next
-                                      })
-                                      setProgramDirty(true)
-                                    }}
-                                    sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, p: 0.25 }}
-                                  >
-                                    <ArrowUpwardIcon fontSize="inherit" />
-                                  </IconButton>
-                                  <IconButton
-                                    size="small"
-                                    disabled={idx === programAssignedActivities.length - 1}
-                                    onClick={() => {
-                                      setProgramAssignedActivities((prev) => {
-                                        if (idx < 0 || idx >= prev.length - 1) return prev
-                                        const next = prev.slice()
-                                        const tmp = next[idx + 1]
-                                        next[idx + 1] = next[idx]
-                                        next[idx] = tmp
-                                        return next
-                                      })
-                                      setProgramDirty(true)
-                                    }}
-                                    sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, p: 0.25 }}
-                                  >
-                                    <ArrowDownwardIcon fontSize="inherit" />
-                                  </IconButton>
-                                </Box>
+	                                <Box sx={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 0.45 }}>
+	                                  <span>{idx + 1}</span>
+	                                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+	                                    <IconButton
+	                                      size="small"
+	                                      disabled={idx === 0}
+	                                      onClick={() => {
+	                                        setProgramAssignedActivities((prev) => {
+	                                          if (idx <= 0 || idx >= prev.length) return prev
+	                                          const next = prev.slice()
+	                                          const tmp = next[idx - 1]
+	                                          next[idx - 1] = next[idx]
+	                                          next[idx] = tmp
+	                                          return next
+	                                        })
+	                                        setProgramDirty(true)
+	                                      }}
+	                                      sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, width: 24, height: 20, p: 0 }}
+	                                    >
+	                                      <ChevronUp size={15} />
+	                                    </IconButton>
+	                                    <IconButton
+	                                      size="small"
+	                                      disabled={idx === programAssignedActivities.length - 1}
+	                                      onClick={() => {
+	                                        setProgramAssignedActivities((prev) => {
+	                                          if (idx < 0 || idx >= prev.length - 1) return prev
+	                                          const next = prev.slice()
+	                                          const tmp = next[idx + 1]
+	                                          next[idx + 1] = next[idx]
+	                                          next[idx] = tmp
+	                                          return next
+	                                        })
+	                                        setProgramDirty(true)
+	                                      }}
+	                                      sx={{ border: `1px solid ${colors.blue100}`, borderRadius: 1, width: 24, height: 20, p: 0 }}
+	                                    >
+	                                      <ChevronDown size={15} />
+	                                    </IconButton>
+	                                  </Box>
+	                                </Box>
                               </td>
-                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13 }}>{a.activity || a.name || a.id}</td>
+	                              <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13 }}>{String(a.activity || a.name || a.id || '').toLocaleUpperCase('es-CL')}</td>
                               <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 12, textAlign: 'center', fontWeight: 700, color: String(a.activity_origin || '').toLowerCase() === 'crew_created' ? colors.amber700 : colors.blue700 }}>
                                 {String(a.activity_origin || '').toLowerCase() === 'crew_created' ? 'Creada' : 'Programa'}
                               </td>
@@ -4840,7 +5213,7 @@ export default function CrewsPage() {
                               <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(a.discipline || a.Disciplina || ''))}</td>
                               <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>{a.assigned_at ? new Date(a.assigned_at).toLocaleDateString() : ''}</td>
                               <td style={{ borderBottom: `1px solid ${colors.managementTableHead}`, padding: '8px 10px', fontSize: 13, textAlign: 'center' }}>
-                                <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'center' }}>
+	                                <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
                                   {String(a.activity_origin || '').toLowerCase() === 'crew_created' && (
                                     <Tooltip title="Editar actividad" arrow>
                                       <IconButton
@@ -4879,7 +5252,7 @@ export default function CrewsPage() {
                     </Box>
                   )}
                 </Box>
-                <Box sx={{ mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Box sx={{ mb: 2, display: 'grid', gap: 1, alignItems: 'center', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) auto' } }}>
                   <TextField
                     size="small"
                     label="Buscar en Programa (mín. 3 caracteres)"
@@ -4902,29 +5275,56 @@ export default function CrewsPage() {
                       }, 300)
                     }}
                     fullWidth
+                    sx={{ '& .MuiInputBase-root': { height: 40, fontSize: 13 } }}
                   />
                   <Button
                     variant={showAllProgramDisciplines ? 'contained' : 'outlined'}
                     size="small"
                     onClick={() => setShowAllProgramDisciplines((v) => !v)}
-                    sx={{ whiteSpace: 'nowrap' }}
+                    sx={{ whiteSpace: 'nowrap', height: 40, fontSize: 13 }}
                   >
                     {showAllProgramDisciplines ? 'Solo mi disciplina' : 'Todas las disciplinas'}
                   </Button>
                 </Box>
-                <Box sx={{ maxHeight: '60vh', overflowX: 'auto', overflowY: 'auto' }}>
+                <Box
+                  sx={{
+                    maxHeight: '44vh',
+                    overflowX: 'hidden',
+                    overflowY: 'auto',
+                    '& table': { fontSize: '12px !important' },
+                    '& th, & td': {
+                      fontSize: '12px !important',
+                      lineHeight: '1.35 !important',
+                      padding: '6px 8px !important',
+                      wordBreak: 'break-word',
+                    },
+                    '& th': {
+                      fontWeight: '700 !important',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    },
+                    '& .MuiIconButton-root': {
+                      width: 30,
+                      height: 30,
+                      p: 0,
+                    },
+                  }}
+                >
                   {(() => {
                     const sourceRows = (programQuery && programQuery.trim().length >= 3 ? (programResults || []) : (programActivities || []))
+                    const assignedIds = new Set((programAssignedActivities || []).map((a: any) => String(a?.id || '').trim()).filter(Boolean))
+                    const availableRows = sourceRows.filter((row: any) => !assignedIds.has(String(row?.id || '').trim()))
                     const isCrewCreated = (row: any) => String(row?.activity_origin || '').toLowerCase() === 'crew_created'
-                    const programRows = sourceRows.filter((row: any) => !isCrewCreated(row))
-                    const crewCreatedRows = sourceRows.filter((row: any) => isCrewCreated(row))
+                    const programRows = availableRows.filter((row: any) => !isCrewCreated(row))
+                    const crewCreatedRows = availableRows.filter((row: any) => isCrewCreated(row))
                     const renderRow = (p: any) => {
                       const alreadyAssigned = !!programAssignedActivities.find((a: any) => String(a.id) === String(p.id))
                       const isCrewCreated = String(p.activity_origin || '').toLowerCase() === 'crew_created'
                       return (
                         <tr key={p.id}>
                           <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatActivityId(p.item_id, p.id)}</td>
-                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8 }}>{p.activity}</td>
+                          <td style={{ border: `1px solid ${colors.gray9}`, padding: 8 }}>{String(p.activity || '').toLocaleUpperCase('es-CL')}</td>
                           <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center', fontWeight: 700, color: String(p.activity_origin || '').toLowerCase() === 'crew_created' ? colors.amber700 : colors.blue700 }}>
                             {String(p.activity_origin || '').toLowerCase() === 'crew_created' ? 'Creada' : 'Programa'}
                           </td>
@@ -4935,7 +5335,7 @@ export default function CrewsPage() {
                           <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{p.unit || ''}</td>
                           <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>{formatNa(formatDisciplineLabel(p.discipline || p.Disciplina || ''))}</td>
                           <td style={{ border: `1px solid ${colors.gray9}`, padding: 8, textAlign: 'center' }}>
-                            <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'center', flexWrap: 'wrap' }}>
+	                            <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center', flexWrap: 'nowrap' }}>
                               {String(p.activity_origin || '').toLowerCase() === 'crew_created' && (
                                 <Tooltip title="Editar actividad" arrow>
                                   <IconButton
@@ -4947,31 +5347,34 @@ export default function CrewsPage() {
                                   </IconButton>
                                 </Tooltip>
                               )}
-                              <Button size="small" variant={alreadyAssigned ? 'outlined' : 'contained'} onClick={() => {
-                                if (alreadyAssigned) {
-                                  setProgramAssignedActivities((prev) => {
-                                    const next = prev.filter((x: any) => String(x.id) !== String(p.id))
-                                    const nextIds = new Set(next.map((x: any) => String(x.id)))
-                                    computeProgramDirty(nextIds)
-                                    return next
-                                  })
-                                  return
-                                }
-                                setProgramAssignedActivities((prev) => {
-                                  const exists = prev.some((x: any) => String(x.id) === String(p.id))
-                                  if (exists) return prev
-                                  const next = [...prev, { ...p }]
-                                  const nextIds = new Set(next.map((x: any) => String(x.id)))
-                                  computeProgramDirty(nextIds)
-                                  return next
-                                })
-                              }}>
-                                {alreadyAssigned && isCrewCreated ? (
-                                  <Tooltip title="Quitar actividad" arrow>
-                                    <Trash2 size={16} />
-                                  </Tooltip>
-                                ) : (alreadyAssigned ? 'Quitar' : 'Asignar')}
-                              </Button>
+	                              <Tooltip title={alreadyAssigned ? 'Quitar actividad' : 'Asignar actividad'} arrow>
+	                                <IconButton
+	                                  size="small"
+	                                  color={alreadyAssigned ? 'error' : 'primary'}
+	                                  onClick={() => {
+	                                    if (alreadyAssigned) {
+	                                      setProgramAssignedActivities((prev) => {
+	                                        const next = prev.filter((x: any) => String(x.id) !== String(p.id))
+	                                        const nextIds = new Set(next.map((x: any) => String(x.id)))
+	                                        computeProgramDirty(nextIds)
+	                                        return next
+	                                      })
+	                                      return
+	                                    }
+	                                    setProgramAssignedActivities((prev) => {
+	                                      const exists = prev.some((x: any) => String(x.id) === String(p.id))
+	                                      if (exists) return prev
+	                                      const next = [...prev, { ...p }]
+	                                      const nextIds = new Set(next.map((x: any) => String(x.id)))
+	                                      computeProgramDirty(nextIds)
+	                                      return next
+	                                    })
+	                                  }}
+	                                  sx={{ border: `1px solid ${alreadyAssigned ? colors.red200 : colors.blue100}`, borderRadius: 1 }}
+	                                >
+	                                  {alreadyAssigned ? <Trash2 size={16} /> : <Check size={16} />}
+	                                </IconButton>
+	                              </Tooltip>
                             </Box>
                           </td>
                         </tr>
@@ -4979,7 +5382,19 @@ export default function CrewsPage() {
                     }
 
                     return (
-                      <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse' }}>
+	                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+	                    <colgroup>
+	                      <col style={{ width: '9%' }} />
+	                      <col style={{ width: '28%' }} />
+	                      <col style={{ width: '7%' }} />
+	                      <col style={{ width: '9%' }} />
+	                      <col style={{ width: '10%' }} />
+	                      <col style={{ width: '7%' }} />
+	                      <col style={{ width: '7%' }} />
+	                      <col style={{ width: '7%' }} />
+	                      <col style={{ width: '8%' }} />
+	                      <col style={{ width: '8%' }} />
+	                    </colgroup>
                     <thead>
                       <tr>
                         <th style={{ border: `1px solid ${colors.blue800}`, padding: 8, textAlign: 'center', position: 'sticky', top: 0, background: colors.blue700, color: colors.white, fontWeight: 400, zIndex: 1 }}>ID</th>
@@ -5018,10 +5433,9 @@ export default function CrewsPage() {
                   {loadingProgram && <Typography sx={{ mt: 1 }}>Cargando...</Typography>}
                 </Box>
                   </Box>
-                </Box>
                 )}
               </DialogContent>
-              <DialogActions sx={{ mt: 2, mb: 2, pb: 1, justifyContent: 'center' }}>
+              <DialogActions sx={{ mt: 0.75, mb: 1, pt: 1, pb: 0.75, borderTop: `1px solid ${colors.slate200}`, justifyContent: 'center' }}>
                 <Button variant="outlined" sx={{ mr: 1 }} onClick={() => {
                   if (programDirty) {
                     const ok = window.confirm('Hay cambios sin guardar. Si cierras, se perderán.')
@@ -5250,7 +5664,19 @@ export default function CrewsPage() {
                 </DialogActions>
               </Dialog>
             )}
-            <Dialog open={viewDialogOpen} onClose={closeView} fullWidth maxWidth="md">
+            <Dialog
+              open={viewDialogOpen}
+              onClose={closeView}
+              fullWidth
+              maxWidth={false}
+              PaperProps={{
+                sx: {
+                  width: 'min(1180px, 96vw)',
+                  maxWidth: '96vw',
+                  maxHeight: '92vh',
+                }
+              }}
+            >
               <DialogTitle sx={{ px: 3, pt: 2, pb: 0.5 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: { xs: 'wrap', sm: 'nowrap' } }}>
                   <Typography component="span" sx={{ fontSize: 20, fontWeight: 700, minWidth: 0, flex: '0 0 auto' }}>
@@ -5339,110 +5765,106 @@ export default function CrewsPage() {
                   <Typography>Cargando...</Typography>
                 ) : (
                   <>
-                    <Box sx={{ mb: 2, pb: 1, borderBottom: `1px solid ${colors.managementTableHead}` }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700, mb: 0.25 }}>
+                    <Paper variant="outlined" sx={{ mb: 2, p: 2, borderRadius: 1.5, bgcolor: colors.slate50, borderColor: colors.slate200 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 800, color: colors.blue3, mb: 0.5 }}>
                         {formatCrewName(viewCrew?.name || '')}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {viewCrew?.description || '—'}
-                      </Typography>
-                    </Box>
+                      {String(viewCrew?.description || '').trim() ? (
+                        <Typography variant="body2" sx={{ color: colors.slate600, mb: 1.5 }}>
+                          {viewCrew.description}
+                        </Typography>
+                      ) : null}
+                      <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(4, 1fr)' } }}>
+                        {[
+                          { label: 'Supervisores', value: (viewCrewRoleIds?.supervisors || []).length },
+                          { label: 'Capataces', value: (viewCrewRoleIds?.foremen || []).length },
+                          { label: 'Miembros', value: (viewCrewRoleIds?.members || []).length },
+                          { label: 'Actividades', value: viewAssignedActivities.length },
+                        ].map((item) => (
+                          <Box
+                            key={item.label}
+                            sx={{
+                              p: 1,
+                              borderRadius: 1,
+                              bgcolor: colors.white,
+                              border: `1px solid ${colors.slate200}`,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 1,
+                              minHeight: 48,
+                            }}
+                          >
+                            <Typography sx={{ color: colors.slate500, fontSize: 12, fontWeight: 700 }}>{item.label}</Typography>
+                            <Typography sx={{ color: colors.blue3, fontSize: 22, fontWeight: 800, lineHeight: 1 }}>{item.value}</Typography>
+                          </Box>
+                        ))}
+                      </Box>
+                    </Paper>
 
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: colors.gray3 }}>Integrantes</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1, color: colors.blue3 }}>Integrantes</Typography>
                     {(() => {
                       const byId = new Map((viewCrewMembers || []).map((c: any) => [String(c.id), c]))
                       const roleIds = viewCrewRoleIds || { supervisors: [], foremen: [], members: [] }
-                      const renderList = (ids: string[], showHeader: boolean, showPhone: boolean) => {
-                        if (!ids.length) return <Typography variant="body2" color="text.secondary">—</Typography>
+                      const renderList = (ids: string[], showPhone: boolean, columns = 1) => {
+                        if (!ids.length) return <Typography variant="body2" sx={{ color: colors.slate500, p: 1 }}>Sin registros</Typography>
                         return (
-                          <Box sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, overflow: 'hidden' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                              <colgroup>
-                                <col style={{ width: showPhone ? '40%' : '50%' }} />
-                                <col style={{ width: showPhone ? '30%' : '50%' }} />
-                                {showPhone ? <col style={{ width: '30%' }} /> : null}
-                              </colgroup>
-                              {showHeader && (
-                                <thead>
-                                  <tr style={{ background: colors.slate50 }}>
-                                    <th style={{ textAlign: 'left', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Nombre</th>
-                                    <th style={{ textAlign: 'center', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Cargo</th>
-                                    {showPhone ? <th style={{ textAlign: 'center', fontWeight: 700, color: colors.gray4, fontSize: 13, padding: '8px 10px' }}>Teléfono</th> : null}
-                                  </tr>
-                                </thead>
-                              )}
-                              <tbody>
-                                {ids.map((id, idx) => {
+                          <Box
+                            sx={{
+                              display: 'grid',
+                              gap: 0.75,
+                              gridTemplateColumns: columns === 3
+                                ? { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(0, 1fr))' }
+                                : columns === 2
+                                  ? { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }
+                                  : '1fr',
+                            }}
+                          >
+                                {ids.map((id) => {
                                   const c = byId.get(String(id)) || null
                                   const name = c ? formatCollaboratorName(c.first_name, c.last_name) : `ID:${id}`
                                   const pos = c?.position ? formatPositionLabel(c.position) : ''
                                   const phone = (c && (c.phone || c.phone_number || c.telefono || c.telefono_movil)) ? String(c.phone || c.phone_number || c.telefono || c.telefono_movil) : ''
-                                  const bg = idx % 2 === 0 ? colors.white : colors.slate50
                                   return (
-                                    <tr key={id} style={{ background: bg }}>
-                                      <td style={{ padding: '8px 10px', borderBottom: `1px solid ${colors.managementTableHead}` }}>
-                                        <span
-                                          style={{
-                                            fontSize: 13,
-                                            display: 'block',
-                                            width: '100%',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis'
-                                          }}
-                                          title={name}
-                                        >
-                                          {name}
-                                        </span>
-                                      </td>
-                                      <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: `1px solid ${colors.managementTableHead}` }}>
-                                        <span
-                                          style={{
-                                            fontSize: 13,
-                                            color: colors.gray4,
-                                            display: 'block',
-                                            width: '100%',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis'
-                                          }}
-                                          title={pos || '—'}
-                                        >
-                                          {pos || '—'}
-                                        </span>
-                                      </td>
+                                    <Box key={id} sx={{ p: 1, borderRadius: 1, border: `1px solid ${colors.slate200}`, bgcolor: colors.white }}>
+                                      <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate900 }} title={name}>
+                                        {name}
+                                      </Typography>
+                                      <Typography sx={{ fontSize: 12, color: colors.slate500 }} title={pos || '—'}>
+                                        {pos || '—'}
+                                      </Typography>
                                       {showPhone ? (
-                                        <td style={{ padding: '8px 10px', textAlign: 'center', borderBottom: `1px solid ${colors.managementTableHead}` }}>
-                                          <span style={{ fontSize: 13, color: colors.gray4 }}>{phone || '—'}</span>
-                                        </td>
+                                        <Typography sx={{ fontSize: 12, color: colors.slate600, mt: 0.25 }}>
+                                          {phone || 'Sin teléfono'}
+                                        </Typography>
                                       ) : null}
-                                    </tr>
+                                    </Box>
                                   )
                                 })}
-                              </tbody>
-                            </table>
                           </Box>
                         )
                       }
+                      const roleSection = (title: string, count: number, accent: string, content: React.ReactNode) => (
+                        <Paper variant="outlined" sx={{ borderRadius: 1.5, overflow: 'hidden', borderColor: colors.slate200 }}>
+                          <Box sx={{ px: 1.25, py: 0.9, bgcolor: colors.slate50, borderTop: `3px solid ${accent}`, borderBottom: `1px solid ${colors.slate200}`, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                            <Typography sx={{ fontWeight: 800, color: colors.slate800, fontSize: 14 }}>{title}</Typography>
+                            <Typography sx={{ fontWeight: 700, color: colors.slate500, fontSize: 12 }}>{count}</Typography>
+                          </Box>
+                          <Box sx={{ p: 1 }}>{content}</Box>
+                        </Paper>
+                      )
                       return (
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 2, mb: 2 }}>
-                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Supervisores</Typography>
-                            {renderList(roleIds.supervisors, true, false)}
-                          </Box>
-                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0 }}>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Capataces</Typography>
-                            {renderList(roleIds.foremen, true, false)}
-                          </Box>
-                          <Box sx={{ borderRadius: 1.5, background: colors.white, p: 0, gridColumn: { xs: '1 / -1', sm: '1 / -1' } }}>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: colors.gray3, mb: 1 }}>Miembros</Typography>
-                            {renderList(roleIds.members, true, true)}
+                          {roleSection('Supervisores', roleIds.supervisors.length, colors.blue6, renderList(roleIds.supervisors, false))}
+                          {roleSection('Capataces', roleIds.foremen.length, colors.gold3, renderList(roleIds.foremen, false))}
+                          <Box sx={{ gridColumn: '1 / -1' }}>
+                            {roleSection('Miembros', roleIds.members.length, colors.blue8, renderList(roleIds.members, true, 3))}
                           </Box>
                         </Box>
                       )
                     })()}
 
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1, color: colors.gray3 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1, color: colors.blue3 }}>
                       Actividades asignadas
                     </Typography>
                     {viewAssignedActivities.length === 0 ? (
@@ -5450,39 +5872,33 @@ export default function CrewsPage() {
                         <Typography variant="body2" color="text.secondary">—</Typography>
                       </Paper>
                     ) : (
-                      <Paper variant="outlined" sx={{ p: 0, borderRadius: 1.5, overflow: 'hidden', borderColor: colors.gray200 }}>
-                        <Box sx={{ overflowX: 'auto' }}>
-                          <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse' }}>
-                            <thead>
-                              <tr style={{ background: colors.slate50 }}>
-                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Actividad</th>
-                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'left', color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Área</th>
-                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Cant.</th>
-                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 90, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Unidad</th>
-                                <th style={{ borderBottom: `1px solid ${colors.gray9}`, padding: '8px 10px', textAlign: 'center', width: 140, color: colors.gray4, fontWeight: 600, fontSize: 13 }}>Disciplina</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {viewAssignedActivities.slice(0, 50).map((a: any, idx: number) => (
-                                <tr key={String(a?.activityId || a?.id || idx)}>
-                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: 10 }}>
-                                  <span style={{ fontSize: 13 }}>{a?.activity || a?.name || '—'}</span>
-                                  {a?.assigned_at ? (
-                                    <div style={{ color: colors.gray4, fontSize: 13, marginTop: 2 }}>
-                                      Asignada: {new Date(a.assigned_at).toLocaleDateString()}
-                                    </div>
-                                  ) : null}
-                                  </td>
-                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', fontSize: 13 }}>{a?.area ? String(a.area) : ''}</td>
-                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.quantity ?? ''}</td>
-                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{a?.unit || ''}</td>
-                                  <td style={{ borderBottom: `1px solid ${colors.slate100}`, padding: '8px 10px', textAlign: 'center', fontSize: 13 }}>{formatDisciplineLabel(a?.discipline || a?.Disciplina || '')}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </Box>
-                      </Paper>
+                      <Box sx={{ display: 'grid', gap: 1 }}>
+                        {viewAssignedActivities.slice(0, 50).map((a: any, idx: number) => (
+                          <Paper
+                            key={String(a?.activityId || a?.id || idx)}
+                            variant="outlined"
+                            sx={{ p: 1.25, borderRadius: 1.5, borderColor: colors.slate200, bgcolor: colors.white }}
+                          >
+                            <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', md: '1fr auto' } }}>
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate900, lineHeight: 1.45 }}>
+                                  {a?.activity || a?.name || '—'}
+                                </Typography>
+                                {a?.assigned_at ? (
+                                  <Typography sx={{ color: colors.slate500, fontSize: 12, mt: 0.25 }}>
+                                    Asignada: {new Date(a.assigned_at).toLocaleDateString()}
+                                  </Typography>
+                                ) : null}
+                              </Box>
+                              <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
+                                {a?.area ? <Box sx={{ px: 0.75, py: 0.35, borderRadius: 1, bgcolor: colors.slate50, fontSize: 12, color: colors.slate700 }}>{String(a.area)}</Box> : null}
+                                {a?.quantity != null || a?.unit ? <Box sx={{ px: 0.75, py: 0.35, borderRadius: 1, bgcolor: colors.blue50, fontSize: 12, color: colors.blue700 }}>{`${a?.quantity ?? ''} ${a?.unit || ''}`.trim()}</Box> : null}
+                                {a?.discipline || a?.Disciplina ? <Box sx={{ px: 0.75, py: 0.35, borderRadius: 1, bgcolor: colors.blue15, fontSize: 12, color: colors.blue7 }}>{formatDisciplineLabel(a?.discipline || a?.Disciplina || '')}</Box> : null}
+                              </Box>
+                            </Box>
+                          </Paper>
+                        ))}
+                      </Box>
                     )}
                   </>
                 )}

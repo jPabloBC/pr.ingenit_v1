@@ -158,7 +158,10 @@ export default function SelectProjectPage() {
     }
   }
 
-  if (status === 'loading' || loading) {
+  const hasLoadedContent = projects.length > 0 || Boolean(companyBrand) || Boolean(error)
+  const showInitialLoader = status === 'loading' || (loading && !hasLoadedContent)
+
+  if (showInitialLoader) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
         <CircularProgress />
@@ -421,7 +424,7 @@ export default function SelectProjectPage() {
                     color: '#d9ecff',
                     position: 'relative',
                     overflow: 'hidden',
-                    transition: 'all 220ms ease',
+                    transition: 'border-color 180ms ease, background-color 180ms ease',
                     animation: 'projectCardIn 420ms ease both',
                     '&::before': {
                       content: '""',
@@ -432,8 +435,6 @@ export default function SelectProjectPage() {
                     },
                     '&:hover': {
                       borderColor: 'rgba(168, 210, 255, 0.8)',
-                      boxShadow: '0 14px 34px rgba(6,52,102,0.34)',
-                      transform: 'translateY(-2px) scale(1.005)',
                       background: 'linear-gradient(135deg, #06386a 0%, #0c5a9f 56%, #1780df 100%)',
                     },
                     '@keyframes projectCardIn': {

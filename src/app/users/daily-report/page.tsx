@@ -13741,6 +13741,14 @@ export default function DailyReportPage() {
                         const n = Number(v)
                         return Number.isFinite(n) ? n : 0
                       }
+                      const formatHhCell = (value: unknown) => {
+                        const n = Number(value)
+                        if (!Number.isFinite(n)) return "0"
+                        const rounded = Number(n.toFixed(2))
+                        return Number.isInteger(rounded)
+                          ? String(rounded)
+                          : String(rounded).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")
+                      }
                       const notesObj = (r?.notes && typeof r.notes === "object") ? (r.notes as Record<string, any>) : {}
                       const hhDirFromNotes = asNum(notesObj?.summary_direct_hh)
                       const hhIndFromNotes = asNum(notesObj?.summary_indirect_hh)
@@ -13766,9 +13774,9 @@ export default function DailyReportPage() {
                           {rowFront || "-"}
                         </td>
                         <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}` }}>{r.project_name || "-"}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhDir}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{hhInd}</td>
-                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{hhTotal}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{formatHhCell(hhDir)}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 600 }}>{formatHhCell(hhInd)}</td>
+                        <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap", fontWeight: 700 }}>{formatHhCell(hhTotal)}</td>
                         <td style={{ ...valueCellSx, border: `1px solid ${colors.blue13}`, textAlign: "center", whiteSpace: "nowrap" }}>
                           <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                             <Tooltip title="Ver">
