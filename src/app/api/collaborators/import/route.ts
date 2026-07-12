@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../lib/auth'
 import { normalizeText } from '../../../../lib/normalize'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
+import { createCollaboratorsImportNotification } from '../../../../lib/collaboratorNotifications'
 
 const normalizeKey = (value: unknown) => {
   if (value === undefined || value === null) return ''
@@ -1002,6 +1003,16 @@ export async function POST(req: NextRequest) {
 
     if (!stream) {
       const result = await executeImport()
+      try {
+        await createCollaboratorsImportNotification({
+          session,
+          insertedCount: Number(result?.inserted || 0),
+          attendanceRowsWritten: Number(result?.attendance_rows_written || 0),
+          attendanceDates: Array.isArray(result?.attendance_dates_written) ? result.attendance_dates_written : [],
+        })
+      } catch (notificationError) {
+        console.error('Collaborators import notification failed:', notificationError)
+      }
       return NextResponse.json(result)
     }
 
@@ -1015,6 +1026,16 @@ export async function POST(req: NextRequest) {
         ;(async () => {
           try {
             const payload = await executeImport((event) => write(event))
+            try {
+              await createCollaboratorsImportNotification({
+                session,
+                insertedCount: Number(payload?.inserted || 0),
+                attendanceRowsWritten: Number(payload?.attendance_rows_written || 0),
+                attendanceDates: Array.isArray(payload?.attendance_dates_written) ? payload.attendance_dates_written : [],
+              })
+            } catch (notificationError) {
+              console.error('Collaborators import notification failed:', notificationError)
+            }
             write({
               type: 'done',
               stage: 'done',

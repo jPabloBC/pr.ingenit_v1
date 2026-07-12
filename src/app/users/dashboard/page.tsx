@@ -19,7 +19,6 @@ import {
   AccessTime,
   Security,
   QueryStats,
-  TrendingUp,
   WarningAmber,
   Payments
 } from '@mui/icons-material'
@@ -67,9 +66,12 @@ interface Alert {
 
 interface MonthlyStats {
   averageAttendance: number
-  averageOvertime: number
-  incidents: number
-  eppUsageRate: number
+  fieldReportsThisMonth: number
+  dailyReportsThisMonth: number
+  activeCrewIdsThisMonth: number
+  activeCollaboratorCount?: number
+  monthStart?: string
+  monthEnd?: string
 }
 
 interface HhHistoryRow {
@@ -89,6 +91,14 @@ interface HhHistoryRow {
   minor_hm_accum: number
 }
 
+interface FieldReportSummaryRow {
+  date: string
+  total: number
+  completed: number
+  frontCount: number
+  fronts: string[]
+}
+
 export default function Dashboard() {
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -97,6 +107,7 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState<Alert[]>([])
   const [monthlyStats, setMonthlyStats] = useState<MonthlyStats | null>(null)
   const [hhHistory, setHhHistory] = useState<HhHistoryRow[]>([])
+  const [fieldReportSummary, setFieldReportSummary] = useState<FieldReportSummaryRow[]>([])
   const [opsView, setOpsView] = useState<'hh' | 'accum' | 'growth'>('hh')
   const [trendMetric, setTrendMetric] = useState<'daily' | 'direct' | 'indirect'>('daily')
   const [companyDisplayName, setCompanyDisplayName] = useState('')
@@ -133,13 +144,15 @@ export default function Dashboard() {
           departmentsResponse,
           alertsResponse,
           monthlyResponse,
-          hhHistoryResponse
+          hhHistoryResponse,
+          fieldReportsSummaryResponse
         ] = await Promise.all([
           fetch('/api/dashboard/stats', { cache: 'no-store' }),
           fetch('/api/dashboard/departments', { cache: 'no-store' }),
           fetch('/api/dashboard/alerts', { cache: 'no-store' }),
           fetch('/api/dashboard/monthly', { cache: 'no-store' }),
-          fetch('/api/management/hh-history', { cache: 'no-store' })
+          fetch('/api/management/hh-history', { cache: 'no-store' }),
+          fetch('/api/dashboard/field-reports-summary', { cache: 'no-store' })
         ])
 
         if (statsResponse.ok) {
@@ -165,6 +178,11 @@ export default function Dashboard() {
         if (hhHistoryResponse.ok) {
           const hhHistoryData = await hhHistoryResponse.json()
           setHhHistory(Array.isArray(hhHistoryData) ? hhHistoryData : [])
+        }
+
+        if (fieldReportsSummaryResponse.ok) {
+          const fieldReportsSummaryData = await fieldReportsSummaryResponse.json()
+          setFieldReportSummary(Array.isArray(fieldReportsSummaryData) ? fieldReportsSummaryData : [])
         }
       } catch (error) {
         dashboardLoadedRef.current = null
@@ -362,16 +380,39 @@ export default function Dashboard() {
     ? departments.map((dept) => ({ id: dept.id, label: dept.name, total: Number(dept.collaboratorCount || 0) }))
     : (stats?.specialtyBreakdown || []).slice(0, 8).map((item) => ({ id: item.specialty, label: item.specialty, total: Number(item.active || item.total || 0) }))
   const departmentChartTotal = departmentChartRows.reduce((acc, item) => acc + item.total, 0)
-  const departmentTitle = departments.length > 0 ? 'Por Departamento' : 'Por Especialidad'
+  const fieldReportChartData = fieldReportSummary.map((item) => ({
+    ...item,
+    name: formatDateLabel(item.date),
+    total: Number(item.total || 0),
+    completed: Number(item.completed || 0),
+    frontCount: Number(item.frontCount || 0),
+  }))
+  const latestFieldReportSummary = fieldReportSummary[fieldReportSummary.length - 1] || null
+  const fieldReportTotalVisible = fieldReportSummary.reduce((acc, item) => acc + Number(item.total || 0), 0)
+  const departmentTitle = departments.length > 0
+    ? 'Por Departamento'
+    : departmentChartRows.length > 0
+      ? 'Por Especialidad'
+      : fieldReportChartData.length > 0
+        ? 'Reportes Terreno'
+        : ''
+  const departmentSubtitle = departments.length > 0
+    ? 'Distribución activa por departamento'
+    : departmentChartRows.length > 0
+      ? 'Distribución activa por especialidad'
+      : fieldReportChartData.length > 0
+        ? 'Últimas fechas con reportes registrados'
+        : ''
+  const hasSecondaryInsight = departmentChartRows.length > 0 || fieldReportChartData.length > 0
   const departmentChartData = departmentChartRows.map((item) => ({
     name: toUpperDisplay(item.label),
     total: item.total,
   }))
   const monthlyCards = [
-    { label: 'Asistencia Promedio', value: Number(monthlyStats?.averageAttendance || 0), suffix: '%', color: '#075ecb', progress: Number(monthlyStats?.averageAttendance || 0) },
-    { label: 'Horas Extra Promedio', value: Number(monthlyStats?.averageOvertime || 0), suffix: 'h', color: '#2e7d32', progress: Math.min(100, Number(monthlyStats?.averageOvertime || 0) * 10) },
-    { label: 'Incidentes Reportados', value: Number(monthlyStats?.incidents || 0), suffix: '', color: '#d32f2f', progress: Math.min(100, Number(monthlyStats?.incidents || 0) * 12) },
-    { label: 'EPP en Uso', value: Number(monthlyStats?.eppUsageRate || 0), suffix: '%', color: '#d99a00', progress: Number(monthlyStats?.eppUsageRate || 0) }
+    { label: 'Asistencia Mes', value: Number(monthlyStats?.averageAttendance || 0), suffix: '%', color: '#075ecb', progress: Number(monthlyStats?.averageAttendance || 0) },
+    { label: 'Reportes Terreno', value: Number(monthlyStats?.fieldReportsThisMonth || 0), suffix: '', color: '#2e7d32', progress: Math.min(100, Number(monthlyStats?.fieldReportsThisMonth || 0) * 8) },
+    { label: 'Reportes Diarios', value: Number(monthlyStats?.dailyReportsThisMonth || 0), suffix: '', color: '#d99a00', progress: Math.min(100, Number(monthlyStats?.dailyReportsThisMonth || 0) * 8) },
+    { label: 'Cuadrillas con Actividad', value: Number(monthlyStats?.activeCrewIdsThisMonth || 0), suffix: '', color: '#0b73d9', progress: Math.min(100, Number(monthlyStats?.activeCrewIdsThisMonth || 0) * 12) }
   ]
 
   const summaryCards = [
@@ -398,11 +439,6 @@ export default function Dashboard() {
                   Indicadores operacionales actualizados con los datos disponibles del sistema.
                 </Typography>
               </Box>
-              <Chip
-                icon={<TrendingUp sx={{ fontSize: 17 }} />}
-                label={`${formatNumber(totalDailyHh)} HH último reporte`}
-                sx={{ bgcolor: '#eaf3ff', color: '#052e5a', fontWeight: 800, border: '1px solid #c7dcf7' }}
-              />
             </Box>
 
             <Box
@@ -470,7 +506,7 @@ export default function Dashboard() {
 
             <Box
               display="grid"
-              gridTemplateColumns={{ xs: '1fr', lg: '1.45fr 0.85fr' }}
+              gridTemplateColumns={{ xs: '1fr', lg: hasSecondaryInsight ? '1.45fr 0.85fr' : '1fr' }}
               gap={3}
               mb={3}
             >
@@ -668,6 +704,7 @@ export default function Dashboard() {
                 )}
               </Paper>
 
+              {hasSecondaryInsight ? (
               <Paper
                 elevation={0}
                 sx={{
@@ -682,7 +719,7 @@ export default function Dashboard() {
                   {departmentTitle}
                 </Typography>
                 <Typography sx={{ color: '#64748b', fontSize: '0.8rem', fontWeight: 700, mb: 2 }}>
-                  {departments.length > 0 ? 'Distribución activa por departamento' : 'Distribución activa por especialidad'}
+                  {departmentSubtitle}
                 </Typography>
                 {departmentChartRows.length > 0 ? (
                   <Box>
@@ -713,15 +750,44 @@ export default function Dashboard() {
                       <Typography sx={{ color: '#052e5a', fontSize: '0.9rem', fontWeight: 950 }}>{formatNumber(departmentChartTotal)}</Typography>
                     </Box>
                   </Box>
-                ) : (
-                  <Box sx={{ minHeight: 230, borderRadius: 2, border: '1px dashed #cbd7e6', bgcolor: '#f8fbff', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', px: 2 }}>
-                    <Box>
-                      <Typography sx={{ color: '#0f172a', fontWeight: 900 }}>Sin distribución registrada</Typography>
-                      <Typography sx={{ mt: 0.35, color: '#64748b', fontSize: '0.86rem' }}>No hay departamentos ni especialidades disponibles.</Typography>
+                ) : fieldReportChartData.length > 0 ? (
+                  <Box>
+                    <Box sx={{ height: 250 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={fieldReportChartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }} barCategoryGap={12}>
+                          <CartesianGrid stroke="#edf2f8" vertical={false} />
+                          <XAxis dataKey="name" tick={{ fontSize: 11, fontWeight: 800, fill: '#052e5a' }} tickLine={false} axisLine={false} />
+                          <YAxis tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} axisLine={false} allowDecimals={false} width={34} />
+                          <RechartsTooltip
+                            formatter={(value: any, name: any) => [
+                              formatNumber(Number(value)),
+                              name === 'completed' ? 'Completados' : 'Reportes'
+                            ]}
+                            labelFormatter={(_label: any, payload: readonly any[]) => {
+                              const row = payload?.[0]?.payload
+                              const fronts = Array.isArray(row?.fronts) && row.fronts.length > 0 ? ` · ${row.fronts.join(', ')}` : ''
+                              return `${formatDateLabel(row?.date || '')}${fronts}`
+                            }}
+                            labelStyle={{ color: '#052e5a', fontWeight: 900 }}
+                            cursor={{ fill: 'rgba(7, 94, 203, 0.05)' }}
+                          />
+                          <Bar dataKey="total" fill={colors.blue6} radius={[7, 7, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Box>
+                    <Box sx={{ mt: 1.2, p: 1.2, borderRadius: 1.5, bgcolor: '#f8fbff', border: '1px solid #e0e9f6', display: 'flex', justifyContent: 'space-between' }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 800 }}>Última fecha</Typography>
+                        <Typography sx={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700 }}>
+                          {formatDateLabel(latestFieldReportSummary?.date || '') || '-'} · {formatNumber(Number(latestFieldReportSummary?.frontCount || 0))} frentes
+                        </Typography>
+                      </Box>
+                      <Typography sx={{ color: '#052e5a', fontSize: '0.9rem', fontWeight: 950 }}>{formatNumber(fieldReportTotalVisible)} reportes</Typography>
                     </Box>
                   </Box>
-                )}
+                ) : null}
               </Paper>
+              ) : null}
             </Box>
 
             <Box
@@ -819,7 +885,7 @@ export default function Dashboard() {
                         </ResponsiveContainer>
                         <Box sx={{ position: 'absolute', inset: 10, borderRadius: '50%', bgcolor: '#ffffff', display: 'grid', placeItems: 'center', boxShadow: 'inset 0 0 0 1px #e5edf7' }}>
                           <Typography sx={{ color: card.color, fontWeight: 950, fontSize: '0.98rem' }}>
-                            {card.suffix === 'h' ? formatDecimal(card.value) : formatNumber(card.value)}{card.suffix}
+                            {card.suffix === '%' ? formatDecimal(card.value) : formatNumber(card.value)}{card.suffix}
                           </Typography>
                         </Box>
                       </Box>

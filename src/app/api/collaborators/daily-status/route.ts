@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { todayYmd } from '@/lib/staffing/availableCollaborators'
+import { createDailyStatusNotification } from '@/lib/collaboratorNotifications'
 
 export const dynamic = 'force-dynamic'
 
@@ -535,6 +536,16 @@ export async function PUT(request: NextRequest) {
       if (syncErr) {
         return NextResponse.json({ error: syncErr.message }, { status: 500 })
       }
+    }
+
+    try {
+      await createDailyStatusNotification({
+        session,
+        date,
+        updatedCount: data?.length || 0,
+      })
+    } catch (notificationError) {
+      console.error('Daily status notification failed:', notificationError)
     }
 
     return NextResponse.json({ ok: true, rows: data || [] })

@@ -4,147 +4,117 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../lib/auth'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 
+const normalizeDateKey = (value: string) => String(value || '').slice(0, 10)
+
+const getChileMonthRange = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Santiago',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const values = new Map(parts.map((part) => [part.type, part.value]))
+  const year = Number(values.get('year'))
+  const month = Number(values.get('month'))
+  const today = `${values.get('year')}-${values.get('month')}-${values.get('day')}`
+  const start = `${values.get('year')}-${values.get('month')}-01`
+  const end = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+  const elapsedDays = Math.max(1, Number(values.get('day') || 1))
+  return { start, end, today, elapsedDays }
+}
+
+const countRows = async (query: any) => {
+  const { count, error } = await query
+  if (error) return 0
+  return Number(count || 0)
+}
+
 export async function GET() {
   try {
     const session = await getServerSession(authOptions) as any
 
     const userRole = session?.user?.role
     const isDev = userRole === 'dev'
-    const companyId = session?.user?.companyId
+    const companyId = String(session?.user?.companyId || '').trim()
 
     if (!isDev && !companyId) {
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
-    const userSpecialty = session.user.specialty
 
-    // Determinar si el usuario es admin (ve todo sin filtros)
+    const userSpecialty = session?.user?.specialty
     const isAdmin = ['admin', 'hr_manager', 'supervisor', 'dev'].includes(userRole)
+    const { start, today, elapsedDays } = getChileMonthRange()
 
-    // Obtener colaboradores filtrados por specialty (solo activos)
     let collaboratorsQuery = supabaseAdmin
       .from('pr_collaborators')
-      .select('id, user_id, specialty, is_active')
+      .select('id')
       .eq('is_active', true)
-    if (companyId) {
-      collaboratorsQuery = collaboratorsQuery.eq('company_id', companyId)
-    }
 
-    // Si NO es admin y tiene specialty, filtrar por specialty
-    if (!isAdmin && userSpecialty) {
-      collaboratorsQuery = collaboratorsQuery.eq('specialty', userSpecialty)
-    }
+    if (companyId) collaboratorsQuery = collaboratorsQuery.eq('company_id', companyId)
+    if (!isAdmin && userSpecialty) collaboratorsQuery = collaboratorsQuery.eq('specialty', userSpecialty)
 
     const { data: collaborators } = await collaboratorsQuery
-    const collaboratorIds = (collaborators || []).map((c: any) => c.id).filter(Boolean)
-
-    // Obtener estadísticas del mes actual
-    const currentDate = new Date()
-    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
-    const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0)
-
-    // Calcular asistencia promedio del mes (filtrado por colaboradores)
-    let monthlyAttendance: any[] = []
-    if (collaboratorIds.length > 0) {
-      const { data: attendance } = await supabaseAdmin
-        .from('pr_attendance')
-        .select('collaborator_id, status, date')
-        .in('collaborator_id', collaboratorIds)
-        .gte('date', startOfMonth.toISOString().split('T')[0])
-        .lte('date', endOfMonth.toISOString().split('T')[0])
-
-      monthlyAttendance = attendance || []
-    }
-
-    // Calcular estadísticas
-    const totalDays = Math.ceil((endOfMonth.getTime() - startOfMonth.getTime()) / (1000 * 60 * 60 * 24))
-    const presentDays = monthlyAttendance.filter(att => att.status === 'present').length || 0
-    const totalPossibleDays = monthlyAttendance.length || 1
-
-    // Los colaboradores ya están filtrados por is_active=true
+    const collaboratorIds = (collaborators || []).map((c: any) => String(c?.id || '').trim()).filter(Boolean)
     const activeCollaboratorCount = collaboratorIds.length
 
-    const averageAttendance = activeCollaboratorCount > 0 ? (presentDays / (activeCollaboratorCount * totalDays)) * 100 : 0
-
-    // Intentar calcular horas extra promedio si existe la columna correspondiente (filtrado)
-    let averageOvertime = 0
+    let presentStatusCount = 0
     if (collaboratorIds.length > 0) {
-      try {
-        const { data: overtimeRecords, error: overtimeError } = await supabaseAdmin
-          .from('pr_attendance')
-          .select('overtime_hours')
-          .in('collaborator_id', collaboratorIds)
-          .gte('date', startOfMonth.toISOString().split('T')[0])
-          .lte('date', endOfMonth.toISOString().split('T')[0])
-
-        if (!overtimeError && overtimeRecords && overtimeRecords.length > 0) {
-          const totalOvertime = overtimeRecords.reduce((sum: number, r: any) => sum + (Number(r.overtime_hours) || 0), 0)
-          averageOvertime = Math.round((totalOvertime / (overtimeRecords.length || 1)) * 10) / 10
-        }
-      } catch {
-        // ignore overtime errors
-      }
+      let presentQuery = supabaseAdmin
+        .from('pr_collaborator_daily_status')
+        .select('id', { count: 'exact', head: true })
+        .gte('work_date', start)
+        .lte('work_date', today)
+        .in('collaborator_id', collaboratorIds)
+        .or('status.ilike.turno,status.ilike.presente,reason.eq.11,reason.ilike.turno,reason.ilike.presente')
+      if (companyId) presentQuery = presentQuery.eq('company_id', companyId)
+      presentStatusCount = await countRows(presentQuery)
     }
 
-    // Contar incidentes del mes si existe la tabla `pr_incidents`
-    let incidents = 0
-    try {
-      let incidentsQuery = supabaseAdmin
-        .from('pr_incidents')
-        .select('id')
-        .gte('date', startOfMonth.toISOString().split('T')[0])
-        .lte('date', endOfMonth.toISOString().split('T')[0])
-      if (companyId) {
-        incidentsQuery = incidentsQuery.eq('company_id', companyId)
-      }
-      const { data: incidentRecords, error: incidentsError } = await incidentsQuery
+    let fieldReportsQuery = supabaseAdmin
+      .from('pr_field_reports')
+      .select('id', { count: 'exact', head: true })
+      .gte('report_date', start)
+      .lte('report_date', today)
+    if (companyId) fieldReportsQuery = fieldReportsQuery.eq('company_id', companyId)
 
-      if (!incidentsError && incidentRecords) {
-        incidents = incidentRecords.length
-      }
-    } catch {
-      // table may not exist
-    }
+    let dailyReportsQuery = supabaseAdmin
+      .from('pr_daily_reports')
+      .select('id', { count: 'exact', head: true })
+      .gte('report_date', start)
+      .lte('report_date', today)
+    if (companyId) dailyReportsQuery = dailyReportsQuery.eq('company_id', companyId)
 
-    // Calcular EPP en uso (filtrado por colaboradores)
-    let eppUsageRate = 0
-    if (collaboratorIds.length > 0) {
-      try {
-        // Obtener EPP asignados a estos colaboradores
-        const { data: assignedEPP, error: assignedEPPError } = await supabaseAdmin
-          .from('pr_epp_assignments')
-          .select('epp_id')
-          .in('collaborator_id', collaboratorIds)
-          .eq('status', 'active')
+    let crewActivitiesQuery = supabaseAdmin
+      .from('pr_crew_activities')
+      .select('crew_id')
+      .gte('work_date', start)
+      .lte('work_date', today)
+    if (companyId) crewActivitiesQuery = crewActivitiesQuery.eq('company_id', companyId)
 
-        if (!assignedEPPError && assignedEPP && assignedEPP.length > 0) {
-          const eppIds = assignedEPP.map((a: any) => a.epp_id).filter(Boolean)
+    const [fieldReportsThisMonth, dailyReportsThisMonth, crewActivitiesResult] = await Promise.all([
+      countRows(fieldReportsQuery),
+      countRows(dailyReportsQuery),
+      crewActivitiesQuery,
+    ])
 
-          // Obtener total de EPP para estos colaboradores
-          let totalEppQuery = supabaseAdmin
-            .from('pr_epp')
-            .select('id')
-          if (companyId) {
-            totalEppQuery = totalEppQuery.eq('company_id', companyId)
-          }
-          const { data: totalEPP, error: totalEPPError } = await totalEppQuery
+    const activeCrewIdsThisMonth = Array.from(
+      new Set((crewActivitiesResult.data || []).map((row: any) => String(row?.crew_id || '').trim()).filter(Boolean))
+    ).length
 
-          if (!totalEPPError && totalEPP && totalEPP.length > 0) {
-            eppUsageRate = ((eppIds.length || 0) / totalEPP.length) * 100
-          }
-        }
-      } catch {
-        // ignore EPP errors
-      }
-    }
+    const possibleAttendanceRecords = activeCollaboratorCount * elapsedDays
+    const averageAttendance = possibleAttendanceRecords > 0
+      ? Math.round((presentStatusCount / possibleAttendanceRecords) * 1000) / 10
+      : 0
 
-    const monthlyStats = {
-      averageAttendance: Math.round(averageAttendance * 10) / 10,
-      averageOvertime,
-      incidents,
-      eppUsageRate: Math.round(eppUsageRate)
-    }
-
-    return NextResponse.json(monthlyStats)
+    return NextResponse.json({
+      averageAttendance,
+      fieldReportsThisMonth,
+      dailyReportsThisMonth,
+      activeCrewIdsThisMonth,
+      activeCollaboratorCount,
+      monthStart: normalizeDateKey(start),
+      monthEnd: normalizeDateKey(today),
+    })
   } catch {
     return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
   }
