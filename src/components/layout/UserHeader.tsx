@@ -19,6 +19,33 @@ type InternalNotification = {
   created_at?: string | null;
 };
 
+const formatNotificationTime = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('es-CL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+};
+
+const splitNotificationTitle = (title: string) => {
+  const match = String(title || '').match(/^(.*?)(?:\s*-\s*)(\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})$/);
+  if (!match) return { label: title, date: '' };
+  return { label: match[1], date: match[2] };
+};
+
+const emphasizeNotificationSender = (body: string) => {
+  const text = String(body || '');
+  const separator = ' informó ';
+  const index = text.toLowerCase().indexOf(separator);
+  if (index < 0) return text;
+  const sender = text.slice(0, index).trim();
+  const normalizedSender = sender.includes('@') ? sender.toLowerCase() : sender.toUpperCase();
+  return `${normalizedSender}${text.slice(index)}`;
+};
+
 const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
   const theme = useTheme()
   const router = useRouter()
@@ -110,7 +137,10 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
           </Typography>
           <IconButton
             aria-label="Notificaciones"
-            onClick={(event) => setAnchorEl(event.currentTarget)}
+            onClick={(event) => {
+              setAnchorEl(event.currentTarget)
+              void loadNotifications(true)
+            }}
             sx={{ ml: 'auto', color: colors.white }}
           >
             <Badge badgeContent={unreadCount} color="error" max={99}>
@@ -139,6 +169,8 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
             <Stack spacing={0.75}>
               {notifications.map((notification) => {
                 const unread = !notification.read_at
+                const titleParts = splitNotificationTitle(notification.title)
+                const time = formatNotificationTime(notification.created_at)
                 return (
                   <Box
                     key={notification.id}
@@ -160,11 +192,18 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
                       '&:hover': { borderColor: '#2563eb', bgcolor: '#f8fbff' },
                     }}
                   >
-                    <Typography sx={{ fontWeight: unread ? 900 : 700, color: '#0f172a', fontSize: 13.5 }}>
-                      {notification.title}
-                    </Typography>
+                    <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={1}>
+                      <Typography sx={{ minWidth: 0, fontWeight: unread ? 900 : 700, color: '#0f172a', fontSize: 13.5 }}>
+                        {titleParts.date ? `${titleParts.label} - ${titleParts.date}` : titleParts.label}
+                      </Typography>
+                      {time ? (
+                        <Typography sx={{ flex: '0 0 auto', color: '#cbd5e1', fontSize: 11.5, fontWeight: 400 }}>
+                          {time}
+                        </Typography>
+                      ) : null}
+                    </Stack>
                     <Typography sx={{ mt: 0.35, color: '#475569', fontSize: 12.5 }}>
-                      {notification.body}
+                      {emphasizeNotificationSender(notification.body)}
                     </Typography>
                   </Box>
                 )
