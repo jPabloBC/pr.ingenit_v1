@@ -144,24 +144,25 @@ export default function Dashboard() {
           departmentsResponse,
           alertsResponse,
           monthlyResponse,
-          hhHistoryResponse,
-          fieldReportsSummaryResponse
+          hhHistoryResponse
         ] = await Promise.all([
           fetch('/api/dashboard/stats', { cache: 'no-store' }),
           fetch('/api/dashboard/departments', { cache: 'no-store' }),
           fetch('/api/dashboard/alerts', { cache: 'no-store' }),
           fetch('/api/dashboard/monthly', { cache: 'no-store' }),
-          fetch('/api/management/hh-history', { cache: 'no-store' }),
-          fetch('/api/dashboard/field-reports-summary', { cache: 'no-store' })
+          fetch('/api/management/hh-history?dashboard=1', { cache: 'no-store' })
         ])
 
+        let statsData: DashboardStats | null = null
+        let departmentsData: DepartmentStats[] = []
+
         if (statsResponse.ok) {
-          const statsData = await statsResponse.json()
+          statsData = await statsResponse.json()
           setStats(statsData)
         }
 
         if (departmentsResponse.ok) {
-          const departmentsData = await departmentsResponse.json()
+          departmentsData = await departmentsResponse.json()
           setDepartments(departmentsData)
         }
 
@@ -180,9 +181,16 @@ export default function Dashboard() {
           setHhHistory(Array.isArray(hhHistoryData) ? hhHistoryData : [])
         }
 
-        if (fieldReportsSummaryResponse.ok) {
-          const fieldReportsSummaryData = await fieldReportsSummaryResponse.json()
-          setFieldReportSummary(Array.isArray(fieldReportsSummaryData) ? fieldReportsSummaryData : [])
+        const hasDepartmentData = departmentsData.length > 0
+        const hasSpecialtyData = Array.isArray(statsData?.specialtyBreakdown) && statsData.specialtyBreakdown.length > 0
+        if (!hasDepartmentData && !hasSpecialtyData) {
+          const fieldReportsSummaryResponse = await fetch('/api/dashboard/field-reports-summary', { cache: 'no-store' })
+          if (fieldReportsSummaryResponse.ok) {
+            const fieldReportsSummaryData = await fieldReportsSummaryResponse.json()
+            setFieldReportSummary(Array.isArray(fieldReportsSummaryData) ? fieldReportsSummaryData : [])
+          }
+        } else {
+          setFieldReportSummary([])
         }
       } catch (error) {
         dashboardLoadedRef.current = null

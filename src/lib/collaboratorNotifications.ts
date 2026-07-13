@@ -45,21 +45,19 @@ const loadNotificationRecipients = async ({
     return Array.from(new Set([...adminIds, ...regularIds, senderUserId || ''].filter(Boolean)))
   }
 
-  const { data: permissions, error: permError } = await supabaseAdmin
-    .from('pr_project_user_permissions')
+  const { data: assignments, error: assignmentError } = await supabaseAdmin
+    .from('pr_project_users')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('project_id', projectId)
-    .eq('resource_key', 'collaborators')
-    .eq('can_view', true)
     .in('user_id', regularIds)
 
-  if (permError) throw permError
+  if (assignmentError) throw assignmentError
 
-  const allowed = new Set((permissions || []).map((row: any) => String(row?.user_id || '').trim()).filter(Boolean))
+  const assigned = new Set((assignments || []).map((row: any) => String(row?.user_id || '').trim()).filter(Boolean))
   return Array.from(new Set([
     ...adminIds,
-    ...regularIds.filter((id) => allowed.has(id)),
+    ...regularIds.filter((id) => assigned.has(id)),
     senderUserId || '',
   ].filter(Boolean)))
 }

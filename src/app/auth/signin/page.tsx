@@ -22,12 +22,10 @@ export default function SignIn() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
-  const [failedAttempts, setFailedAttempts] = useState(0)
   const [attemptsThisSession, setAttemptsThisSession] = useState(0)
   const [loading, setLoading] = useState(false)
   const [redirecting, setRedirecting] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
-  const [hasAttempted, setHasAttempted] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
   const [resetMessage, setResetMessage] = useState('')
   const [resetError, setResetError] = useState('')
@@ -61,49 +59,14 @@ export default function SignIn() {
     }
   }, [router])
 
-  useEffect(() => {
-    // Update failedAttempts when email changes (persisted in localStorage per-email)
-    if (!email) {
-      // if no email typed, reflect anonymous attempts as well
-      const anon = Number(localStorage.getItem(`signin_failed_attempts:anonymous`) || 0)
-      setFailedAttempts(anon)
-      setAttemptsThisSession(0)
-      return
-    }
-    const key = `signin_failed_attempts:${email}`
-    const prev = Number(localStorage.getItem(key) || 0)
-    const anon = Number(localStorage.getItem(`signin_failed_attempts:anonymous`) || 0)
-    setFailedAttempts(Math.max(prev, anon))
-    setAttemptsThisSession(0)
-  }, [email])
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (loading || redirecting) return
-    setHasAttempted(true)
     setError('')
     setLoading(true)
     let keepBusyUntilRedirect = false
 
-    // Check if email exists in pr_users or in Supabase Auth to give specific messages
     const normalizedEmail = String(email || '').trim().toLowerCase()
-    let existsInPrUsers = false
-    let existsInAuth = false
-    try {
-      const checkRes = await fetch(`/api/auth/check-email?email=${encodeURIComponent(normalizedEmail)}`)
-      if (checkRes.ok) {
-        const j = await checkRes.json()
-        existsInPrUsers = !!j.inPrUsers
-        existsInAuth = !!j.inAuth
-        if (!existsInPrUsers && !existsInAuth) {
-          setError('Usuario no existente')
-          setLoading(false)
-          return
-        }
-      }
-    } catch (err) {
-      // ignore check errors and continue with signin attempt
-    }
 
     try {
       const result = await signIn('credentials', {
@@ -134,27 +97,12 @@ export default function SignIn() {
           errorText.toLowerCase().includes('fetch failed') ||
           errorText.includes('AuthRetryableFetchError')
 
-        // incrementar contador de intentos fallidos por email
-        const key = `signin_failed_attempts:${normalizedEmail || 'anonymous'}`
-        const prev = Number(localStorage.getItem(key) || 0)
-        const next = isNetworkAuthError ? prev : prev + 1
-        if (!isNetworkAuthError) {
-          localStorage.setItem(key, String(next))
-          setFailedAttempts(next)
-        }
-        // increment session counter
         if (!isNetworkAuthError) setAttemptsThisSession((s) => s + 1)
 
         if (isNetworkAuthError) {
           setError('No se pudo conectar con el servicio de autenticación. Intenta nuevamente en unos segundos.')
-        } else if (result.error === 'email_provider_disabled') {
-          setError('Inicio de sesión por correo deshabilitado en la configuración del servidor. Contacta al administrador.')
         } else {
-          if (existsInPrUsers || existsInAuth) {
-            setError('Contraseña incorrecta')
-          } else {
-            setError('Usuario no existente')
-          }
+          setError('Credenciales inválidas')
         }
 
         // No redirigir automáticamente; mostramos enlace de restablecer cuando next >= 3
@@ -167,9 +115,7 @@ export default function SignIn() {
           redirectToApp()
           return
         }
-        // login correcto -> resetear contador de fallos
-        const key = `signin_failed_attempts:${normalizedEmail || 'anonymous'}`
-        try { localStorage.removeItem(key); setFailedAttempts(0); setAttemptsThisSession(0); setHasAttempted(false) } catch {}
+        setAttemptsThisSession(0)
       }
     } catch {
       setError('Error al iniciar sesión')

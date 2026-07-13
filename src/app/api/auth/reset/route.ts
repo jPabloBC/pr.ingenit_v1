@@ -7,6 +7,9 @@ export async function POST(request: NextRequest) {
   try {
     const { token, password } = await request.json()
     if (!token || !password) return NextResponse.json({ error: 'Token y contraseña son requeridos' }, { status: 400 })
+    if (typeof password !== 'string' || password.length < 8) {
+      return NextResponse.json({ error: 'La contraseña debe tener al menos 8 caracteres' }, { status: 400 })
+    }
 
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
 
@@ -21,6 +24,18 @@ export async function POST(request: NextRequest) {
     if (!resetRow) return NextResponse.json({ error: 'Token inválido' }, { status: 400 })
     if (resetRow.used) return NextResponse.json({ error: 'Token ya usado' }, { status: 400 })
     if (new Date(resetRow.expires_at) < new Date()) return NextResponse.json({ error: 'Token expirado' }, { status: 400 })
+
+    // Claim the token before changing credentials to prevent concurrent reuse.
+    const { data: claimedRows, error: claimErr } = await supabaseAdmin
+      .from('pr_password_resets')
+      .update({ used: true, used_at: new Date().toISOString() })
+      .eq('id', resetRow.id)
+      .eq('used', false)
+      .select('id')
+    if (claimErr) return NextResponse.json({ error: 'Error al usar token' }, { status: 500 })
+    if (!claimedRows || claimedRows.length !== 1) {
+      return NextResponse.json({ error: 'Token ya usado' }, { status: 400 })
+    }
 
     // Buscar usuario para obtener auth_id
     const { data: user, error: userErr } = await supabaseAdmin
@@ -50,12 +65,6 @@ export async function POST(request: NextRequest) {
         .from('pr_users')
         .update({ password_hash: hashed })
         .eq('id', user.id)
-
-      // marcar token como usado
-      await supabaseAdmin
-        .from('pr_password_resets')
-        .update({ used: true, used_at: new Date().toISOString() })
-        .eq('id', resetRow.id)
 
       return NextResponse.json({ ok: true })
     } catch (err) {

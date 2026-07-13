@@ -6,6 +6,9 @@ import crypto from 'crypto'
 
 export async function POST(request: NextRequest) {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
     const body = await request.json()
     const email = body?.email
     const secret = body?.secret

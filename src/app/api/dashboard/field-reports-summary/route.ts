@@ -24,9 +24,9 @@ export async function GET() {
 
     const { data, error } = await supabaseAdmin
       .from('pr_field_reports')
-      .select('id, report_date, date, work_front, front, status')
+      .select('date, work_front, front, status')
       .eq('company_id', companyId)
-      .order('report_date', { ascending: false, nullsFirst: false })
+      .order('date', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(500)
 
@@ -35,7 +35,7 @@ export async function GET() {
     const byDate = new Map<string, { date: string; total: number; completed: number; fronts: Set<string> }>()
 
     ;(data || []).forEach((row: any) => {
-      const date = String(row?.report_date || row?.date || '').slice(0, 10)
+      const date = String(row?.date || '').slice(0, 10)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return
       const current = byDate.get(date) || { date, total: 0, completed: 0, fronts: new Set<string>() }
       current.total += 1

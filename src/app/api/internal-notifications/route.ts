@@ -103,6 +103,7 @@ export async function GET(req: NextRequest) {
     const userId = String(actor?.id || session?.user?.id || '').trim()
     if (!companyId || !userId) return NextResponse.json({ notifications: [], unread_count: 0 })
 
+    const summaryOnly = req.nextUrl.searchParams.get('summary') === '1'
     const unreadOnly = req.nextUrl.searchParams.get('unread') === '1'
     const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get('limit') || 20) || 20, 1), 50)
 
@@ -116,7 +117,7 @@ export async function GET(req: NextRequest) {
     if (unreadOnly) listQuery = listQuery.is('read_at', null)
 
     const [{ data, error }, { count, error: countError }] = await Promise.all([
-      listQuery,
+      summaryOnly ? Promise.resolve({ data: [], error: null }) : listQuery,
       supabaseAdmin
         .from('pr_internal_notifications')
         .select('id', { count: 'exact', head: true })
@@ -127,7 +128,39 @@ export async function GET(req: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (countError) return NextResponse.json({ error: countError.message }, { status: 500 })
-    return NextResponse.json({ notifications: data || [], unread_count: count || 0 })
+
+    const notifications = Array.isArray(data) ? data : []
+    const senderIds = Array.from(new Set(
+      notifications
+        .map((notification: any) => String(notification?.sender_user_id || '').trim())
+        .filter(Boolean)
+    ))
+
+    let senderNames = new Map<string, string>()
+    if (senderIds.length > 0) {
+      const { data: senders, error: sendersError } = await supabaseAdmin
+        .from('pr_users')
+        .select('id, first_name, last_name, email')
+        .in('id', senderIds)
+
+      if (sendersError) return NextResponse.json({ error: sendersError.message }, { status: 500 })
+
+      const senderEntries = (senders || []).map((sender: any): [string, string] => {
+        const name = `${String(sender?.first_name || '').trim()} ${String(sender?.last_name || '').trim()}`
+          .replace(/\s+/g, ' ')
+          .trim()
+        return [String(sender?.id || '').trim(), name]
+      }).filter(([id, name]) => Boolean(id && name))
+      senderNames = new Map(senderEntries)
+    }
+
+    return NextResponse.json({
+      notifications: notifications.map((notification: any) => ({
+        ...notification,
+        sender_name: senderNames.get(String(notification?.sender_user_id || '').trim()) || null,
+      })),
+      unread_count: count || 0,
+    })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
