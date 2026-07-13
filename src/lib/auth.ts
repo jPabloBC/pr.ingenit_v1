@@ -2,6 +2,7 @@ import { NextAuthOptions } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { supabase } from './supabaseClient'
 import { supabaseAdmin } from './supabaseAdmin'
+import { getClientIpHash, getEmailHash, isLoginRateLimited, recordLoginAttempt } from './authAttemptLimiter'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -11,12 +12,22 @@ export const authOptions: NextAuthOptions = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' }
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         if (!credentials?.email || !credentials?.password) return null;
 
         try {
           const normalizedEmail = String(credentials.email || '').trim().toLowerCase()
           const normalizedPassword = String(credentials.password || '')
+          const emailHash = getEmailHash(normalizedEmail)
+          const ipHash = getClientIpHash(request)
+
+          try {
+            if (await isLoginRateLimited({ emailHash, ipHash })) {
+              return null
+            }
+          } catch (rateLimitError) {
+            console.error('Login rate-limit check failed:', rateLimitError)
+          }
 
           const tryPasswordSignIn = async () =>
             supabase.auth.signInWithPassword({
@@ -50,7 +61,7 @@ export const authOptions: NextAuthOptions = {
               throw new Error('AUTH_NETWORK_ERROR')
             }
 
-            // Don't spam logs on normal "invalid credentials" responses (status 400)
+            // Keep the public response neutral whether the email or password is invalid.
             const isInvalidCreds = authError && (authError.status === 400 || authError.code === 'invalid_credentials')
             // If email provider disabled, throw specific error to surface to UI
             if (authError && authError.code === 'email_provider_disabled') {
@@ -84,7 +95,13 @@ export const authOptions: NextAuthOptions = {
             }
             // Log full error for debugging; still avoid noisy logs for invalid creds
             if (!isInvalidCreds) console.error('Supabase Auth error:', authError)
-            else console.debug('Supabase auth returned invalid credentials for email:', normalizedEmail)
+            else {
+              try {
+                await recordLoginAttempt({ emailHash, ipHash, success: false })
+              } catch (attemptError) {
+                console.error('Login attempt could not be recorded:', attemptError)
+              }
+            }
             return null
           }
 
@@ -184,6 +201,12 @@ export const authOptions: NextAuthOptions = {
             }
           } catch (e) {
             // ignore specialty fetch errors
+          }
+
+          try {
+            await recordLoginAttempt({ emailHash, ipHash, success: true })
+          } catch (attemptError) {
+            console.error('Successful login could not be recorded:', attemptError)
           }
 
           return {

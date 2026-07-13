@@ -17,6 +17,7 @@ type InternalNotification = {
   link_url?: string | null;
   read_at?: string | null;
   created_at?: string | null;
+  sender_name?: string | null;
 };
 
 const formatNotificationTime = (value?: string | null) => {
@@ -36,14 +37,15 @@ const splitNotificationTitle = (title: string) => {
   return { label: match[1], date: match[2] };
 };
 
-const emphasizeNotificationSender = (body: string) => {
+const splitNotificationBody = (body: string, senderName?: string | null) => {
   const text = String(body || '');
-  const separator = ' informó ';
-  const index = text.toLowerCase().indexOf(separator);
-  if (index < 0) return text;
-  const sender = text.slice(0, index).trim();
-  const normalizedSender = sender.includes('@') ? sender.toLowerCase() : sender.toUpperCase();
-  return `${normalizedSender}${text.slice(index)}`;
+  const match = text.match(/\s+(informó|actualizó|agregó)\s+/i)
+  const normalizedSenderName = String(senderName || '').trim()
+  if (!match || match.index === undefined) return { sender: normalizedSenderName, message: text };
+  const sender = text.slice(0, match.index).trim();
+  const visibleSender = normalizedSenderName || (sender.includes('@') ? '' : sender)
+  const normalizedSender = visibleSender.toUpperCase();
+  return { sender: normalizedSender, message: text.slice(match.index) };
 };
 
 const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
@@ -56,22 +58,22 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
   const notificationsLoadedRef = useRef(false)
   const notificationsLoadingRef = useRef(false)
 
-  const loadNotifications = async (force = false) => {
+  const loadNotifications = async ({ details = false, force = false }: { details?: boolean; force?: boolean } = {}) => {
     if (!force && notificationsLoadingRef.current) return
 
     try {
       notificationsLoadingRef.current = true
 
-      const res = await fetch('/api/internal-notifications?limit=8', {
+      const res = await fetch(details ? '/api/internal-notifications?limit=8' : '/api/internal-notifications?summary=1', {
         cache: 'no-store',
       })
 
       if (!res.ok) return
 
       const json = await res.json().catch(() => null)
-      setNotifications(Array.isArray(json?.notifications) ? json.notifications : [])
+      if (details) setNotifications(Array.isArray(json?.notifications) ? json.notifications : [])
       setUnreadCount(Number(json?.unread_count || 0))
-      notificationsLoadedRef.current = true
+      if (details) notificationsLoadedRef.current = true
     } catch {
       // ignore notification errors
     } finally {
@@ -84,7 +86,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
       void loadNotifications()
     }
 
-    const id = window.setInterval(() => void loadNotifications(true), 60000)
+    const id = window.setInterval(() => void loadNotifications({ force: true }), 60000)
 
     return () => window.clearInterval(id)
   }, [])
@@ -96,7 +98,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ids && ids.length > 0 ? { ids } : { mark_all: true }),
       })
-      await loadNotifications()
+      await loadNotifications({ details: true, force: true })
     } catch {}
   }
 
@@ -139,7 +141,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
             aria-label="Notificaciones"
             onClick={(event) => {
               setAnchorEl(event.currentTarget)
-              void loadNotifications(true)
+              void loadNotifications({ details: true, force: true })
             }}
             sx={{ ml: 'auto', color: colors.white }}
           >
@@ -157,20 +159,31 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
         <Box sx={{ width: { xs: 320, sm: 390 }, maxWidth: 'calc(100vw - 24px)', p: 1.25 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-            <Typography sx={{ fontWeight: 900, color: '#0f172a' }}>Notificaciones</Typography>
-            <Button size="small" onClick={() => void markNotificationsRead()} disabled={unreadCount === 0} sx={{ textTransform: 'none', fontWeight: 700 }}>
+          <Stack
+            direction="row"
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{ px: 0.25, pb: 1, borderBottom: '1px solid #dbe5f1' }}
+          >
+            <Typography sx={{ fontWeight: 800, color: colors.blue1, fontSize: 15 }}>Notificaciones</Typography>
+            <Button
+              size="small"
+              onClick={() => void markNotificationsRead()}
+              disabled={unreadCount === 0}
+              sx={{ minWidth: 0, textTransform: 'none', fontWeight: 700, fontSize: 12, px: 0.5 }}
+            >
               Marcar leídas
             </Button>
           </Stack>
           {notifications.length === 0 ? (
-            <Typography sx={{ py: 2, color: '#64748b', fontSize: 13 }}>No hay notificaciones.</Typography>
+            <Typography sx={{ py: 3, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No hay notificaciones.</Typography>
           ) : (
-            <Stack spacing={0.75}>
+            <Stack spacing={0.75} sx={{ maxHeight: 'min(68vh, 540px)', overflowY: 'auto', pt: 1 }}>
               {notifications.map((notification) => {
                 const unread = !notification.read_at
                 const titleParts = splitNotificationTitle(notification.title)
                 const time = formatNotificationTime(notification.created_at)
+                const bodyParts = splitNotificationBody(notification.body, notification.sender_name)
                 return (
                   <Box
                     key={notification.id}
@@ -183,27 +196,33 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
                     }}
                     sx={{
                       width: '100%',
-                      border: '1px solid #e2e8f0',
+                      border: '1px solid #dbe5f1',
                       borderRadius: 1,
-                      bgcolor: unread ? '#eff6ff' : '#ffffff',
+                      bgcolor: unread ? '#eef6ff' : '#ffffff',
                       textAlign: 'left',
                       p: 1,
                       cursor: 'pointer',
-                      '&:hover': { borderColor: '#2563eb', bgcolor: '#f8fbff' },
+                      transition: 'border-color 140ms ease, background-color 140ms ease',
+                      '&:hover': { borderColor: colors.blue6, bgcolor: '#f8fbff' },
                     }}
                   >
                     <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={1}>
-                      <Typography sx={{ minWidth: 0, fontWeight: unread ? 900 : 700, color: '#0f172a', fontSize: 13.5 }}>
+                      <Typography sx={{ minWidth: 0, fontWeight: unread ? 800 : 700, color: '#172033', fontSize: 13, lineHeight: 1.3 }}>
                         {titleParts.date ? `${titleParts.label} - ${titleParts.date}` : titleParts.label}
                       </Typography>
                       {time ? (
-                        <Typography sx={{ flex: '0 0 auto', color: '#cbd5e1', fontSize: 11.5, fontWeight: 400 }}>
+                        <Typography sx={{ flex: '0 0 auto', color: '#b5c3d5', fontSize: 11, fontWeight: 400 }}>
                           {time}
                         </Typography>
                       ) : null}
                     </Stack>
-                    <Typography sx={{ mt: 0.35, color: '#475569', fontSize: 12.5 }}>
-                      {emphasizeNotificationSender(notification.body)}
+                    <Typography sx={{ mt: 0.4, color: '#526278', fontSize: 12.25, lineHeight: 1.4 }}>
+                      {bodyParts.sender ? (
+                        <Box component="span" sx={{ color: '#526278', fontWeight: 500 }}>
+                          {bodyParts.sender}
+                        </Box>
+                      ) : null}
+                      {bodyParts.message}
                     </Typography>
                   </Box>
                 )

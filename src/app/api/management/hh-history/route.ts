@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '../../../../lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
@@ -99,26 +99,37 @@ const buildDailyRowsFromAccumulated = (rows: HistoryRow[]) => {
   })
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json([], { status: 200 })
     const companyId = String(session.user.companyId)
+    const dashboardMode = request.nextUrl.searchParams.get('dashboard') === '1'
+
+    const historySelect: string = dashboardMode
+      ? 'id, work_front, report_no, report_date, indirect_hh, direct_hh, daily_hh, indirect_hh_accum, direct_hh_accum, total_hh_accum, major_hm_daily, major_hm_accum, minor_hm_daily, minor_hm_accum, source'
+      : 'id, company_id, work_front, report_no, report_date, week_no, indirect_hh, direct_hh, daily_hh, indirect_hh_accum, direct_hh_accum, total_hh_accum, major_hm_daily, major_hm_accum, minor_hm_daily, minor_hm_accum, source, notes, created_at, updated_at'
+    const baselineSelect: string = dashboardMode
+      ? 'id, work_front, as_of_report_no, as_of_date, prev_indirect_hh, prev_direct_hh, prev_total_hh, prev_major_hm, prev_minor_hm, prev_total_hm, source'
+      : 'id, company_id, work_front, as_of_report_no, as_of_date, prev_indirect_hh, prev_direct_hh, prev_total_hh, prev_major_hm, prev_minor_hm, prev_total_hm, source, notes, created_at, updated_at'
+    const dailyReportsSelect: string = dashboardMode
+      ? 'id, report_no, report_date, work_front, s4_curr_indirect_hh, s4_curr_direct_hh, s4_curr_total_hh, s4_curr_total_hm, notes, created_at, updated_at'
+      : 'id, company_id, report_no, report_date, work_front, s4_curr_indirect_hh, s4_curr_direct_hh, s4_curr_total_hh, s4_curr_total_hm, notes, created_at, updated_at'
 
     const [historyRes, baselinesRes, dailyReportsRes] = await Promise.all([
       supabaseAdmin
         .from('pr_daily_report_front_history')
-        .select('id, company_id, work_front, report_no, report_date, week_no, indirect_hh, direct_hh, daily_hh, indirect_hh_accum, direct_hh_accum, total_hh_accum, major_hm_daily, major_hm_accum, minor_hm_daily, minor_hm_accum, source, notes, created_at, updated_at')
+        .select(historySelect)
         .eq('company_id', companyId)
         .order('work_front', { ascending: true })
         .order('report_no', { ascending: true }),
       supabaseAdmin
         .from('pr_daily_report_front_baselines')
-        .select('id, company_id, work_front, as_of_report_no, as_of_date, prev_indirect_hh, prev_direct_hh, prev_total_hh, prev_major_hm, prev_minor_hm, prev_total_hm, source, notes, created_at, updated_at')
+        .select(baselineSelect)
         .eq('company_id', companyId),
       supabaseAdmin
         .from('pr_daily_reports')
-        .select('id, company_id, report_no, report_date, work_front, s4_curr_indirect_hh, s4_curr_direct_hh, s4_curr_total_hh, s4_curr_total_hm, notes, created_at, updated_at')
+        .select(dailyReportsSelect)
         .eq('company_id', companyId)
         .gte('report_no', 29)
         .order('work_front', { ascending: true })
@@ -243,6 +254,20 @@ export async function GET() {
     })
 
     const dailyRows = buildDailyRowsFromAccumulated(Array.from(combined.values()))
+    if (dashboardMode) {
+      return NextResponse.json(dailyRows.map((row) => ({
+        id: row.id,
+        work_front: row.work_front,
+        report_no: row.report_no,
+        report_date: row.report_date,
+        indirect_hh: row.indirect_hh,
+        direct_hh: row.direct_hh,
+        daily_hh: row.daily_hh,
+        indirect_hh_accum: row.indirect_hh_accum,
+        direct_hh_accum: row.direct_hh_accum,
+        total_hh_accum: row.total_hh_accum,
+      })))
+    }
     return NextResponse.json(dailyRows)
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })

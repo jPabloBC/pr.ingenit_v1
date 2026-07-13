@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '../../../../lib/supabaseClient'
 import bcrypt from 'bcrypt'
+import {
+  getAuthIdentifierHash,
+  getClientIpHash,
+  isCollaboratorLoginRateLimited,
+  recordCollaboratorLoginAttempt,
+} from '@/lib/authAttemptLimiter'
 
 export async function POST(request: NextRequest) {
   try {
     const { companyId, document, password } = await request.json();
     if (!companyId || !document || !password) {
       return NextResponse.json({ error: 'Faltan datos requeridos' }, { status: 400 });
+    }
+    const identifierHash = getAuthIdentifierHash(`${companyId}:${document}`)
+    const ipHash = getClientIpHash(request)
+    try {
+      if (await isCollaboratorLoginRateLimited(identifierHash, ipHash)) {
+        return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 })
+      }
+    } catch (rateLimitError) {
+      console.error('Collaborator login rate-limit check failed:', rateLimitError)
     }
 
     // Buscar colaborador activo por documento y empresa
@@ -22,13 +37,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Error en la consulta' }, { status: 500 });
     }
     if (!collaborator) {
-      return NextResponse.json({ error: 'Colaborador no encontrado o inactivo' }, { status: 401 });
+      try {
+        await recordCollaboratorLoginAttempt({ identifierHash, ipHash, success: false })
+      } catch (attemptError) {
+        console.error('Collaborator login attempt could not be recorded:', attemptError)
+      }
+      return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
     }
 
     // Comparar contraseña
     const passwordMatch = await bcrypt.compare(password, collaborator.password_hash);
     if (!passwordMatch) {
-      return NextResponse.json({ error: 'Contraseña incorrecta' }, { status: 401 });
+      try {
+        await recordCollaboratorLoginAttempt({ identifierHash, ipHash, success: false })
+      } catch (attemptError) {
+        console.error('Collaborator login attempt could not be recorded:', attemptError)
+      }
+      return NextResponse.json({ error: 'Credenciales inválidas' }, { status: 401 });
+    }
+
+    try {
+      await recordCollaboratorLoginAttempt({ identifierHash, ipHash, success: true })
+    } catch (attemptError) {
+      console.error('Successful collaborator login could not be recorded:', attemptError)
     }
 
     // Puedes generar un token JWT aquí si lo necesitas

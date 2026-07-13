@@ -2,13 +2,24 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 import { sendMail } from '../../../../lib/mailer'
 import { resetPasswordEmail } from '../../../../lib/emailTemplates/resetPassword'
+import { getClientIpHash, getEmailHash, isPasswordResetRequestRateLimited, recordPasswordResetRequest } from '@/lib/authAttemptLimiter'
 import crypto from 'crypto'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const email = body?.email
+    const email = String(body?.email || '').trim().toLowerCase()
     if (!email) return NextResponse.json({ error: 'Email requerido' }, { status: 400 })
+    const emailHash = getEmailHash(email)
+    const ipHash = getClientIpHash(request)
+    try {
+      if (await isPasswordResetRequestRateLimited(emailHash, ipHash)) {
+        return NextResponse.json({ ok: true }, { status: 200 })
+      }
+      await recordPasswordResetRequest(emailHash, ipHash)
+    } catch (rateLimitError) {
+      console.error('Password reset rate-limit check failed:', rateLimitError)
+    }
 
     // Buscar usuario en la tabla pr_users
     const { data: user, error: userErr } = await supabaseAdmin
