@@ -35,6 +35,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TableSortLabel,
   Tabs,
   TextField,
   Typography,
@@ -354,8 +355,14 @@ type HhMatrixRow = {
   reports: number;
   hh: number;
   hhExtras: number;
+  dailyReportHh: number;
   byDate: Record<string, number>;
   byWeek: Record<string, number>;
+};
+
+type HhMatrixSort = {
+  key: string;
+  direction: 'asc' | 'desc';
 };
 
 type HhSummaryPayload = {
@@ -1512,6 +1519,7 @@ export default function ManagementPage() {
   const [hhMatrixRangeAnchorEl, setHhMatrixRangeAnchorEl] = useState<HTMLElement | null>(null);
   const [hhMatrixTempStartDate, setHhMatrixTempStartDate] = useState<Date | null>(null);
   const [hhMatrixTempEndDate, setHhMatrixTempEndDate] = useState<Date | null>(null);
+  const [hhMatrixSort, setHhMatrixSort] = useState<HhMatrixSort>({ key: 'specialty', direction: 'asc' });
   const hhMatrixRangeHydratedFromSummaryRef = useRef(false);
   const hhMatrixManualRangeChangeRef = useRef(false);
   const [crewPersonnelDateFilter, setCrewPersonnelDateFilter] = useState('');
@@ -3802,6 +3810,51 @@ export default function ManagementPage() {
     return Array.isArray(hhSummary?.matrix_rows) ? hhSummary.matrix_rows : [];
   }, [hhSummary]);
 
+  const sortedHhMatrixRows = useMemo(() => {
+    const valueFor = (row: HhMatrixRow, key: string): string | number => {
+      if (key === 'specialty' || key === 'position' || key === 'front') return String(row[key] || '');
+      if (key === 'peopleRows' || key === 'reports' || key === 'hh' || key === 'hhExtras' || key === 'dailyReportHh') return Number(row[key] || 0);
+      if (key === 'totalHh') return Number(row.hh || 0) + Number(row.hhExtras || 0);
+      if (key.startsWith('week:')) return Number(row.byWeek[key.slice(5)] || 0);
+      return '';
+    };
+
+    return [...hhMatrixRows].sort((a, b) => {
+      const aValue = valueFor(a, hhMatrixSort.key);
+      const bValue = valueFor(b, hhMatrixSort.key);
+      const comparison = typeof aValue === 'number' && typeof bValue === 'number'
+        ? aValue - bValue
+        : String(aValue).localeCompare(String(bValue), 'es', { numeric: true, sensitivity: 'base' });
+      if (comparison !== 0) return hhMatrixSort.direction === 'asc' ? comparison : -comparison;
+      return a.key.localeCompare(b.key, 'es');
+    });
+  }, [hhMatrixRows, hhMatrixSort]);
+
+  const toggleHhMatrixSort = React.useCallback((key: string) => {
+    setHhMatrixSort((current) => (
+      current.key === key
+        ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+        : { key, direction: ['specialty', 'position', 'front'].includes(key) ? 'asc' : 'desc' }
+    ));
+  }, []);
+
+  const hhMatrixSortLabel = (label: React.ReactNode, key: string) => (
+    <TableSortLabel
+      active={hhMatrixSort.key === key}
+      direction={hhMatrixSort.key === key ? hhMatrixSort.direction : 'asc'}
+      onClick={() => toggleHhMatrixSort(key)}
+      sx={{
+        fontWeight: 700,
+        color: 'inherit',
+        '&.Mui-active': { color: colors.blue3 },
+        '& .MuiTableSortLabel-icon': { color: `${colors.blue6} !important`, opacity: 0.4 },
+        '&.Mui-active .MuiTableSortLabel-icon': { opacity: 1 },
+      }}
+    >
+      {label}
+    </TableSortLabel>
+  );
+
   const hhMatrixTotalsByWeek = useMemo(() => {
     return hhSummary?.matrix_totals_by_week || {};
   }, [hhSummary]);
@@ -4874,21 +4927,21 @@ export default function ManagementPage() {
                 width: { xs: '100%', md: 'calc(100% - var(--users-aside-width, 240px))' },
                 zIndex: 1100,
                 px: { xs: 0.75, md: 1.25 },
-                pt: 0.55,
+                pt: 0,
                 pb: 0,
-                borderBottom: `1px solid ${colors.blue14}`,
-                minHeight: { xs: 45, md: 48 },
+                borderBottom: `1px solid ${colors.blue13}`,
+                minHeight: { xs: 46, md: 50 },
                 background: colors.white,
                 backdropFilter: 'blur(10px)',
                 boxShadow: `0 3px 8px ${alpha(colors.slate900, 0.06)}`,
                 '& .MuiTabs-scroller': {
-                  borderRadius: 0,
+                  borderRadius: 1,
                   backgroundColor: 'transparent',
                   border: 'none',
                 },
                 '& .MuiTabs-flexContainer': {
-                  gap: 0.2,
-                  alignItems: 'flex-end',
+                  gap: 0,
+                  alignItems: 'stretch',
                 },
                 '& .MuiTabs-scrollButtons': {
                   width: 30,
@@ -4898,35 +4951,34 @@ export default function ManagementPage() {
                   '&.Mui-disabled': { opacity: 0.25 },
                 },
                 '& .MuiTab-root': {
-                  minHeight: { xs: 38, md: 41 },
-                  mb: '-1px',
+                  minHeight: { xs: 46, md: 50 },
                   fontWeight: 700,
                   fontSize: { xs: 12.5, md: 13.5 },
                   textTransform: 'none',
                   px: { xs: 1.05, sm: 1.35, md: 1.55 },
                   py: 0.45,
                   minWidth: 'max-content',
-                  borderRadius: '8px 8px 0 0',
+                  borderRadius: 0,
                   color: colors.gray4,
-                  border: '1px solid transparent',
-                  borderBottomColor: 'transparent',
-                  transition: 'background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  transition: 'background-color .18s ease, color .18s ease',
                 },
                 '& .MuiTab-root:hover': {
-                  color: colors.blue2,
+                  color: colors.blue4,
                   backgroundColor: colors.blue15,
-                  borderColor: colors.blue14,
                 },
                 '& .Mui-selected': {
-                  color: `${colors.blue2} !important`,
+                  color: `${colors.blue6} !important`,
                   backgroundColor: colors.white,
-                  borderColor: colors.blue14,
-                  borderBottomColor: colors.white,
-                  boxShadow: `0 -2px 8px ${alpha(colors.managementShadowBlue, 0.08)}`,
-                  zIndex: 2,
+                },
+                '& .Mui-selected:hover': {
+                  backgroundColor: `${colors.blue15} !important`,
                 },
                 '& .MuiTabs-indicator': {
-                  display: 'none',
+                  height: 3,
+                  borderRadius: '3px 3px 0 0',
+                  backgroundColor: colors.blue6,
                 },
               }}
             >
@@ -5430,7 +5482,7 @@ export default function ManagementPage() {
                     size="small"
                     stickyHeader
                     sx={{
-                      minWidth: Math.max(960, 610 + hhMatrixWeeks.length * 118),
+                      minWidth: Math.max(1060, 712 + hhMatrixWeeks.length * 118),
                       '& th, & td': {
                         borderRight: `1px solid ${colors.gray200}`,
                         borderBottom: `1px solid ${colors.gray200}`,
@@ -5442,50 +5494,53 @@ export default function ManagementPage() {
                     <TableHead>
                       <TableRow>
                         <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190, left: 0, position: 'sticky', zIndex: 4 }}>
-                          Especialidad
+                          {hhMatrixSortLabel('Especialidad', 'specialty')}
                         </TableCell>
                         <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190 }}>
-                          Cargo
+                          {hhMatrixSortLabel('Cargo', 'position')}
                         </TableCell>
                         <TableCell sx={{ fontWeight: 700, background: colors.slate200, minWidth: 190 }}>
-                          Frente
+                          {hhMatrixSortLabel('Frente', 'front')}
                         </TableCell>
                         {hhMatrixWeeks.map((week) => (
                           <TableCell key={week.key} align="right" sx={{ fontWeight: 700, background: colors.slate200, minWidth: 118 }}>
-                            <Box sx={{ display: 'grid', lineHeight: 1.1 }}>
+                            {hhMatrixSortLabel(<Box sx={{ display: 'grid', lineHeight: 1.1 }}>
                               <span>{week.label}</span>
                               <span style={{ fontSize: 11, color: colors.slate500, fontWeight: 700 }}>
                                 {week.start.slice(5)} - {week.end.slice(5)}
                               </span>
-                            </Box>
+                            </Box>, `week:${week.key}`)}
                           </TableCell>
                         ))}
                         <TableCell align="center" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 82 }}>
-                          Directos
+                          {hhMatrixSortLabel('Directos', 'peopleRows')}
                         </TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 92 }}>
-                          HH
+                          {hhMatrixSortLabel('HH', 'hh')}
                         </TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 92 }}>
-                          HH Extras
+                          {hhMatrixSortLabel('HH Extras', 'hhExtras')}
+                        </TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 116 }}>
+                          {hhMatrixSortLabel('HH Rep. Diario', 'dailyReportHh')}
                         </TableCell>
                         <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue200, minWidth: 96 }}>
-                          Total HH
+                          {hhMatrixSortLabel('Total HH', 'totalHh')}
                         </TableCell>
                         <TableCell align="center" sx={{ fontWeight: 700, background: colors.blue100, minWidth: 82 }}>
-                          Reportes
+                          {hhMatrixSortLabel('Reportes', 'reports')}
                         </TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {hhMatrixRows.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={8 + hhMatrixWeeks.length} sx={{ py: 3, color: colors.slate500, textAlign: 'center' }}>
+                          <TableCell colSpan={9 + hhMatrixWeeks.length} sx={{ py: 3, color: colors.slate500, textAlign: 'center' }}>
                             No hay HH en el rango seleccionado.
                           </TableCell>
                         </TableRow>
                       ) : (
-                        hhMatrixRows.map((row) => {
+                        sortedHhMatrixRows.map((row) => {
                           const rowTotal = Number(row.hh || 0) + Number(row.hhExtras || 0);
                           return (
                             <TableRow key={row.key} hover>
@@ -5502,6 +5557,7 @@ export default function ManagementPage() {
                               <TableCell align="center">{row.peopleRows}</TableCell>
                               <TableCell align="right" sx={{ fontWeight: 700 }}>{formatNumber(row.hh)}</TableCell>
                               <TableCell align="right" sx={{ fontWeight: 700 }}>{formatNumber(row.hhExtras)}</TableCell>
+                              <TableCell align="right" sx={{ fontWeight: 700 }}>{formatNumber(row.dailyReportHh || 0)}</TableCell>
                               <TableCell align="right" sx={{ fontWeight: 700, background: colors.blue50 }}>{formatNumber(rowTotal)}</TableCell>
                               <TableCell align="center">{row.reports}</TableCell>
                             </TableRow>
@@ -5526,6 +5582,9 @@ export default function ManagementPage() {
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixRows.reduce((acc, row) => acc + row.hhExtras, 0))}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
+                            {formatNumber(hhMatrixRows.reduce((acc, row) => acc + Number(row.dailyReportHh || 0), 0))}
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixGrandTotal)}

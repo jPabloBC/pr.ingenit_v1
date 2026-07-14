@@ -434,8 +434,8 @@ export default function SelectProjectPage() {
                       pointerEvents: 'none',
                     },
                     '&:hover': {
-                      borderColor: 'rgba(168, 210, 255, 0.8)',
-                      background: 'linear-gradient(135deg, #06386a 0%, #0c5a9f 56%, #1780df 100%)',
+                      borderColor: '#003c80',
+                      background: 'linear-gradient(135deg, #001a33 0%, #001e40 52%, #003c80 100%)',
                     },
                     '@keyframes projectCardIn': {
                       '0%': { opacity: 0, transform: 'translateY(10px) scale(0.985)' },
@@ -451,6 +451,9 @@ export default function SelectProjectPage() {
                       zIndex: 1,
                       '&:active': {
                         transform: 'scale(0.995)',
+                      },
+                      '&:hover .MuiCardActionArea-focusHighlight': {
+                        opacity: 0.08,
                       },
                     }}
                   >
