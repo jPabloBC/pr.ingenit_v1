@@ -24,6 +24,7 @@ type HhMatrixRow = {
   reports: number
   hh: number
   hhExtras: number
+  dailyReportHh: number
   byDate: Record<string, number>
   byWeek: Record<string, number>
 }
@@ -421,6 +422,7 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
   return rawRows
     .flatMap((row: any) => {
       const specialty = normalizeDailyReportDirectSpecialtyForManagement(row)
+      const position = normalizeLabel(row?.position || row?.cargo || row?.role || 'SIN CARGO')
       const hhTurnoDia = toNumber(row?.hhTurnoDia || row?.hh_turno_dia || fallbackWorkdayHours) || fallbackWorkdayHours
       const dotacion = toNumber(row?.dotacionTotalObra ?? row?.dotacion_total_obra)
       const splitDotacion = toNumber(row?.instalacionFaena ?? row?.front1) + toNumber(row?.frente ?? row?.mainFront ?? row?.front2)
@@ -436,6 +438,7 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
             frontKey: getNocFrontLookupKey(column.label) || normalizeLabel(column.label),
             frontLabel: normalizeLabel(column.label),
             specialty: specialty || 'PERSONAL DIRECTO',
+            position,
             hh: dotacion > 0 ? dotacion * hhTurnoDia : 0,
           }
         })
@@ -443,17 +446,35 @@ const getDailyReportDirectSnapshotRows = (record: any) => {
       const legacyNocDotacion = dynamicRows.length === 0 ? toNumber(row?.nocFront) : 0
       const legacyNocHh = legacyNocDotacion > 0 ? legacyNocDotacion * hhTurnoDia : 0
       return [
-        { frontKey: baseFront, frontLabel: baseFront, specialty: specialty || 'PERSONAL DIRECTO', hh: baseHh },
+        { frontKey: baseFront, frontLabel: baseFront, specialty: specialty || 'PERSONAL DIRECTO', position, hh: baseHh },
         ...dynamicRows,
         {
           frontKey: legacyNocFront.key,
           frontLabel: legacyNocFront.label,
           specialty: specialty || 'PERSONAL DIRECTO',
+          position,
           hh: legacyNocHh
         },
       ]
     })
-    .filter((row: { frontKey: string; specialty: string; hh: number }) => row.frontKey && row.hh > 0)
+    .filter((row: { frontKey: string; specialty: string; position: string; hh: number }) => row.frontKey && row.hh > 0)
+}
+
+const getLatestDailyReports = (dailyReports: any[]) => {
+  const latestByDateFrontReport = new Map<string, any>()
+  dailyReports.forEach((record: any, idx: number) => {
+    const snapshot = pickDailyReportSnapshot(record) as any
+    const date = String(record?.report_date || '').slice(0, 10)
+    const front = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
+    if (!date || !front) return
+    const reportNo = Number(record?.report_no || snapshot?.report_no || 0) || idx
+    const key = `${date}__${front}__${reportNo}`
+    const current = latestByDateFrontReport.get(key)
+    const currentStamp = Date.parse(String(current?.updated_at || current?.created_at || '')) || 0
+    const nextStamp = Date.parse(String(record?.updated_at || record?.created_at || '')) || 0
+    if (!current || nextStamp >= currentStamp) latestByDateFrontReport.set(key, record)
+  })
+  return Array.from(latestByDateFrontReport.values())
 }
 
 const getDailyReportIndirectSnapshotRows = (record: any) => {
@@ -1050,22 +1071,9 @@ const fetchIndirectTurnoByDateAndPosition = async (companyId: string, dateFrom: 
 }
 
 const buildDailyReportDirectSnapshotMaps = (dailyReports: any[]) => {
-  const latestByDateFrontReport = new Map<string, any>()
-  dailyReports.forEach((record: any, idx: number) => {
-    const date = String(record?.report_date || '').slice(0, 10)
-    const front = normalizeDailyReportFrontForManagement(record?.work_front || pickDailyReportSnapshot(record)?.work_front)
-    if (!date || !front) return
-    const reportNo = Number(record?.report_no || pickDailyReportSnapshot(record)?.report_no || 0) || idx
-    const key = `${date}__${front}__${reportNo}`
-    const current = latestByDateFrontReport.get(key)
-    const currentStamp = Date.parse(String(current?.updated_at || current?.created_at || '')) || 0
-    const nextStamp = Date.parse(String(record?.updated_at || record?.created_at || '')) || 0
-    if (!current || nextStamp >= currentStamp) latestByDateFrontReport.set(key, record)
-  })
-
   const byFront = new Map<string, number>()
   const byFrontSpecialty = new Map<string, Map<string, number>>()
-  Array.from(latestByDateFrontReport.values()).forEach((record: any) => {
+  getLatestDailyReports(dailyReports).forEach((record: any) => {
     const date = String(record?.report_date || '').slice(0, 10)
     if (!date) return
 
@@ -1107,19 +1115,7 @@ const pickDailyReportSummaryHh = (record: any) => {
 }
 
 const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
-  const latestByDateFrontReport = new Map<string, any>()
-  dailyReports.forEach((record: any, idx: number) => {
-    const snapshot = pickDailyReportSnapshot(record) as any
-    const date = String(record?.report_date || '').slice(0, 10)
-    const front = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
-    if (!date || !front) return
-    const reportNo = Number(record?.report_no || snapshot?.report_no || 0) || idx
-    const key = `${date}__${front}__${reportNo}`
-    const current = latestByDateFrontReport.get(key)
-    const currentStamp = Date.parse(String(current?.updated_at || current?.created_at || '')) || 0
-    const nextStamp = Date.parse(String(record?.updated_at || record?.created_at || '')) || 0
-    if (!current || nextStamp >= currentStamp) latestByDateFrontReport.set(key, record)
-  })
+  const latestReports = getLatestDailyReports(dailyReports)
 
   const byFront = new Map<string, {
     front: string
@@ -1150,7 +1146,7 @@ const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
     byFront.set(frontKey, current)
   }
 
-  Array.from(latestByDateFrontReport.values()).forEach((record: any) => {
+  latestReports.forEach((record: any) => {
     const snapshot = pickDailyReportSnapshot(record) as any
     const reportId = String(record?.id || `${record?.report_date || ''}-${record?.report_no || ''}`)
     const baseFront = normalizeDailyReportFrontForManagement(record?.work_front || snapshot?.work_front)
@@ -1183,7 +1179,7 @@ const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
     direct_hh: directHh,
     indirect_hh: indirectHh,
     total_hh: totalHh,
-    report_count: latestByDateFrontReport.size,
+    report_count: latestReports.length,
     by_front: Array.from(byFront.values())
       .map((front) => ({
         front: front.front,
@@ -1202,7 +1198,8 @@ const buildSummary = (
   dateTo: string,
   indirectTurnoByDateAndPosition: Map<string, Map<string, GroupSummary>>,
   dailyReportDirectSnapshots: ReturnType<typeof buildDailyReportDirectSnapshotMaps>,
-  dailyReportWeeklySummary = buildDailyReportWeeklySummary([])
+  dailyReportWeeklySummary = buildDailyReportWeeklySummary([]),
+  dailyReports: any[] = []
 ) => {
   const matrixDates = listDateKeysBetween(dateFrom, dateTo)
   const matrixWeeks = buildProjectWeeksBetween(dateFrom, dateTo)
@@ -1338,6 +1335,7 @@ const buildSummary = (
         reports: 0,
         hh: 0,
         hhExtras: 0,
+        dailyReportHh: 0,
         byDate: {},
         byWeek: {},
         people: new Set<string>(),
@@ -1357,6 +1355,36 @@ const buildSummary = (
     })
 
     dayMap.set(date, day)
+  })
+
+  getLatestDailyReports(dailyReports).forEach((report: any, reportIdx: number) => {
+    const date = String(report?.report_date || '').slice(0, 10)
+    if (!date) return
+
+    getDailyReportDirectSnapshotRows(report).forEach((row: any) => {
+      const specialty = normalizeLabel(row?.specialty || 'PERSONAL DIRECTO')
+      const position = normalizeLabel(row?.position || 'SIN CARGO')
+      const front = normalizeDailyReportFrontForManagement(row?.frontLabel || row?.frontKey)
+      if (!front) return
+      const key = `${specialty}__${position}__${front}`
+      const matrixRow = rowsByMatrixKey.get(key) || {
+        key,
+        specialty,
+        position,
+        front,
+        peopleRows: 0,
+        reports: 0,
+        hh: 0,
+        hhExtras: 0,
+        dailyReportHh: 0,
+        byDate: {},
+        byWeek: {},
+        people: new Set<string>(),
+        reportSet: new Set<string>(),
+      }
+      matrixRow.dailyReportHh += Number(row?.hh || 0)
+      rowsByMatrixKey.set(key, matrixRow)
+    })
   })
 
   const dashboardByDay = Array.from(dayMap.values()).map((day) => {
@@ -1525,7 +1553,7 @@ export async function GET(request: NextRequest) {
     const dailyReports = await fetchDailyReportsForRange(companyId, dateFrom, dateTo)
     const dailyReportDirectSnapshots = buildDailyReportDirectSnapshotMaps(dailyReports)
     const dailyReportWeeklySummary = buildDailyReportWeeklySummary(dailyReports)
-    return NextResponse.json(buildSummary(enrichedReports, dateFrom, dateTo, indirectTurnoByDateAndPosition, dailyReportDirectSnapshots, dailyReportWeeklySummary))
+    return NextResponse.json(buildSummary(enrichedReports, dateFrom, dateTo, indirectTurnoByDateAndPosition, dailyReportDirectSnapshots, dailyReportWeeklySummary, dailyReports))
   } catch (err: any) {
     console.error('Error GET /api/management/hh-summary', err)
     return NextResponse.json({ error: err?.message || 'Unexpected server error' }, { status: 500 })
