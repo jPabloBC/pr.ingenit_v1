@@ -20,13 +20,13 @@
 }
 
 .transmittal-sheet {
-  width: min(100%, 940px);
+  width: min(100%, 1180px);
   min-height: 0;
   margin: 0 auto;
   font-family: 'Bookman Old Style Local', 'Bookman Old Style', Bookman, serif;
   font-size: 10.5px;
   line-height: 1.2;
-  color: #062d6b;
+  color: #06306b;
   box-sizing: border-box;
 }
 
@@ -47,6 +47,17 @@
 @media print {
   @page { size: letter landscape; margin: 14mm 18mm; }
   .transmittal-sheet { width: 100%; min-height: 0; }
+  body.transmittal-printing * { visibility: hidden !important; }
+  body.transmittal-printing #transmittal-print,
+  body.transmittal-printing #transmittal-print * { visibility: visible !important; }
+  body.transmittal-printing #transmittal-print {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
 }
 
 /* Estilos básicos para banderas */

@@ -486,6 +486,7 @@ type ManagementEquipmentRow = {
   in_maintenance: boolean;
   in_accreditation: boolean;
   in_breakdown: boolean;
+  return_date?: string | null;
   mileage_km?: number | null;
   notes?: string | null;
 };
@@ -1643,6 +1644,7 @@ export default function ManagementPage() {
     in_maintenance: false,
     in_accreditation: false,
     in_breakdown: false,
+    return_date: null,
     mileage_km: null,
     notes: '',
   });
@@ -1669,6 +1671,7 @@ export default function ManagementPage() {
         in_maintenance: Boolean(row?.in_maintenance),
         in_accreditation: Boolean(row?.in_accreditation),
         in_breakdown: Boolean(row?.in_breakdown),
+        return_date: String(row?.return_date || '').slice(0, 10) || null,
         mileage_km: row?.mileage_km === null || row?.mileage_km === undefined || String(row?.mileage_km).trim() === '' ? null : Number(row?.mileage_km || 0),
         notes: String(row?.notes || ''),
       };
@@ -1708,6 +1711,7 @@ export default function ManagementPage() {
       in_maintenance: Boolean(row.in_maintenance),
       in_accreditation: Boolean(row.in_accreditation),
       in_breakdown: Boolean(row.in_breakdown),
+      return_date: String(row.return_date || '').slice(0, 10) || null,
       mileage_km:
         row.mileage_km === null || row.mileage_km === undefined || String(row.mileage_km).trim() === ''
           ? null
@@ -3529,6 +3533,7 @@ export default function ManagementPage() {
           in_maintenance: Boolean(row.in_maintenance),
           in_accreditation: Boolean(row.in_accreditation),
           in_breakdown: Boolean(row.in_breakdown),
+          return_date: String(row.return_date || '').slice(0, 10) || null,
           mileage_km: row.mileage_km === null || row.mileage_km === undefined || String(row.mileage_km).trim() === '' ? null : toNumber(row.mileage_km || 0),
           notes: String(row.notes || '').trim() || null,
         }))
@@ -3614,11 +3619,12 @@ export default function ManagementPage() {
       Boolean(equipmentDraft.in_maintenance),
       Boolean(equipmentDraft.in_accreditation),
       Boolean(equipmentDraft.in_breakdown),
+      Boolean(equipmentDraft.return_date),
     ].filter(Boolean).length;
     if (!equipmentDraft.is_operational) {
       if (nonOperationalSelectedCount !== 1) {
         setNotice({
-          message: 'Si el equipo no está operativa, debes seleccionar solo un estado: Mantención, Acreditación o Panne.',
+          message: 'Si el equipo no está operativa, debes seleccionar solo un estado: Mantención, Acreditación, Panne o Devolución / Término.',
           severity: 'error',
         });
         return;
@@ -6907,6 +6913,7 @@ export default function ManagementPage() {
                                 ['Canaletas', row.canaletas_qty === null || row.canaletas_qty === undefined ? '-' : String(row.canaletas_qty)],
                                 ['Piscinas', row.piscinas_qty === null || row.piscinas_qty === undefined ? '-' : String(row.piscinas_qty)],
                                 ['Kilometraje', row.mileage_km === null || row.mileage_km === undefined ? '-' : String(row.mileage_km)],
+                                ['Devolución / término', formatSpanishShortDate(String(row.return_date || '').slice(0, 10)) || '-'],
                               ];
 
                               return (
@@ -6950,7 +6957,7 @@ export default function ManagementPage() {
                                     <Box
                                       sx={{
                                         display: 'grid',
-                                        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
+                                        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, minmax(0, 1fr))' },
                                         gap: 0.6,
                                       }}
                                     >
@@ -7052,7 +7059,7 @@ export default function ManagementPage() {
                             <Table
                               size="small"
                               sx={{
-                                minWidth: { sm: 940, md: 1040, lg: 1160 },
+                                minWidth: { sm: 1040, md: 1140, lg: 1260 },
                                 '& .MuiTableCell-root': {
                                   px: { sm: 0.7, md: 0.9, lg: 1 },
                                   py: { sm: 0.45, md: 0.6 },
@@ -7069,6 +7076,7 @@ export default function ManagementPage() {
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Mantención</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Acreditación</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Panne</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Devolución / Término</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Cantidad</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">CANALETAS</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">PISCINAS</TableCell>
@@ -7080,7 +7088,7 @@ export default function ManagementPage() {
                               <TableBody>
                                 {indexedRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={12} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
+                                    <TableCell colSpan={13} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
                                       Sin equipos cargados para este tipo.
                                     </TableCell>
                                   </TableRow>
@@ -7106,6 +7114,7 @@ export default function ManagementPage() {
                                     <TableCell align="center">
                                       <EquipmentStateBadge active={Boolean(row.in_breakdown)} label="Panne" activeColor={colors.blue12} />
                                     </TableCell>
+                                    <TableCell align="center">{formatSpanishShortDate(String(row.return_date || '').slice(0, 10)) || '-'}</TableCell>
                                     <TableCell align="center">{row.quantity === null || row.quantity === undefined ? '1' : String(row.quantity)}</TableCell>
                                     <TableCell align="center">{row.canaletas_qty === null || row.canaletas_qty === undefined ? '-' : String(row.canaletas_qty)}</TableCell>
                                     <TableCell align="center">{row.piscinas_qty === null || row.piscinas_qty === undefined ? '-' : String(row.piscinas_qty)}</TableCell>
@@ -8899,6 +8908,7 @@ export default function ManagementPage() {
                       in_maintenance: e.target.checked ? false : (prev.in_maintenance || (!prev.in_accreditation && !prev.in_breakdown)),
                       in_accreditation: e.target.checked ? false : prev.in_accreditation,
                       in_breakdown: e.target.checked ? false : prev.in_breakdown,
+                      return_date: e.target.checked ? null : prev.return_date,
                     } : prev)}
                   />
                 }
@@ -8981,6 +8991,21 @@ export default function ManagementPage() {
               inputProps={{ step: '1', min: '0' }}
               value={equipmentDraft?.mileage_km === null || equipmentDraft?.mileage_km === undefined ? '' : String(equipmentDraft?.mileage_km)}
               onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, mileage_km: String(e.target.value).trim() === '' ? null : toNumber(e.target.value || 0) } : prev)}
+            />
+            <TextField
+              label="Devolución / Término"
+              size="small"
+              type="date"
+              fullWidth
+              value={String(equipmentDraft?.return_date || '').slice(0, 10)}
+              onChange={(e) => setEquipmentDraft((prev) => {
+                if (!prev) return prev
+                const returnDate = String(e.target.value || '').slice(0, 10) || null
+                return returnDate
+                  ? { ...prev, return_date: returnDate, is_operational: false, in_maintenance: false, in_accreditation: false, in_breakdown: false }
+                  : { ...prev, return_date: null }
+              })}
+              InputLabelProps={{ shrink: true }}
             />
             <TextField
               label="Notas"
