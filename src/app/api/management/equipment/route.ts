@@ -145,7 +145,7 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await supabaseAdmin
       .from(TABLE_NAME)
-      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at, created_by, updated_by')
+      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, return_date, mileage_km, notes, created_at, updated_at, created_by, updated_by')
       .eq('company_id', companyId)
       .eq('report_date', date)
       .order('equipment_kind', { ascending: true })
@@ -193,13 +193,19 @@ export async function POST(req: NextRequest) {
         in_maintenance: toBool(row?.in_maintenance),
         in_accreditation: toBool(row?.in_accreditation),
         in_breakdown: toBool(row?.in_breakdown),
+        return_date: String(row?.return_date || '').slice(0, 10) || null,
         mileage_km: row?.mileage_km === null || row?.mileage_km === undefined || String(row?.mileage_km).trim() === '' ? null : toNum(row?.mileage_km),
         notes: String(row?.notes || '').trim() || null,
         updated_by: String(session?.user?.email || session?.user?.id || '') || null,
       }))
       .filter((row: any) => row.equipment_name)
       .map((row: any) => {
-        if (row.is_operational) {
+        if (row.return_date) {
+          row.is_operational = false
+          row.in_maintenance = false
+          row.in_accreditation = false
+          row.in_breakdown = false
+        } else if (row.is_operational) {
           row.in_maintenance = false
           row.in_accreditation = false
           row.in_breakdown = false
@@ -244,7 +250,7 @@ export async function POST(req: NextRequest) {
 
     const { data, error } = await supabaseAdmin
       .from(TABLE_NAME)
-      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, mileage_km, notes, created_at, updated_at, created_by, updated_by')
+      .select('id, company_id, report_date, equipment_kind, equipment_name, patent, quantity, canaletas_qty, piscinas_qty, is_operational, in_maintenance, in_accreditation, in_breakdown, return_date, mileage_km, notes, created_at, updated_at, created_by, updated_by')
       .eq('company_id', companyId)
       .eq('report_date', date)
       .order('equipment_kind', { ascending: true })
