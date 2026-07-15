@@ -14,6 +14,7 @@ import {
   Select,
   Snackbar,
   Stack,
+  TextField,
   Typography
 } from '@mui/material'
 import { Image as ImageIcon, RefreshCw, Star, Trash2, Upload } from 'lucide-react'
@@ -48,6 +49,7 @@ const ASSET_TYPES = [
   { value: 'field_report_logo', label: 'Reporte terreno' },
   { value: 'daily_report_logo', label: 'Reporte diario' },
   { value: 'attendance_logo', label: 'Asistencia' },
+  { value: 'transmittal_logo', label: 'Transmittal' },
   { value: 'presentation_logo', label: 'Presentaciones' },
   { value: 'report_logo', label: 'Reportes general' },
   { value: 'cover_background', label: 'Fondos' }
@@ -88,6 +90,11 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [uploadingKey, setUploadingKey] = useState('')
   const [selectedContextByType, setSelectedContextByType] = useState<Record<string, string>>({})
+  const [transmittalReuseAssetId, setTransmittalReuseAssetId] = useState('')
+  const [transmittalProjectName, setTransmittalProjectName] = useState('')
+  const [transmittalContractNumber, setTransmittalContractNumber] = useState('')
+  const [transmittalNextRegisterNumber, setTransmittalNextRegisterNumber] = useState('1')
+  const [savingTransmittalSettings, setSavingTransmittalSettings] = useState(false)
   const [snackbar, setSnackbar] = useState<SnackbarState>({ open: false, message: '', severity: 'info' })
   const fileInputsRef = useRef<Record<string, HTMLInputElement | null>>({})
 
@@ -115,6 +122,38 @@ export default function SettingsPage() {
   useEffect(() => {
     void loadAssets()
   }, [])
+
+  useEffect(() => {
+    fetch('/api/transmittal-settings', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        setTransmittalProjectName(String(data?.project_name || ''))
+        setTransmittalContractNumber(String(data?.contract_number || ''))
+        setTransmittalNextRegisterNumber(String(data?.next_register_number || 1))
+      })
+      .catch(() => undefined)
+  }, [])
+
+  const saveTransmittalSettings = async () => {
+    try {
+      setSavingTransmittalSettings(true)
+      const res = await fetch('/api/transmittal-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName: transmittalProjectName, contractNumber: transmittalContractNumber, nextRegisterNumber: transmittalNextRegisterNumber })
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json?.error || 'No se pudo guardar la configuración')
+      setTransmittalProjectName(String(json?.project_name || ''))
+      setTransmittalContractNumber(String(json?.contract_number || ''))
+      setTransmittalNextRegisterNumber(String(json?.next_register_number || 1))
+      showSnackbar('Configuración de Transmittal guardada', 'success')
+    } catch (error) {
+      showSnackbar(String((error as Error)?.message || error), 'error')
+    } finally {
+      setSavingTransmittalSettings(false)
+    }
+  }
 
   const assetsByType = useMemo(() => {
     const map = new Map<string, CompanyAsset[]>()
@@ -191,7 +230,7 @@ export default function SettingsPage() {
     await uploadAsset(assetType, file)
   }
 
-  const patchAsset = async (id: string, action: 'set_default' | 'deactivate') => {
+  const patchAsset = async (id: string, action: 'set_default' | 'deactivate' | 'assign_transmittal') => {
     try {
       const res = await fetch('/api/company-assets', {
         method: 'PATCH',
@@ -200,7 +239,7 @@ export default function SettingsPage() {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json?.error || 'No se pudo actualizar la imagen')
-      showSnackbar(action === 'set_default' ? 'Predeterminado actualizado' : 'Imagen desactivada', 'success')
+      showSnackbar(action === 'set_default' ? 'Predeterminado actualizado' : action === 'assign_transmittal' ? 'Imagen asignada a Transmittal' : 'Imagen desactivada', 'success')
       await loadAssets()
     } catch (error) {
       showSnackbar(String((error as Error)?.message || error), 'error')
@@ -233,6 +272,22 @@ export default function SettingsPage() {
             >
               Actualizar
             </Button>
+          </Stack>
+        </Paper>
+
+        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 }, mb: 3 }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
+            <Box>
+              <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 800 }}>Transmittal</Typography>
+              <Typography sx={{ color: colors.blue7, fontSize: 14 }}>Datos fijos que se imprimen en el registro de entrega de documentos.</Typography>
+            </Box>
+            {!canManage ? <Chip label="Solo lectura" size="small" /> : null}
+          </Stack>
+          <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5} alignItems={{ xs: 'stretch', md: 'center' }}>
+            <TextField label="Proyecto" value={transmittalProjectName} onChange={(event) => setTransmittalProjectName(event.target.value)} fullWidth disabled={!canManage} />
+            <TextField label="N° contrato" value={transmittalContractNumber} onChange={(event) => setTransmittalContractNumber(event.target.value)} fullWidth disabled={!canManage} />
+            <TextField label="Próximo N° registro" type="number" value={transmittalNextRegisterNumber} onChange={(event) => setTransmittalNextRegisterNumber(event.target.value)} inputProps={{ min: 1 }} sx={{ minWidth: { md: 180 } }} disabled={!canManage} />
+            {canManage ? <Button variant="contained" onClick={() => void saveTransmittalSettings()} disabled={savingTransmittalSettings} sx={{ minWidth: 120 }}>{savingTransmittalSettings ? 'Guardando...' : 'Guardar'}</Button> : null}
           </Stack>
         </Paper>
 
@@ -280,6 +335,16 @@ export default function SettingsPage() {
                           </Typography>
                         </Box>
                       </Stack>
+
+                      {assetType.value === 'transmittal_logo' && canManage ? (
+                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ mb: 1.5 }}>
+                          <Select size="small" displayEmpty value={transmittalReuseAssetId} onChange={(event) => setTransmittalReuseAssetId(String(event.target.value))} sx={{ minWidth: 280 }}>
+                            <MenuItem value="">Reutilizar imagen ya subida</MenuItem>
+                            {assets.filter((asset) => asset.asset_type !== 'transmittal_logo').map((asset) => <MenuItem key={asset.id} value={asset.id}>{asset.name} ({asset.asset_type})</MenuItem>)}
+                          </Select>
+                          <Button variant="outlined" disabled={!transmittalReuseAssetId} onClick={async () => { await patchAsset(transmittalReuseAssetId, 'assign_transmittal'); setTransmittalReuseAssetId('') }}>Usar en Transmittal</Button>
+                        </Stack>
+                      ) : null}
 
                       {canManage ? (
                         <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>

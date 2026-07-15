@@ -17,10 +17,11 @@ import {
 import {
   People,
   AccessTime,
-  Security,
+  Hotel,
+  MoreHoriz,
+  PersonOff,
   QueryStats,
-  WarningAmber,
-  Payments
+  WarningAmber
 } from '@mui/icons-material'
 import {
   Area,
@@ -40,13 +41,15 @@ import {
 import UserHeader from '../../../components/layout/UserHeader';
 import { colors } from '../../../theme/theme'
 
+const DASHBOARD_DATA_VERSION = 'status-cards-v2'
+
 interface DashboardStats {
   totalCollaborators: number
   activeCollaborators: number
   presentToday: number
-  absentToday: number
-  expiredEPP: number
-  pendingPayroll: number
+  restToday: number
+  otherToday: number
+  finiquitados: number
   specialtyBreakdown?: { specialty: string; total: number; active: number }[]
 }
 
@@ -132,7 +135,7 @@ export default function Dashboard() {
       return
     }
 
-    const loadKey = `${companyId || 'dev'}:${role}`
+    const loadKey = `${DASHBOARD_DATA_VERSION}:${companyId || 'dev'}:${role}`
 
     if (dashboardLoadedRef.current === loadKey) return
     dashboardLoadedRef.current = loadKey
@@ -254,14 +257,14 @@ export default function Dashboard() {
   const totalCollaborators = Number(stats?.totalCollaborators || 0)
   const activeCollaborators = Number(stats?.activeCollaborators || 0)
   const presentToday = Number(stats?.presentToday || 0)
-  const absentToday = Number(stats?.absentToday || 0)
-  const expiredEPP = Number(stats?.expiredEPP || 0)
-  const pendingPayroll = Number(stats?.pendingPayroll || 0)
+  const restToday = Number(stats?.restToday || 0)
+  const otherToday = Number(stats?.otherToday || 0)
+  const finiquitados = Number(stats?.finiquitados || 0)
   const activeRate = totalCollaborators > 0 ? (activeCollaborators / totalCollaborators) * 100 : 0
   const attendanceRate = activeCollaborators > 0 ? (presentToday / activeCollaborators) * 100 : 0
-  const absenceRate = activeCollaborators > 0 ? (absentToday / activeCollaborators) * 100 : 0
-  const eppRiskRate = activeCollaborators > 0 ? (expiredEPP / activeCollaborators) * 100 : 0
-  const payrollRiskRate = activeCollaborators > 0 ? (pendingPayroll / activeCollaborators) * 100 : 0
+  const restRate = activeCollaborators > 0 ? (restToday / activeCollaborators) * 100 : 0
+  const otherRate = activeCollaborators > 0 ? (otherToday / activeCollaborators) * 100 : 0
+  const finiquitadosRate = totalCollaborators > 0 ? (finiquitados / totalCollaborators) * 100 : 0
 
   const statsCards = [
     {
@@ -292,31 +295,31 @@ export default function Dashboard() {
       progress: attendanceRate
     },
     {
-      title: 'Ausentes Hoy',
-      value: absentToday,
-      icon: <AccessTime />,
-      color: '#d32f2f',
-      bg: '#fff1f1',
-      helper: `${formatDecimal(absenceRate)}% de activos`,
-      progress: absenceRate
+      title: 'Descanso Hoy',
+      value: restToday,
+      icon: <Hotel />,
+      color: '#795548',
+      bg: '#f8f4f1',
+      helper: `${formatDecimal(restRate)}% de activos`,
+      progress: restRate
     },
     {
-      title: 'EPP Vencidos',
-      value: expiredEPP,
-      icon: <Security />,
-      color: '#d99a00',
-      bg: '#fff8e6',
-      helper: expiredEPP > 0 ? `${formatDecimal(eppRiskRate)}% con riesgo` : 'Sin vencidos',
-      progress: eppRiskRate
+      title: 'Otros Hoy',
+      value: otherToday,
+      icon: <MoreHoriz />,
+      color: '#b26a00',
+      bg: '#fff7e8',
+      helper: `${formatDecimal(otherRate)}% de activos`,
+      progress: otherRate
     },
     {
-      title: 'Nóminas Pendientes',
-      value: pendingPayroll,
-      icon: <Payments />,
-      color: '#0b73d9',
-      bg: '#eef6ff',
-      helper: pendingPayroll > 0 ? `${formatDecimal(payrollRiskRate)}% del equipo` : 'Sin pendientes',
-      progress: payrollRiskRate
+      title: 'Finiquitados',
+      value: finiquitados,
+      icon: <PersonOff />,
+      color: '#6d7480',
+      bg: '#f3f5f7',
+      helper: `${formatDecimal(finiquitadosRate)}% del total`,
+      progress: finiquitadosRate
     }
   ]
 
