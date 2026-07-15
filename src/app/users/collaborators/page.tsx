@@ -2343,7 +2343,7 @@ export default function CollaboratorsPage() {
     {
       key: 'new_collaborators',
       title: 'Nuevos colaboradores',
-      detail: 'Importa trabajadores no existentes.',
+      detail: 'Importa trabajadores nuevos y actualiza la asistencia de los existentes.',
     },
   ]
   const importActionOptions = allImportActionOptions.filter((option) =>
@@ -2448,7 +2448,7 @@ export default function CollaboratorsPage() {
     if (importPrimaryAction === 'new_collaborators') {
       if (missingRequiredFieldsFull.length > 0) return 'Mapea los campos requeridos para importar nuevos colaboradores.'
       if (newCollaboratorImportPreview.canPreview) {
-        return `Se crearán ${newCollaboratorImportPreview.created} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'} colaborador${newCollaboratorImportPreview.created === 1 ? '' : 'es'}${excelIncludesToday ? ` con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : ''} y se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}.`
+        return `Se crearán ${newCollaboratorImportPreview.created} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'} colaborador${newCollaboratorImportPreview.created === 1 ? '' : 'es'}${excelIncludesToday ? ` y se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}` : `. Los ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} no tendrán cambios de asistencia`}.`
       }
       return 'Se importarán solo colaboradores no existentes en el archivo.'
     }
@@ -3995,9 +3995,11 @@ export default function CollaboratorsPage() {
                       <Alert severity="info" sx={{ mb: 1.5 }}>
                         {newCollaboratorImportPreview.canPreview
                           ? newCollaboratorImportPreview.created > 0
-                            ? `Se crearán ${newCollaboratorImportPreview.created} trabajador${newCollaboratorImportPreview.created === 1 ? '' : 'es'} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'}${excelIncludesToday ? ` con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : '. El Excel no contiene asistencia de hoy'} y se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
-                            : `No se encontraron trabajadores nuevos. Se omitirán ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
-                          : `Se crearán solo trabajadores no existentes según el Documento${excelIncludesToday ? `, con asistencia del ${formatIsoDateToDisplay(todayIsoDate)}` : ''}. Los colaboradores ya existentes se omiten.`}
+                            ? `Se crearán ${newCollaboratorImportPreview.created} trabajador${newCollaboratorImportPreview.created === 1 ? '' : 'es'} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'}${excelIncludesToday ? ` y se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}` : '. El Excel no contiene asistencia de hoy'} según el Documento.`
+                            : excelIncludesToday
+                              ? `No se encontraron trabajadores nuevos. Se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
+                              : `No se encontraron trabajadores nuevos. El Excel no contiene asistencia de hoy para actualizar a los ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}.`
+                          : `Se crearán trabajadores no existentes según el Documento${excelIncludesToday ? ` y se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para los existentes` : ''}.`}
                       </Alert>
                     ) : isAttendanceOperation ? null : importOperation === 'full_overwrite_all' ? (
                       <Alert severity="warning" sx={{ mb: 1.5 }}>
@@ -4712,7 +4714,7 @@ export default function CollaboratorsPage() {
                           updateDefaults: false,
                           attendanceOnly: false,
                           profileOnly: false,
-                          allowAttendanceForSkippedDuplicates: false,
+                          allowAttendanceForSkippedDuplicates: true,
                           attendanceWriteMode: 'upsert',
                           attendanceExactDate: excelIncludesToday ? todayIsoDate : undefined,
                         })
@@ -4796,7 +4798,7 @@ export default function CollaboratorsPage() {
                         targetDocuments: attendanceTargetDocuments,
                       })
                     }}
-                    disabled={importing || importParsing || !canExecuteImportByMode || (importPrimaryAction === 'new_collaborators' && newCollaboratorImportPreview.canPreview && newCollaboratorImportPreview.created === 0) || (importPrimaryAction !== 'new_collaborators' && isAttendanceOperation && !needsImportMappingReview && importCandidateDates.length === 0)}
+                    disabled={importing || importParsing || !canExecuteImportByMode || (importPrimaryAction !== 'new_collaborators' && isAttendanceOperation && !needsImportMappingReview && importCandidateDates.length === 0)}
                   >
                     Ejecutar
                   </Button>

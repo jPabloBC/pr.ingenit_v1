@@ -42,7 +42,8 @@ const loadNotificationRecipients = async ({
     .filter(Boolean)
 
   if (!projectId || regularIds.length === 0) {
-    return Array.from(new Set([...adminIds, ...regularIds, senderUserId || ''].filter(Boolean)))
+    return Array.from(new Set([...adminIds, ...regularIds].filter(Boolean)))
+      .filter((userId) => userId !== senderUserId)
   }
 
   const { data: assignments, error: assignmentError } = await supabaseAdmin
@@ -58,8 +59,8 @@ const loadNotificationRecipients = async ({
   return Array.from(new Set([
     ...adminIds,
     ...regularIds.filter((id) => assigned.has(id)),
-    senderUserId || '',
   ].filter(Boolean)))
+    .filter((userId) => userId !== senderUserId)
 }
 
 export const createCollaboratorsImportNotification = async ({

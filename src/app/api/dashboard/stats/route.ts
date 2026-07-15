@@ -94,13 +94,14 @@ export async function GET() {
 
     // Obtener asistencia de hoy (filtrada por colaboradores permitidos)
     const today = getTodayInChile()
-    const collaboratorIds = (collaborators || []).map((c: any) => c.id).filter(Boolean)
     const activeCollaboratorIds = (collaborators || [])
       .filter((c: any) => c.is_active === true)
       .map((c: any) => c.id)
       .filter(Boolean)
 
     let presentToday = 0
+    let restToday = 0
+    let otherToday = 0
     if (activeCollaboratorIds.length > 0) {
       let dailyStatusQuery = supabaseAdmin
         .from('pr_collaborator_daily_status')
@@ -115,7 +116,13 @@ export async function GET() {
       const { data: dailyStatusRows, error: dailyStatusError } = await dailyStatusQuery
 
       if (!dailyStatusError) {
-        presentToday = (dailyStatusRows || []).filter(isPresentDailyStatus).length
+        const dailyRows = dailyStatusRows || []
+        presentToday = dailyRows.filter(isPresentDailyStatus).length
+        restToday = dailyRows.filter((row: any) => normalizeText(row?.status) === 'descanso').length
+        otherToday = dailyRows.filter((row: any) => {
+          const status = normalizeText(row?.status)
+          return Boolean(status) && status !== 'descanso' && !isPresentDailyStatus(row)
+        }).length
       } else {
         const { data: attendance } = await supabaseAdmin
           .from('pr_attendance')
@@ -130,58 +137,15 @@ export async function GET() {
       }
     }
 
-    const absentToday = Math.max(0, activeCollaborators - presentToday)
-
-    // Obtener EPP vencidos
-    // Para filtrar por specialty, necesitamos ver EPP asignados a colaboradores filtrados
-    let expiredEPP = 0
-
-    if (collaboratorIds.length > 0) {
-      try {
-        // Intentar obtener EPP asignados a estos colaboradores
-        const { data: eppAssignments, error: eppAssignError } = await supabaseAdmin
-          .from('pr_epp_assignments')
-          .select('epp_id')
-          .in('collaborator_id', collaboratorIds)
-          .eq('status', 'active')
-
-        if (!eppAssignError && eppAssignments && eppAssignments.length > 0) {
-          const eppIds = eppAssignments.map((a: any) => a.epp_id).filter(Boolean)
-
-          const { data: epp, error: eppError } = await supabaseAdmin
-            .from('pr_epp')
-            .select('id, expiry_date')
-            .in('id', eppIds)
-            .lt('expiry_date', new Date().toISOString())
-
-          if (!eppError) {
-            expiredEPP = epp?.length || 0
-          }
-        }
-      } catch {
-        // ignore EPP errors
-      }
-    }
-
-    // Obtener nóminas pendientes (simulado por ahora)
-    let payrollQuery = supabaseAdmin
-      .from('pr_payroll')
-      .select('id, status')
-      .eq('status', 'pending')
-    if (companyId) {
-      payrollQuery = payrollQuery.eq('company_id', companyId)
-    }
-    const { data: payroll } = await payrollQuery
-
-    const pendingPayroll = payroll?.length || 0
+    const finiquitados = (collaborators || []).filter((collaborator: any) => collaborator.is_active === false).length
 
     const stats: any = {
       totalCollaborators,
       activeCollaborators,
       presentToday,
-      absentToday,
-      expiredEPP,
-      pendingPayroll
+      restToday,
+      otherToday,
+      finiquitados
     }
 
     // Incluir desglose por disciplina solo para admin

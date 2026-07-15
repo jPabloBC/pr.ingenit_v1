@@ -3,6 +3,52 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Bookman Old Style Local';
+  src: url('/fonts/Bookman%20Old%20Style/Bookman%20Old%20Style%20Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Bookman Old Style Local';
+  src: url('/fonts/Bookman%20Old%20Style/Bookman%20Old%20Style%20Bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+.transmittal-sheet {
+  width: min(100%, 940px);
+  min-height: 0;
+  margin: 0 auto;
+  font-family: 'Bookman Old Style Local', 'Bookman Old Style', Bookman, serif;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: #062d6b;
+  box-sizing: border-box;
+}
+
+.transmittal-sheet .MuiTypography-root,
+.transmittal-sheet .MuiTableCell-root,
+.transmittal-sheet .MuiInputBase-input,
+.transmittal-sheet .MuiInputLabel-root {
+  font-family: 'Bookman Old Style Local', 'Bookman Old Style', Bookman, serif !important;
+  font-size: 10.5px !important;
+  line-height: 1.2 !important;
+}
+
+.transmittal-sheet .transmittal-document-title {
+  font-size: 14px !important;
+  line-height: 1.15 !important;
+}
+
+@media print {
+  @page { size: letter landscape; margin: 14mm 18mm; }
+  .transmittal-sheet { width: 100%; min-height: 0; }
+}
+
 /* Estilos básicos para banderas */
 .flag {
   font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji', sans-serif;

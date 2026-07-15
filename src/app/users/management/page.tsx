@@ -80,6 +80,7 @@ import UserHeader from '@/components/layout/UserHeader';
 import ConfirmActionDialog from '@/components/ui/ConfirmActionDialog';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
+import TransmittalPanel from './TransmittalPanel';
 
 type FieldReportRecord = Record<string, any>;
 
@@ -1504,9 +1505,9 @@ export default function ManagementPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const MANAGEMENT_TAB_STORAGE_KEY = 'management_active_tab_v1';
-  const isManagementTab = (value: string): value is 'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts' =>
-    ['hh', 'hh-history', 'crew-personnel', 'activities', 'interferences', 'photo-report', 'equipment', 'report-fronts'].includes(value);
-  const [activeTab, setActiveTab] = useState<'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts'>(() => {
+  const isManagementTab = (value: string): value is 'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts' | 'transmittal' =>
+    ['hh', 'hh-history', 'crew-personnel', 'activities', 'interferences', 'photo-report', 'equipment', 'report-fronts', 'transmittal'].includes(value);
+  const [activeTab, setActiveTab] = useState<'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts' | 'transmittal'>(() => {
     if (typeof window === 'undefined') return 'hh';
     const saved = String(window.localStorage.getItem(MANAGEMENT_TAB_STORAGE_KEY) || '').trim();
     return isManagementTab(saved) ? saved : 'hh';
@@ -4989,11 +4990,14 @@ export default function ManagementPage() {
               <Tab label="Interferencias" value="interferences" />
               <Tab label="Maquinaria / Equipos" value="equipment" />
               <Tab label="Frentes / UDR" value="report-fronts" />
+              <Tab label="Transmittal" value="transmittal" />
               <Tab label="Informe Fotográfico" value="photo-report" />
             </Tabs>
 
             <Box sx={{ px: { xs: 0.1, md: 0.1 }, pb: { xs: 0.75, md: 1 }, pt: { xs: 5.7, md: 6.1 } }}>
-              {activeTab === 'hh' ? (
+              {activeTab === 'transmittal' ? (
+                <TransmittalPanel />
+              ) : activeTab === 'hh' ? (
               <>
               <Paper
                 variant="outlined"
@@ -6745,7 +6749,7 @@ export default function ManagementPage() {
                   </Stack>
                 </Paper>
               ) : activeTab === 'equipment' ? (
-                <Box sx={{ position: 'relative', minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+                <Box sx={{ position: 'relative', minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden', pt: { xs: 1, md: 1.25 } }}>
                   <Stack spacing={0.75} sx={{ width: '100%' }}>
                     <Stack
                       direction={{ xs: 'column', md: 'row' }}
@@ -6872,7 +6876,7 @@ export default function ManagementPage() {
                           </Typography>
                           <Box
                             sx={{
-                              display: { xs: 'grid', xl: 'none' },
+                              display: { xs: 'grid', sm: 'none' },
                               gap: 1,
                               width: '100%',
                               minWidth: 0,
@@ -7044,8 +7048,19 @@ export default function ManagementPage() {
                             })}
                           </Box>
 
-                          <TableContainer sx={{ display: { xs: 'none', xl: 'block' }, width: '100%', border: `1px solid ${colors.gray200}`, borderRadius: 1, backgroundColor: colors.white }}>
-                            <Table size="small" sx={{ minWidth: 1160 }}>
+                          <TableContainer sx={{ display: { xs: 'none', sm: 'block' }, width: '100%', overflowX: 'auto', border: `1px solid ${colors.gray200}`, borderRadius: 1, backgroundColor: colors.white }}>
+                            <Table
+                              size="small"
+                              sx={{
+                                minWidth: { sm: 940, md: 1040, lg: 1160 },
+                                '& .MuiTableCell-root': {
+                                  px: { sm: 0.7, md: 0.9, lg: 1 },
+                                  py: { sm: 0.45, md: 0.6 },
+                                  fontSize: { sm: 11, md: 12 },
+                                  whiteSpace: 'nowrap',
+                                },
+                              }}
+                            >
                               <TableHead>
                                 <TableRow>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Nombre (máquina/equipo)</TableCell>

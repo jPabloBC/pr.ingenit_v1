@@ -204,6 +204,18 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ asset: data })
     }
 
+    if (action === 'assign_transmittal') {
+      const { data, error } = await supabaseAdmin
+        .from('pr_company_assets')
+        .update({ usage_context: 'transmittal', updated_by: session.user.id || null, updated_at: new Date().toISOString() })
+        .eq('company_id', companyId)
+        .eq('id', id)
+        .select('id')
+        .single()
+      if (error) return NextResponse.json({ error: 'Error al asignar imagen a Transmittal' }, { status: 500 })
+      return NextResponse.json({ asset: data })
+    }
+
     return NextResponse.json({ error: 'action invalida' }, { status: 400 })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
