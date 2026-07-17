@@ -1556,6 +1556,8 @@ type ManagementEquipmentSnapshotRow = {
   in_maintenance?: boolean
   in_accreditation?: boolean
   in_breakdown?: boolean
+  include_in_daily_report?: boolean
+  entry_date?: string | null
   return_date?: string | null
   mileage_km?: number | null
   notes?: string | null
@@ -2577,6 +2579,8 @@ function DetailPersonnelEquipmentV2({
           in_maintenance: Boolean(row?.in_maintenance),
           in_accreditation: Boolean(row?.in_accreditation),
           in_breakdown: Boolean(row?.in_breakdown),
+          include_in_daily_report: row?.include_in_daily_report !== false,
+          entry_date: String(row?.entry_date || "").slice(0, 10) || null,
           return_date: String(row?.return_date || "").slice(0, 10) || null,
           mileage_km: row?.mileage_km === null || row?.mileage_km === undefined || String(row?.mileage_km).trim() === "" ? null : Number(row?.mileage_km || 0),
           notes: String(row?.notes || "").trim() || null,
@@ -3058,8 +3062,13 @@ function DetailPersonnelEquipmentV2({
     const reportDate = String(form.report_date || "").slice(0, 10)
     return Boolean(returnDate && (!reportDate || returnDate <= reportDate))
   }
+  const isNotYetEnteredEquipmentForReport = (row: ManagementEquipmentSnapshotRow) => {
+    const entryDate = String(row.entry_date || "").slice(0, 10)
+    const reportDate = String(form.report_date || "").slice(0, 10)
+    return Boolean(entryDate && reportDate && entryDate > reportDate)
+  }
   const mappedMajorEquipmentRows: MajorEquipmentRow[] = managementEquipmentRows
-    .filter((row) => row.equipment_kind === "MAYOR" && !isReturnedEquipmentForReport(row))
+    .filter((row) => row.equipment_kind === "MAYOR" && row.include_in_daily_report !== false && !isNotYetEnteredEquipmentForReport(row) && !isReturnedEquipmentForReport(row))
     .map((row) => {
       const hasMaintOrAccred = Boolean(row.in_maintenance) || Boolean(row.in_accreditation)
       const operacion = row.is_operational ? 1 : 0
@@ -3231,7 +3240,7 @@ function DetailPersonnelEquipmentV2({
     hmTotal: Number(row?.hmTotal || 0)
   }))
   const mappedMinorEqRows: MinorEquipmentRow[] = managementEquipmentRows
-    .filter((row) => row.equipment_kind === "MENOR" && !isReturnedEquipmentForReport(row))
+    .filter((row) => row.equipment_kind === "MENOR" && row.include_in_daily_report !== false && !isNotYetEnteredEquipmentForReport(row) && !isReturnedEquipmentForReport(row))
     .map((row) => {
       const hasMaintOrAccred = Boolean(row.in_maintenance) || Boolean(row.in_accreditation)
       const operacion = row.is_operational ? 1 : 0

@@ -44,6 +44,9 @@ const isMissingColumnError = (error: any) =>
   String(error?.code || '') === '42703' ||
   String(error?.message || '').toLowerCase().includes('column')
 
+const isUuid = (value: any) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim())
+
 const normalizeYmd = (value: any) => String(value || '').trim().slice(0, 10)
 
 const toChileDateKey = (value: any) => {
@@ -161,47 +164,54 @@ const fetchRoleHistoryByCollaborator = async (
   return byId
 }
 
-const getAuditOwnedCrewIds = async (
+const getAuditCrewCreators = async (
   supabaseAdminClient: any,
-  session: any,
+  companyId: string,
   crewIds: string[]
 ) => {
-  const owned = new Set<string>()
+  const creators = new Map<string, { userId: string; email: string }>()
+  const candidates = new Map<string, { userIds: Set<string>; emails: Set<string> }>()
   const ids = Array.from(new Set((crewIds || []).map((id) => String(id || '').trim()).filter(Boolean)))
-  const userId = String(session?.user?.id || '').trim()
-  const userEmail = normalizeText(String(session?.user?.email || ''))
-  if (!ids.length || (!userId && !userEmail)) return owned
+  if (!companyId || !ids.length) return creators
 
   try {
     for (const chunk of chunkArray(ids, 75)) {
       const { data, error } = await supabaseAdminClient
         .from('pr_platform_audit_logs')
         .select('resource_id, actor_user_id, actor_email')
-        .eq('company_id', session.user.companyId)
+        .eq('company_id', companyId)
         .eq('resource_type', 'crew')
         .eq('action', 'create')
         .in('resource_id', chunk)
 
       if (error) {
-        if (isMissingTableError(error) || isMissingColumnError(error)) return owned
+        if (isMissingTableError(error) || isMissingColumnError(error)) return creators
         continue
       }
 
-      ;(data || []).forEach((row: any) => {
-        const resourceId = String(row?.resource_id || '').trim()
-        if (!resourceId) return
-        const actorUserId = String(row?.actor_user_id || '').trim()
-        const actorEmail = normalizeText(String(row?.actor_email || ''))
-        if ((userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)) {
-          owned.add(resourceId)
-        }
-      })
+      for (const row of data || []) {
+        const crewId = String(row?.resource_id || '').trim()
+        if (!crewId) continue
+        if (!candidates.has(crewId)) candidates.set(crewId, { userIds: new Set(), emails: new Set() })
+        const candidate = candidates.get(crewId)!
+        const userId = String(row?.actor_user_id || '').trim()
+        const email = normalizeText(String(row?.actor_email || ''))
+        if (userId) candidate.userIds.add(userId)
+        if (email) candidate.emails.add(email)
+      }
     }
   } catch {
-    return owned
+    return creators
   }
 
-  return owned
+  candidates.forEach((candidate, crewId) => {
+    if (candidate.userIds.size > 1 || candidate.emails.size > 1) return
+    const userId = Array.from(candidate.userIds)[0] || ''
+    const email = Array.from(candidate.emails)[0] || ''
+    if (userId || email) creators.set(crewId, { userId, email })
+  })
+
+  return creators
 }
 
 const parseCrewIdsFromFieldReport = (value: any) => {
@@ -449,8 +459,20 @@ export async function GET(req: NextRequest) {
 
         const sessionUserId = String(session?.user?.id || '').trim()
         const sessionUserEmail = normalizeText(String(session?.user?.email || ''))
-        const auditOwnedCrewIds = await getAuditOwnedCrewIds(supabaseAdminClient, session, crewIds)
+        const auditCrewCreators = await getAuditCrewCreators(
+          supabaseAdminClient,
+          String(session.user.companyId || ''),
+          crewIds
+        )
         rows.forEach((r: any) => {
+          const auditCreator = auditCrewCreators.get(String(r?.id || ''))
+          const hasCanonicalCreator = Boolean(r?.created_by_user_id || r?.created_by_email)
+          if (auditCreator?.email && !r.created_by_email && !r.owner_email) {
+            r.created_by_audit_email = auditCreator.email
+          }
+          if (auditCreator?.userId && !r.created_by_user_id && !r.created_by && !r.created_by_id) {
+            r.created_by_audit_user_id = auditCreator.userId
+          }
           const creatorCandidates = [
             r?.created_by_user_id,
             r?.created_by,
@@ -465,11 +487,15 @@ export async function GET(req: NextRequest) {
             r?.owner_email,
             r?.email,
           ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
+          const isOwnedByAudit = !hasCanonicalCreator && Boolean(auditCreator && (
+            (sessionUserId && auditCreator.userId === sessionUserId) ||
+            (sessionUserEmail && normalizeText(auditCreator.email) === sessionUserEmail)
+          ))
           r.created_by_current_user = Boolean(
             (sessionUserId && creatorCandidates.some((value) => value === sessionUserId)) ||
             (sessionUserEmail && creatorCandidates.some((value) => normalizeText(value) === sessionUserEmail)) ||
             (sessionUserEmail && creatorEmailCandidates.some((value) => value === sessionUserEmail)) ||
-            auditOwnedCrewIds.has(String(r?.id || ''))
+            isOwnedByAudit
           )
         })
 
@@ -749,13 +775,26 @@ export async function GET(req: NextRequest) {
       ].map((value: any) => normalizeText(String(value || ''))).filter(Boolean)
       return Boolean(sessionUserEmailForOwnership && creatorEmailCandidates.some((value) => value === sessionUserEmailForOwnership))
     }
-    const auditOwnedCrewIds = await getAuditOwnedCrewIds(
+    const crewIdsForCreator = rows.map((row: any) => String(row?.id || '')).filter(Boolean)
+    const auditCrewCreators = await getAuditCrewCreators(
       supabaseAdminClient,
-      session,
-      rows.map((row: any) => String(row?.id || '')).filter(Boolean)
+      String(session.user.companyId || ''),
+      crewIdsForCreator
     )
     rows.forEach((row: any) => {
-      row.created_by_current_user = isCrewOwnedByCurrentUser(row) || auditOwnedCrewIds.has(String(row?.id || ''))
+      const auditCreator = auditCrewCreators.get(String(row?.id || ''))
+      const hasCanonicalCreator = Boolean(row?.created_by_user_id || row?.created_by_email)
+      if (auditCreator?.email && !row.created_by_email && !row.owner_email) {
+        row.created_by_audit_email = auditCreator.email
+      }
+      if (auditCreator?.userId && !row.created_by_user_id && !row.created_by && !row.created_by_id) {
+        row.created_by_audit_user_id = auditCreator.userId
+      }
+      const isOwnedByAudit = !hasCanonicalCreator && Boolean(auditCreator && (
+        (sessionUserIdForOwnership && auditCreator.userId === sessionUserIdForOwnership) ||
+        (sessionUserEmailForOwnership && normalizeText(auditCreator.email) === sessionUserEmailForOwnership)
+      ))
+      row.created_by_current_user = isCrewOwnedByCurrentUser(row) || isOwnedByAudit
     })
 
     // Return all crews for every role (including user). Filtering by crew specialty
@@ -837,7 +876,6 @@ export async function POST(req: NextRequest) {
     const session = (await getServerSession(authOptions as any)) as any
     if (!session?.user?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     const actor = await resolveCurrentActor(session)
-    void actor
     const role = String(session?.user?.role || '').toLowerCase()
     if (role === 'viewer') return NextResponse.json({ error: 'Forbidden: read-only role' }, { status: 403 })
 
@@ -850,11 +888,17 @@ export async function POST(req: NextRequest) {
     // Create crew (only store core fields in pr_crews; members are in pr_crew_members)
     const normalizedName = body?.name ? String(body.name).toLocaleUpperCase('es-CL') : body?.name
     const normalizedSpecialty = body?.specialty ? String(body.specialty).toLocaleUpperCase('es-CL') : body?.specialty
+    const creatorUserId = isUuid(actor?.userId)
+      ? String(actor?.userId)
+      : (isUuid(session?.user?.id) ? String(session.user.id) : null)
+    const creatorEmail = normalizeText(String(actor?.email || session?.user?.email || '')) || null
 
     const insertPayload: Record<string, any> = {
       company_id: session.user.companyId,
       name: normalizedName,
       description: body.description || null,
+      created_by_user_id: creatorUserId,
+      created_by_email: creatorEmail,
     }
 
     // Try to include specialty if provided
@@ -867,26 +911,31 @@ export async function POST(req: NextRequest) {
     }
 
     let crew: any = null
-    try {
+    const withoutWorkDate = { ...insertPayload }
+    delete withoutWorkDate.work_date
+    const withoutCreator = { ...insertPayload }
+    delete withoutCreator.created_by_user_id
+    delete withoutCreator.created_by_email
+    const legacyPayload = { ...withoutCreator }
+    delete legacyPayload.work_date
+    const insertAttempts = [insertPayload, withoutWorkDate, withoutCreator, legacyPayload]
+
+    for (const payload of insertAttempts) {
       const { data, error } = await supabaseAdmin
         .from('pr_crews')
-        .insert(insertPayload)
+        .insert(payload)
         .select()
         .single()
-      if (error) throw error
-      crew = data
-    } catch (e: any) {
-      const msg = String(e?.message || e)
-      const missingCol = String(e?.code) === '42703'
-      if (!missingCol) return NextResponse.json({ error: msg }, { status: 500 })
-      const { work_date: _wd, ...fallbackPayload } = insertPayload
-      const { data, error } = await supabaseAdmin
-        .from('pr_crews')
-        .insert(fallbackPayload)
-        .select()
-        .single()
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-      crew = data
+      if (!error) {
+        crew = data
+        break
+      }
+      if (!isMissingColumnError(error)) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+    }
+    if (!crew) {
+      return NextResponse.json({ error: 'No se pudo crear la cuadrilla con el esquema disponible.' }, { status: 500 })
     }
 
     // Best-effort: support alternate column names for "Jefe de Terreno" across schemas.
@@ -906,44 +955,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Best-effort: persist creator user reference (for visibility exception in GET).
-    if (crew?.id && session?.user?.id) {
-      const creatorColumns = ['created_by_user_id', 'created_by', 'created_by_id', 'creator_user_id', 'user_id', 'owner_user_id']
-      for (const col of creatorColumns) {
-        const { error } = await supabaseAdmin
-          .from('pr_crews')
-          .update({ [col]: String(session.user.id) })
-          .eq('company_id', session.user.companyId)
-          .eq('id', crew.id)
-        if (!error) break
-        const msg = String((error as any)?.message || '')
-        const code = String((error as any)?.code || '')
-        const isMissingColumn = code === '42703' || msg.includes('Could not find the') || msg.includes('column')
-        if (!isMissingColumn) break
-      }
-    }
-    if (crew?.id && session?.user?.email) {
-      const creatorEmailColumns = ['created_by_email', 'owner_email']
-      for (const col of creatorEmailColumns) {
-        const { error } = await supabaseAdmin
-          .from('pr_crews')
-          .update({ [col]: String(session.user.email) })
-          .eq('company_id', session.user.companyId)
-          .eq('id', crew.id)
-        if (!error) {
-          crew = { ...crew, [col]: String(session.user.email) }
-          break
-        }
-        const msg = String((error as any)?.message || '')
-        const code = String((error as any)?.code || '')
-        const isMissingColumn = code === '42703' || msg.includes('Could not find the') || msg.includes('column')
-        if (!isMissingColumn) break
-      }
+    // A single canonical update also covers a temporary PostgREST schema-cache fallback.
+    if (crew?.id && (creatorUserId || creatorEmail) && (!crew.created_by_user_id || !crew.created_by_email)) {
+      const creatorPatch: Record<string, any> = {}
+      if (creatorUserId) creatorPatch.created_by_user_id = creatorUserId
+      if (creatorEmail) creatorPatch.created_by_email = creatorEmail
+      const { data: creatorData } = await supabaseAdmin
+        .from('pr_crews')
+        .update(creatorPatch)
+        .eq('company_id', session.user.companyId)
+        .eq('id', crew.id)
+        .select()
+        .maybeSingle()
+      if (creatorData) crew = creatorData
     }
     if (crew) {
       crew.created_by_current_user = true
-      if (session?.user?.id && !crew.created_by_user_id) crew.created_by_user_id = String(session.user.id)
-      if (session?.user?.email && !crew.created_by_email) crew.created_by_email = String(session.user.email)
+      if (creatorUserId && !crew.created_by_user_id) crew.created_by_user_id = creatorUserId
+      if (creatorEmail && !crew.created_by_email) crew.created_by_email = creatorEmail
     }
 
     // Assign members if provided — include role per assignment (supervisor/foreman/member)

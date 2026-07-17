@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import {
   Box,
@@ -51,6 +51,11 @@ import {
 } from 'recharts'
 import UserHeader from '../layout/UserHeader'
 import { colors } from '../../theme/theme'
+import {
+  ATTENDANCE_DATA_REFRESH_EVENT,
+  ATTENDANCE_DATA_REFRESH_STORAGE_KEY,
+  getAttendanceDataRevision,
+} from '../../lib/attendanceDataRefresh'
 
 type CollaboratorOption = {
   id: string
@@ -421,6 +426,14 @@ type AttendanceHistoryPayload = {
 }
 const attendanceHistoryRowsCache = new Map<string, AttendanceHistoryPayload>()
 const attendanceHistoryRowsInFlight = new Map<string, Promise<AttendanceHistoryPayload>>()
+let attendanceDataRevision = ''
+
+const invalidateAttendanceDataCache = () => {
+  attendanceCollaboratorsCache = null
+  attendanceAvailableDatesCache = null
+  attendanceDailyRowsCache.clear()
+  attendanceHistoryRowsCache.clear()
+}
 
 type AttendancePageProps = {
   renderImportAction?: () => React.ReactNode
@@ -437,6 +450,8 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   const [savingDaily, setSavingDaily] = useState(false)
   const [summaryModalOpen, setSummaryModalOpen] = useState(false)
   const [error, setError] = useState('')
+  const [dataRefreshVersion, setDataRefreshVersion] = useState(0)
+  const preferLatestDateOnRefreshRef = useRef(false)
 
   const [collaboratorOptions, setCollaboratorOptions] = useState<CollaboratorOption[]>([])
 
@@ -683,7 +698,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
     }
   }
 
-  const loadDailyAvailableDates = async () => {
+  const loadDailyAvailableDates = async (preferLatestDate = false) => {
     setDailyDatesLoading(true)
     try {
       if (!attendanceAvailableDatesInFlight) {
@@ -709,7 +724,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
       const dates = attendanceAvailableDatesCache || await attendanceAvailableDatesInFlight || []
 
       setDailyAvailableDates(dates)
-      if (dates.length > 0 && !dates.includes(dailyDate)) {
+      if (dates.length > 0 && (preferLatestDate || !dates.includes(dailyDate))) {
         setDailyDate(dates[0])
       }
     } catch {
@@ -801,10 +816,49 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   }
 
   useEffect(() => {
-    loadCollaborators()
-    loadDailyAvailableDates()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const currentRevision = getAttendanceDataRevision()
+    if (currentRevision !== attendanceDataRevision) {
+      attendanceDataRevision = currentRevision
+      invalidateAttendanceDataCache()
+      preferLatestDateOnRefreshRef.current = true
+    }
+
+    const refreshIfChanged = () => {
+      const nextRevision = getAttendanceDataRevision()
+      if (!nextRevision || nextRevision === attendanceDataRevision) return
+      attendanceDataRevision = nextRevision
+      invalidateAttendanceDataCache()
+      preferLatestDateOnRefreshRef.current = true
+      setDailyDraftStatusByCollaborator({})
+      setDataRefreshVersion((current) => current + 1)
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === ATTENDANCE_DATA_REFRESH_STORAGE_KEY) refreshIfChanged()
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshIfChanged()
+    }
+
+    window.addEventListener(ATTENDANCE_DATA_REFRESH_EVENT, refreshIfChanged)
+    window.addEventListener('storage', handleStorage)
+    window.addEventListener('focus', refreshIfChanged)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      window.removeEventListener(ATTENDANCE_DATA_REFRESH_EVENT, refreshIfChanged)
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener('focus', refreshIfChanged)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [])
+
+  useEffect(() => {
+    const preferLatestDate = preferLatestDateOnRefreshRef.current
+    preferLatestDateOnRefreshRef.current = false
+    loadCollaborators()
+    loadDailyAvailableDates(preferLatestDate)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataRefreshVersion])
 
   useEffect(() => {
     if (!historyAutoRange || dailyDatesLoading) return
@@ -820,7 +874,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
     if (dailyAvailableDates.length > 0 && !dailyAvailableDateSet.has(dailyDate)) return
     loadDaily()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dailyDate, dailySelectedCollaborator, dailySelectedAttendance, dailyDatesLoading, dailyAvailableDates])
+  }, [tab, dailyDate, dailySelectedCollaborator, dailySelectedAttendance, dailyDatesLoading, dailyAvailableDates, dataRefreshVersion])
 
   useEffect(() => {
     setDailyDraftStatusByCollaborator({})
@@ -830,7 +884,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
     if (tab !== 'history') return
     loadHistory()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, dateFrom, dateTo, historySelectedCollaborator, historySelectedStatus])
+  }, [tab, dateFrom, dateTo, historySelectedCollaborator, historySelectedStatus, dataRefreshVersion])
 
   const dailyMatrixRows = useMemo(() => {
     const byCollaborator = new Map<string, DailyStatusRow>()

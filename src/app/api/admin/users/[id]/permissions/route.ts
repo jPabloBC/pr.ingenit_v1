@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
-const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions'])
+const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions', 'communications'])
 
 export async function GET(req: NextRequest, { params }: any) {
   try {
@@ -148,7 +148,7 @@ export async function PUT(req: NextRequest, { params }: any) {
 
     if (!isDev) {
       // Company admins can delegate project module permissions,
-      // but cannot grant privileged admin-permissions.
+      // but cannot grant admin-only modules.
       for (const p of perms) {
         const key = String(p?.resource_key || '').trim()
         if (!key) continue

@@ -38,6 +38,7 @@ import {
   TableSortLabel,
   Tabs,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { alpha } from '@mui/material/styles';
@@ -50,6 +51,7 @@ import { es } from 'date-fns/locale';
 import {
   Add,
   AssignmentTurnedIn,
+  AssignmentLateOutlined,
   CloudUpload,
   CalendarMonth,
   ChevronLeft,
@@ -91,6 +93,84 @@ const hhSummaryPromiseCache = new Map<string, { promise: Promise<any>; expiresAt
 let hhHistoryPromiseCache: { promise: Promise<any[]>; expiresAt: number } | null = null;
 const photoReportConfigPromiseCache = new Map<string, { promise: Promise<any>; expiresAt: number }>();
 let fieldReportDatesPromiseCache: { promise: Promise<string[]>; expiresAt: number } | null = null;
+
+const EquipmentSearchInput = React.memo(function EquipmentSearchInput({
+  onSearch,
+}: {
+  onSearch: (value: string) => void;
+}) {
+  const [value, setValue] = useState('');
+  const debounceRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+  }, []);
+
+  const updateSearch = (nextValue: string) => {
+    setValue(nextValue);
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      onSearch(nextValue);
+      debounceRef.current = null;
+    }, 180);
+  };
+
+  const clearSearch = () => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = null;
+    setValue('');
+    onSearch('');
+  };
+
+  return (
+    <TextField
+      size="small"
+      variant="outlined"
+      placeholder="Buscar nombre, patente, serie o fecha"
+      value={value}
+      onChange={(event) => updateSearch(event.target.value)}
+      inputProps={{ 'aria-label': 'Buscar equipos por nombre, patente, serie o fecha' }}
+      InputProps={{
+        startAdornment: (
+          <InputAdornment position="start">
+            <Search sx={{ color: colors.slate500, fontSize: 22 }} />
+          </InputAdornment>
+        ),
+        endAdornment: value ? (
+          <InputAdornment position="end">
+            <IconButton
+              size="small"
+              aria-label="Limpiar búsqueda de equipos"
+              title="Limpiar"
+              onClick={clearSearch}
+              sx={{ color: colors.slate400, p: 0.35 }}
+            >
+              <Clear sx={{ fontSize: 21 }} />
+            </IconButton>
+          </InputAdornment>
+        ) : undefined,
+      }}
+      sx={{
+        width: { xs: 'calc(100% - 82px)', sm: '100%' },
+        gridColumn: { xs: '1 / -1', sm: 'auto' },
+        position: 'relative',
+        right: { xs: 36, sm: 72 },
+        '& .MuiOutlinedInput-root': {
+          height: 40,
+          bgcolor: colors.white,
+          borderRadius: 1,
+          '& fieldset': { borderColor: colors.slate300 },
+          '&:hover fieldset': { borderColor: colors.slate400 },
+          '&.Mui-focused fieldset': { borderColor: colors.blue600, borderWidth: 1 },
+        },
+        '& .MuiInputBase-input': {
+          fontSize: 14,
+          py: 0,
+        },
+      }}
+    />
+  );
+});
 
 const fetchManagementFieldReports = (queryString: string): Promise<FieldReportRecord[]> => {
   const now = Date.now();
@@ -330,6 +410,10 @@ type DayDashboardRow = {
   date: string;
   hh: number;
   hhExtras: number;
+  dailyReportDirectHh?: number;
+  dailyReportIndirectHh?: number;
+  dailyReportHh?: number;
+  dailyReportCount?: number;
   peopleRows: number;
   reports: number;
   indirectTurnoTotal: number;
@@ -486,7 +570,10 @@ type ManagementEquipmentRow = {
   in_maintenance: boolean;
   in_accreditation: boolean;
   in_breakdown: boolean;
+  include_in_daily_report?: boolean;
+  entry_date?: string | null;
   return_date?: string | null;
+  lifecycle_periods?: Array<{ entry_date: string; exit_date?: string | null }>;
   mileage_km?: number | null;
   notes?: string | null;
 };
@@ -805,6 +892,47 @@ const formatSpanishShortDate = (value: string) => {
   const [year, month, day] = raw.split('-');
   if (!year || !month || !day) return '';
   return `${day}/${month}/${year}`;
+};
+
+const EquipmentLifecycleDate = ({
+  value,
+  periods,
+}: {
+  value?: string | null;
+  periods?: Array<{ entry_date: string; exit_date?: string | null }>;
+}) => {
+  const label = formatSpanishShortDate(String(value || '').slice(0, 10)) || '-';
+  if (!periods?.length) return <>{label}</>;
+
+  return (
+    <Tooltip
+      arrow
+      placement="top"
+      title={
+        <Box sx={{ py: 0.15 }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 700, mb: 0.35 }}>
+            Historial de ingresos y salidas
+          </Typography>
+          {periods.map((period, index) => (
+            <Typography key={`${period.entry_date}-${index}`} sx={{ fontSize: 12, lineHeight: 1.55 }}>
+              {`Ingreso: ${formatSpanishShortDate(period.entry_date)} | Salida: ${formatSpanishShortDate(String(period.exit_date || '')) || 'En obra'}`}
+            </Typography>
+          ))}
+        </Box>
+      }
+    >
+      <Box
+        component="span"
+        sx={{
+          cursor: 'help',
+          textDecoration: 'underline dotted',
+          textUnderlineOffset: '3px',
+        }}
+      >
+        {label}
+      </Box>
+    </Tooltip>
+  );
 };
 
 const parseDateFromIso = (value: string) => {
@@ -1555,6 +1683,9 @@ export default function ManagementPage() {
   const [equipmentLastUpdatedBy, setEquipmentLastUpdatedBy] = useState<string>('');
   const [equipmentDateAnchorEl, setEquipmentDateAnchorEl] = useState<HTMLElement | null>(null);
   const [equipmentRows, setEquipmentRows] = useState<ManagementEquipmentRow[]>([]);
+  const [equipmentSearch, setEquipmentSearch] = useState('');
+  const [equipmentNamePinned, setEquipmentNamePinned] = useState(true);
+  const [equipmentPatentPinned, setEquipmentPatentPinned] = useState(true);
   const [equipmentLoading, setEquipmentLoading] = useState(false);
   const [equipmentSaving, setEquipmentSaving] = useState(false);
   const [equipmentError, setEquipmentError] = useState('');
@@ -1565,6 +1696,13 @@ export default function ManagementPage() {
   const [equipmentInitialDraft, setEquipmentInitialDraft] = useState<ManagementEquipmentRow | null>(null);
   const [equipmentEffectiveDate, setEquipmentEffectiveDate] = useState('');
   const [equipmentNameCustomMode, setEquipmentNameCustomMode] = useState(false);
+  const [equipmentPropagationConfirm, setEquipmentPropagationConfirm] = useState<{
+    rows: ManagementEquipmentRow[];
+    targetDate: string;
+    successMessage: string;
+    identityKeys: string[];
+    futureDates: string[];
+  } | null>(null);
   const [reportFronts, setReportFronts] = useState<ReportFrontRow[]>([]);
   const [reportFrontsLoading, setReportFrontsLoading] = useState(false);
   const [reportFrontsError, setReportFrontsError] = useState('');
@@ -1638,12 +1776,14 @@ export default function ManagementPage() {
     equipment_name: '',
     patent: '',
     quantity: 1,
-    canaletas_qty: 0.5,
+    canaletas_qty: 0,
     piscinas_qty: 0,
     is_operational: false,
     in_maintenance: false,
     in_accreditation: false,
     in_breakdown: false,
+    include_in_daily_report: true,
+    entry_date: equipmentDate,
     return_date: null,
     mileage_km: null,
     notes: '',
@@ -1653,6 +1793,21 @@ export default function ManagementPage() {
     const name = String(row.equipment_name || '').trim().toLowerCase();
     const patent = String(row.patent || '').trim().toLowerCase();
     return `${kind}__${name}__${patent}`;
+  };
+  const isSameEquipment = (
+    left: Pick<ManagementEquipmentRow, 'equipment_kind' | 'equipment_name' | 'patent'>,
+    right: Pick<ManagementEquipmentRow, 'equipment_kind' | 'equipment_name' | 'patent'>
+  ) => {
+    const normalize = (value: unknown) => String(value || '').trim().toLocaleLowerCase('es-CL').replace(/\s+/g, ' ');
+    const leftPatent = normalize(left.patent).replace(/[^a-z0-9]/g, '');
+    const rightPatent = normalize(right.patent).replace(/[^a-z0-9]/g, '');
+    if (leftPatent && rightPatent) return leftPatent === rightPatent;
+    return (
+      String(left.equipment_kind || '').toUpperCase() === String(right.equipment_kind || '').toUpperCase() &&
+      normalize(left.equipment_name) === normalize(right.equipment_name) &&
+      !leftPatent &&
+      !rightPatent
+    );
   };
   const normalizeEquipmentApiRows = (rows: any[], snapshotDate: string): ManagementEquipmentRow[] => {
     const normalizedRows: ManagementEquipmentRow[] = (Array.isArray(rows) ? rows : []).map((row: any) => {
@@ -1671,7 +1826,17 @@ export default function ManagementPage() {
         in_maintenance: Boolean(row?.in_maintenance),
         in_accreditation: Boolean(row?.in_accreditation),
         in_breakdown: Boolean(row?.in_breakdown),
+        include_in_daily_report: row?.include_in_daily_report !== false,
+        entry_date: String(row?.entry_date || '').slice(0, 10) || null,
         return_date: String(row?.return_date || '').slice(0, 10) || null,
+        lifecycle_periods: Array.isArray(row?.lifecycle_periods)
+          ? row.lifecycle_periods
+            .map((period: any) => ({
+              entry_date: String(period?.entry_date || '').slice(0, 10),
+              exit_date: String(period?.exit_date || '').slice(0, 10) || null,
+            }))
+            .filter((period: any) => period.entry_date)
+          : [],
         mileage_km: row?.mileage_km === null || row?.mileage_km === undefined || String(row?.mileage_km).trim() === '' ? null : Number(row?.mileage_km || 0),
         notes: String(row?.notes || ''),
       };
@@ -1711,6 +1876,7 @@ export default function ManagementPage() {
       in_maintenance: Boolean(row.in_maintenance),
       in_accreditation: Boolean(row.in_accreditation),
       in_breakdown: Boolean(row.in_breakdown),
+      entry_date: String(row.entry_date || '').slice(0, 10) || null,
       return_date: String(row.return_date || '').slice(0, 10) || null,
       mileage_km:
         row.mileage_km === null || row.mileage_km === undefined || String(row.mileage_km).trim() === ''
@@ -3513,7 +3679,8 @@ export default function ManagementPage() {
   const persistEquipmentRows = async (
     rowsInput: ManagementEquipmentRow[],
     successMessage = 'Equipos guardados correctamente.',
-    targetDateOverride?: string
+    targetDateOverride?: string,
+    options?: { propagateToFuture?: boolean; identityKeys?: string[] }
   ) => {
     setEquipmentSaving(true);
     setEquipmentError('');
@@ -3533,6 +3700,8 @@ export default function ManagementPage() {
           in_maintenance: Boolean(row.in_maintenance),
           in_accreditation: Boolean(row.in_accreditation),
           in_breakdown: Boolean(row.in_breakdown),
+          include_in_daily_report: row.include_in_daily_report !== false,
+          entry_date: String(row.entry_date || '').slice(0, 10) || null,
           return_date: String(row.return_date || '').slice(0, 10) || null,
           mileage_km: row.mileage_km === null || row.mileage_km === undefined || String(row.mileage_km).trim() === '' ? null : toNumber(row.mileage_km || 0),
           notes: String(row.notes || '').trim() || null,
@@ -3541,7 +3710,12 @@ export default function ManagementPage() {
       const response = await fetch('/api/management/equipment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: targetDate, rows: sanitizedRows }),
+        body: JSON.stringify({
+          date: targetDate,
+          rows: sanitizedRows,
+          propagateToFuture: Boolean(options?.propagateToFuture),
+          changedEquipmentIdentityKeys: options?.identityKeys || [],
+        }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
@@ -3589,6 +3763,54 @@ export default function ManagementPage() {
     setEquipmentRows((prev) => prev.map((row, idx) => (idx === index ? { ...row, ...patch } : row)));
   };
 
+  const getEquipmentDailyReportAvailability = (row: ManagementEquipmentRow) => {
+    const selectedDate = String(equipmentDate || '').slice(0, 10);
+    const entryDate = String(row.entry_date || '').slice(0, 10);
+    const returnDate = String(row.return_date || '').slice(0, 10);
+    if (entryDate && selectedDate && entryDate > selectedDate) {
+      return { available: false, reason: 'No se incluye: el equipo aún no ha ingresado en esta fecha.' };
+    }
+    if (returnDate && (!selectedDate || returnDate <= selectedDate)) {
+      return { available: false, reason: 'No se incluye: el equipo tiene salida o devolución en esta fecha.' };
+    }
+    return { available: true, reason: '' };
+  };
+
+  const toggleEquipmentDailyReport = async (index: number) => {
+    const row = equipmentRows[index];
+    if (!row?.id || equipmentSaving) return;
+    const availability = getEquipmentDailyReportAvailability(row);
+    if (!availability.available) {
+      setNotice({ message: availability.reason, severity: 'info' });
+      return;
+    }
+    const nextValue = row.include_in_daily_report === false;
+    setEquipmentSaving(true);
+    setEquipmentError('');
+    try {
+      const response = await fetch('/api/management/equipment', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id, include_in_daily_report: nextValue }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `Error ${response.status}`);
+      setEquipmentRows((current) => current.map((item, itemIndex) => (
+        itemIndex === index ? { ...item, include_in_daily_report: nextValue } : item
+      )));
+      setNotice({
+        message: nextValue
+          ? 'El equipo se incluirá en el reporte diario de esta fecha.'
+          : 'El equipo no se incluirá en el reporte diario de esta fecha.',
+        severity: 'success',
+      });
+    } catch (err: any) {
+      setEquipmentError(err?.message || 'No se pudo actualizar la declaración del equipo.');
+    } finally {
+      setEquipmentSaving(false);
+    }
+  };
+
   const openCreateEquipmentModal = (kind: EquipmentKind) => {
     setEquipmentModalMode('create');
     setEditingEquipmentIndex(null);
@@ -3615,6 +3837,10 @@ export default function ManagementPage() {
 
   const saveEquipmentModal = async () => {
     if (!equipmentDraft) return;
+    if (!String(equipmentDraft.equipment_name || '').trim()) {
+      setNotice({ message: 'Debes seleccionar o ingresar el nombre del equipo.', severity: 'error' });
+      return;
+    }
     const nonOperationalSelectedCount = [
       Boolean(equipmentDraft.in_maintenance),
       Boolean(equipmentDraft.in_accreditation),
@@ -3624,7 +3850,7 @@ export default function ManagementPage() {
     if (!equipmentDraft.is_operational) {
       if (nonOperationalSelectedCount !== 1) {
         setNotice({
-          message: 'Si el equipo no está operativa, debes seleccionar solo un estado: Mantención, Acreditación, Panne o Devolución / Término.',
+          message: 'Si el equipo no está operativa, debes seleccionar solo un estado: Mantención, Acreditación, Panne o Salida / Devolución.',
           severity: 'error',
         });
         return;
@@ -3654,6 +3880,12 @@ export default function ManagementPage() {
       setNotice({ message: 'Debes indicar una fecha válida para aplicar el cambio.', severity: 'error' });
       return;
     }
+    const entryDate = String(equipmentDraft.entry_date || '').slice(0, 10) || null;
+    const returnDate = String(equipmentDraft.return_date || '').slice(0, 10) || null;
+    if (entryDate && returnDate && entryDate > returnDate) {
+      setNotice({ message: 'La fecha de salida no puede ser anterior a la fecha de ingreso.', severity: 'error' });
+      return;
+    }
     const normalized: ManagementEquipmentRow = {
       ...equipmentDraft,
       report_date: effectiveDate,
@@ -3663,6 +3895,8 @@ export default function ManagementPage() {
       quantity: normalizedQuantity,
       canaletas_qty: normalizedCanaletas,
       piscinas_qty: normalizedPiscinas,
+      entry_date: entryDate,
+      return_date: returnDate,
       mileage_km:
         equipmentDraft.mileage_km === null ||
         equipmentDraft.mileage_km === undefined ||
@@ -3684,11 +3918,37 @@ export default function ManagementPage() {
       const matchKey = equipmentModalMode === 'edit' && equipmentInitialDraft
         ? equipmentIdentityKey(equipmentInitialDraft)
         : equipmentIdentityKey(normalized);
+      const duplicateRow = baseRows.find((row) => {
+        const isCurrentEditedRow = equipmentModalMode === 'edit' && equipmentIdentityKey(row) === matchKey;
+        return !isCurrentEditedRow && isSameEquipment(row, normalized);
+      });
+      if (duplicateRow) {
+        const identifier = String(normalized.patent || '').trim()
+          ? `la patente / Nº / serie ${String(normalized.patent).toUpperCase()}`
+          : `el nombre ${String(normalized.equipment_name).toUpperCase()}`;
+        setNotice({ message: `Ya existe un equipo registrado con ${identifier}.`, severity: 'error' });
+        return;
+      }
       const existingIdx = baseRows.findIndex((row) => equipmentIdentityKey(row) === matchKey);
       const nextRows = existingIdx >= 0
         ? baseRows.map((row, idx) => (idx === existingIdx ? { ...row, ...normalized, report_date: targetDate } : row))
         : [...baseRows, { ...normalized, report_date: targetDate }];
-      const ok = await persistEquipmentRows(nextRows, equipmentModalMode === 'edit' ? 'Equipo actualizado correctamente.' : 'Equipo creado correctamente.', targetDate);
+      const successMessage = equipmentModalMode === 'edit' ? 'Equipo actualizado correctamente.' : 'Equipo creado correctamente.';
+      const identityKeys = Array.from(new Set([matchKey, equipmentIdentityKey(normalized)]));
+      const futureDates = equipmentAvailableDates.filter((snapshotDate) => snapshotDate > targetDate);
+
+      if (futureDates.length > 0) {
+        setEquipmentPropagationConfirm({
+          rows: nextRows,
+          targetDate,
+          successMessage,
+          identityKeys,
+          futureDates,
+        });
+        return;
+      }
+
+      const ok = await persistEquipmentRows(nextRows, successMessage, targetDate, { identityKeys });
       if (ok) {
         setEquipmentModalOpen(false);
         setEquipmentDraft(null);
@@ -5666,10 +5926,13 @@ export default function ManagementPage() {
                             </Typography>
                             <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                               <Typography sx={{ fontWeight: 700, color: colors.white }}>
-                                HH: {formatNumber(day.hh)}
+                                HH Directas Rep. Diario: {formatNumber(day.dailyReportDirectHh || 0)}
                               </Typography>
                               <Typography sx={{ color: colors.blue100 }}>
-                                HH Extras: {formatNumber(day.hhExtras)}
+                                HH Terreno: {formatNumber(day.hh)}
+                              </Typography>
+                              <Typography sx={{ color: colors.blue100 }}>
+                                HH Extras Terreno: {formatNumber(day.hhExtras)}
                               </Typography>
                               <Typography sx={{ color: colors.blue100 }}>
                                 Directos: {day.peopleRows}
@@ -6768,12 +7031,13 @@ export default function ManagementPage() {
                           display: 'grid',
                           gridTemplateColumns: {
                             xs: '32px minmax(0, 1fr) 32px',
-                            sm: 'auto 220px auto minmax(0, 1fr)',
+                            sm: 'auto 220px auto minmax(0, 1fr) minmax(220px, 300px)',
                           },
                           gap: 0.75,
                           alignItems: 'center',
                           width: '100%',
                           minWidth: 0,
+                          pr: { sm: 8 },
                         }}
                       >
                         <IconButton
@@ -6860,6 +7124,7 @@ export default function ManagementPage() {
                         >
                           | Registro del día: {formatSpanishShortDate(String(equipmentDate || '').slice(0, 10)) || String(equipmentDate || '').slice(0, 10)}
                         </Typography>
+                        <EquipmentSearchInput onSearch={setEquipmentSearch} />
                       </Box>
                     </Stack>
 
@@ -6872,9 +7137,25 @@ export default function ManagementPage() {
                     ) : null}
 
                     {(['MAYOR', 'MENOR'] as EquipmentKind[]).map((kind) => {
+                      const searchQuery = equipmentSearch.trim().toLocaleLowerCase('es-CL');
                       const indexedRows = equipmentRows
                         .map((row, index) => ({ row, index }))
-                        .filter((entry) => entry.row.equipment_kind === kind);
+                        .filter((entry) => {
+                          if (entry.row.equipment_kind !== kind) return false;
+                          if (!searchQuery) return true;
+                          const searchable = [
+                            entry.row.equipment_name,
+                            entry.row.patent,
+                            entry.row.entry_date,
+                            entry.row.return_date,
+                            formatSpanishShortDate(String(entry.row.entry_date || '').slice(0, 10)),
+                            formatSpanishShortDate(String(entry.row.return_date || '').slice(0, 10)),
+                          ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLocaleLowerCase('es-CL');
+                          return searchable.includes(searchQuery);
+                        });
                       return (
                         <Box key={kind}>
                           <Typography sx={{ fontWeight: 700, color: colors.slate800, mb: 0.75 }}>
@@ -6913,7 +7194,8 @@ export default function ManagementPage() {
                                 ['Canaletas', row.canaletas_qty === null || row.canaletas_qty === undefined ? '-' : String(row.canaletas_qty)],
                                 ['Piscinas', row.piscinas_qty === null || row.piscinas_qty === undefined ? '-' : String(row.piscinas_qty)],
                                 ['Kilometraje', row.mileage_km === null || row.mileage_km === undefined ? '-' : String(row.mileage_km)],
-                                ['Devolución / término', formatSpanishShortDate(String(row.return_date || '').slice(0, 10)) || '-'],
+                                ['Ingreso', formatSpanishShortDate(String(row.entry_date || '').slice(0, 10)) || '-'],
+                                ['Salida / devolución', formatSpanishShortDate(String(row.return_date || '').slice(0, 10)) || '-'],
                               ];
 
                               return (
@@ -6941,10 +7223,25 @@ export default function ManagementPage() {
                                           {String(row.equipment_name || '-').toUpperCase()}
                                         </Typography>
                                         <Typography sx={{ color: colors.slate500, fontSize: 12.5, mt: 0.25, wordBreak: 'break-word' }}>
-                                          Patente: {String(row.patent || '-').toUpperCase()}
+                                          Patente / Nº / Serie: {String(row.patent || '-').toUpperCase()}
                                         </Typography>
                                       </Box>
                                       <Stack direction="row" spacing={0.15} sx={{ flex: '0 0 auto' }}>
+                                        <Tooltip title={!getEquipmentDailyReportAvailability(row).available ? getEquipmentDailyReportAvailability(row).reason : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}>
+                                          <span>
+                                            <IconButton
+                                              size="small"
+                                              onClick={() => toggleEquipmentDailyReport(index)}
+                                              disabled={!row.id || equipmentSaving || !getEquipmentDailyReportAvailability(row).available}
+                                              aria-label={!getEquipmentDailyReportAvailability(row).available ? 'Equipo no disponible para reporte diario' : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}
+                                              sx={{ color: row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available ? colors.slate300 : colors.blue600, p: 0.5 }}
+                                            >
+                                              {row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available
+                                                ? <AssignmentLateOutlined sx={{ fontSize: 18 }} />
+                                                : <AssignmentTurnedIn sx={{ fontSize: 18 }} />}
+                                            </IconButton>
+                                          </span>
+                                        </Tooltip>
                                         <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600, p: 0.5 }}>
                                           <EditOutlined sx={{ fontSize: 18 }} />
                                         </IconButton>
@@ -7004,7 +7301,7 @@ export default function ManagementPage() {
                                     <Box
                                       sx={{
                                         display: 'grid',
-                                        gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' },
+                                      gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(5, minmax(0, 1fr))' },
                                         gap: 0.6,
                                       }}
                                     >
@@ -7059,7 +7356,8 @@ export default function ManagementPage() {
                             <Table
                               size="small"
                               sx={{
-                                minWidth: { sm: 1040, md: 1140, lg: 1260 },
+                                minWidth: 1660,
+                                tableLayout: 'fixed',
                                 '& .MuiTableCell-root': {
                                   px: { sm: 0.7, md: 0.9, lg: 1 },
                                   py: { sm: 0.45, md: 0.6 },
@@ -7068,15 +7366,92 @@ export default function ManagementPage() {
                                 },
                               }}
                             >
+                              <colgroup>
+                                <col style={{ width: 220 }} />
+                                <col style={{ width: 155 }} />
+                                <col style={{ width: 105 }} />
+                                <col style={{ width: 105 }} />
+                                <col style={{ width: 105 }} />
+                                <col style={{ width: 105 }} />
+                                <col style={{ width: 110 }} />
+                                <col style={{ width: 140 }} />
+                                <col style={{ width: 75 }} />
+                                <col style={{ width: 90 }} />
+                                <col style={{ width: 90 }} />
+                                <col style={{ width: 105 }} />
+                                <col style={{ width: 180 }} />
+                                <col style={{ width: 135 }} />
+                              </colgroup>
                               <TableHead>
                                 <TableRow>
-                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Nombre (máquina/equipo)</TableCell>
-                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }}>Patente</TableCell>
+                                  <TableCell
+                                    sx={{
+                                      fontWeight: 700,
+                                      color: colors.slate400,
+                                      minWidth: 220,
+                                      ...(equipmentNamePinned ? {
+                                        position: 'sticky',
+                                        left: 0,
+                                        zIndex: 3,
+                                        bgcolor: colors.white,
+                                        boxShadow: `1px 0 0 ${colors.gray200}`,
+                                      } : {}),
+                                    }}
+                                  >
+                                    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={0.5}>
+                                      <span>Nombre (máquina/equipo)</span>
+                                      <Tooltip title={equipmentNamePinned ? 'Desfijar nombre' : 'Fijar nombre'}>
+                                        <IconButton
+                                          size="small"
+                                          aria-label={equipmentNamePinned ? 'Desfijar nombre' : 'Fijar nombre'}
+                                          onClick={() => setEquipmentNamePinned((current) => !current)}
+                                          sx={{ color: equipmentNamePinned ? colors.blue600 : colors.slate400, p: 0.25 }}
+                                        >
+                                          {equipmentNamePinned ? <PushPin sx={{ fontSize: 15 }} /> : <PushPinOutlined sx={{ fontSize: 15 }} />}
+                                        </IconButton>
+                                      </Tooltip>
+                                    </Stack>
+                                  </TableCell>
+                                  <TableCell
+                                    align="center"
+                                    sx={{
+                                      fontWeight: 700,
+                                      color: colors.slate400,
+                                      minWidth: 155,
+                                      ...(equipmentPatentPinned ? {
+                                        position: 'sticky',
+                                        left: equipmentNamePinned ? 220 : 0,
+                                        zIndex: 3,
+                                        bgcolor: colors.white,
+                                        boxShadow: `1px 0 0 ${colors.gray200}`,
+                                      } : {}),
+                                    }}
+                                  >
+                                    <Stack direction="row" alignItems="center" justifyContent="center" spacing={0.5} sx={{ position: 'relative' }}>
+                                      <span>Patente / Nº / Serie</span>
+                                      <Tooltip title={equipmentPatentPinned ? 'Desfijar patente' : 'Fijar patente'}>
+                                        <IconButton
+                                          size="small"
+                                          aria-label={equipmentPatentPinned ? 'Desfijar patente' : 'Fijar patente'}
+                                          onClick={() => setEquipmentPatentPinned((current) => !current)}
+                                          sx={{
+                                            color: equipmentPatentPinned ? colors.blue600 : colors.slate400,
+                                            p: 0.25,
+                                            position: 'absolute',
+                                            right: 0,
+                                          }}
+                                        >
+                                          {equipmentPatentPinned ? <PushPin sx={{ fontSize: 15 }} /> : <PushPinOutlined sx={{ fontSize: 15 }} />}
+                                        </IconButton>
+                                      </Tooltip>
+                                    </Stack>
+                                  </TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Operativa</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Mantención</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Acreditación</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Panne</TableCell>
-                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Devolución / Término</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Ingreso</TableCell>
+                                  <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Salida / Devolución</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">Cantidad</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">CANALETAS</TableCell>
                                   <TableCell sx={{ fontWeight: 700, color: colors.slate400 }} align="center">PISCINAS</TableCell>
@@ -7088,7 +7463,7 @@ export default function ManagementPage() {
                               <TableBody>
                                 {indexedRows.length === 0 ? (
                                   <TableRow>
-                                    <TableCell colSpan={13} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
+                                    <TableCell colSpan={14} sx={{ color: colors.slate500, fontStyle: 'italic' }}>
                                       Sin equipos cargados para este tipo.
                                     </TableCell>
                                   </TableRow>
@@ -7100,8 +7475,35 @@ export default function ManagementPage() {
                                       '&:hover': { bgcolor: colors.managementTableHover },
                                     }}
                                   >
-                                    <TableCell sx={{ minWidth: 180 }}>{String(row.equipment_name || '-').toUpperCase()}</TableCell>
-                                    <TableCell sx={{ minWidth: 130 }}>{String(row.patent || '-').toUpperCase()}</TableCell>
+                                    <TableCell
+                                      sx={{
+                                        minWidth: 220,
+                                        ...(equipmentNamePinned ? {
+                                          position: 'sticky',
+                                          left: 0,
+                                          zIndex: 2,
+                                          bgcolor: index % 2 === 0 ? colors.white : colors.slate50,
+                                          boxShadow: `1px 0 0 ${colors.gray200}`,
+                                        } : {}),
+                                      }}
+                                    >
+                                      {String(row.equipment_name || '-').toUpperCase()}
+                                    </TableCell>
+                                    <TableCell
+                                      align="center"
+                                      sx={{
+                                        minWidth: 155,
+                                        ...(equipmentPatentPinned ? {
+                                          position: 'sticky',
+                                          left: equipmentNamePinned ? 220 : 0,
+                                          zIndex: 2,
+                                          bgcolor: index % 2 === 0 ? colors.white : colors.slate50,
+                                          boxShadow: `1px 0 0 ${colors.gray200}`,
+                                        } : {}),
+                                      }}
+                                    >
+                                      {String(row.patent || '-').toUpperCase()}
+                                    </TableCell>
                                     <TableCell align="center">
                                       <EquipmentStateBadge active={Boolean(row.is_operational)} label="Operativa" activeColor={colors.blue6} />
                                     </TableCell>
@@ -7114,13 +7516,49 @@ export default function ManagementPage() {
                                     <TableCell align="center">
                                       <EquipmentStateBadge active={Boolean(row.in_breakdown)} label="Panne" activeColor={colors.blue12} />
                                     </TableCell>
-                                    <TableCell align="center">{formatSpanishShortDate(String(row.return_date || '').slice(0, 10)) || '-'}</TableCell>
+                                    <TableCell align="center">
+                                      <EquipmentLifecycleDate value={row.entry_date} periods={row.lifecycle_periods} />
+                                    </TableCell>
+                                    <TableCell align="center">
+                                      <EquipmentLifecycleDate value={row.return_date} periods={row.lifecycle_periods} />
+                                    </TableCell>
                                     <TableCell align="center">{row.quantity === null || row.quantity === undefined ? '1' : String(row.quantity)}</TableCell>
                                     <TableCell align="center">{row.canaletas_qty === null || row.canaletas_qty === undefined ? '-' : String(row.canaletas_qty)}</TableCell>
                                     <TableCell align="center">{row.piscinas_qty === null || row.piscinas_qty === undefined ? '-' : String(row.piscinas_qty)}</TableCell>
                                     <TableCell align="center">{row.mileage_km === null || row.mileage_km === undefined ? '-' : String(row.mileage_km)}</TableCell>
-                                    <TableCell sx={{ minWidth: 180 }}>{String(row.notes || '-')}</TableCell>
+                                    <TableCell sx={{ minWidth: 0, maxWidth: 180, overflow: 'hidden' }}>
+                                      <Tooltip title={String(row.notes || '').trim() || 'Sin notas'} placement="top" arrow>
+                                        <Typography
+                                          component="span"
+                                          sx={{
+                                            display: 'block',
+                                            width: '100%',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                            fontSize: 'inherit',
+                                          }}
+                                        >
+                                          {String(row.notes || '-').trim() || '-'}
+                                        </Typography>
+                                      </Tooltip>
+                                    </TableCell>
                                     <TableCell align="center">
+                                      <Tooltip title={!getEquipmentDailyReportAvailability(row).available ? getEquipmentDailyReportAvailability(row).reason : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}>
+                                        <span>
+                                          <IconButton
+                                            size="small"
+                                            onClick={() => toggleEquipmentDailyReport(index)}
+                                            disabled={!row.id || equipmentSaving || !getEquipmentDailyReportAvailability(row).available}
+                                            aria-label={!getEquipmentDailyReportAvailability(row).available ? 'Equipo no disponible para reporte diario' : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}
+                                            sx={{ color: row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available ? colors.slate300 : colors.blue600 }}
+                                          >
+                                            {row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available
+                                              ? <AssignmentLateOutlined sx={{ fontSize: 18 }} />
+                                              : <AssignmentTurnedIn sx={{ fontSize: 18 }} />}
+                                          </IconButton>
+                                        </span>
+                                      </Tooltip>
                                       <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600 }}>
                                         <EditOutlined sx={{ fontSize: 18 }} />
                                       </IconButton>
@@ -8794,25 +9232,43 @@ export default function ManagementPage() {
               <Typography sx={{ mb: 0.6, fontSize: 12, fontWeight: 700, color: colors.slate500 }}>
                 Tipo
               </Typography>
-              <TextField
-                select
-                size="small"
-                fullWidth
-                value={equipmentDraft?.equipment_kind || 'MAYOR'}
-                onChange={(e) => {
-                  const nextKind = String(e.target.value || 'MAYOR') === 'MENOR' ? 'MENOR' : 'MAYOR';
-                  setEquipmentDraft((prev) => prev ? { ...prev, equipment_kind: nextKind, equipment_name: '' } : prev);
-                  setEquipmentNameCustomMode(false);
-                }}
+              <Box
                 sx={{
-                  '& .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate300 },
-                  '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: colors.slate400 },
-                  '& .Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: colors.blue6 },
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gap: 1,
                 }}
               >
-                <MenuItem value="MAYOR">MAYOR</MenuItem>
-                <MenuItem value="MENOR">MENOR</MenuItem>
-              </TextField>
+                {(['MAYOR', 'MENOR'] as EquipmentKind[]).map((kind) => {
+                  const selected = (equipmentDraft?.equipment_kind || 'MAYOR') === kind;
+                  return (
+                    <Button
+                      key={kind}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => {
+                        if (selected) return;
+                        setEquipmentDraft((prev) => prev ? { ...prev, equipment_kind: kind, equipment_name: '' } : prev);
+                        setEquipmentNameCustomMode(false);
+                      }}
+                      sx={{
+                        minHeight: 40,
+                        borderRadius: 1,
+                        border: `1px solid ${selected ? colors.blue600 : colors.slate300}`,
+                        bgcolor: selected ? colors.blue600 : colors.slate100,
+                        color: selected ? colors.white : colors.slate600,
+                        fontWeight: 700,
+                        '&:hover': {
+                          bgcolor: selected ? colors.blue700 : colors.slate200,
+                          borderColor: selected ? colors.blue700 : colors.slate400,
+                        },
+                      }}
+                    >
+                      {kind}
+                    </Button>
+                  );
+                })}
+              </Box>
             </Box>
             <FormControl fullWidth size="small">
               <InputLabel id="equipment-name-select-label">Nombre (máquina/equipo)</InputLabel>
@@ -8864,23 +9320,31 @@ export default function ManagementPage() {
                 onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, equipment_name: String(e.target.value || '').toUpperCase() } : prev)}
               />
             ) : null}
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1.2fr) minmax(0, 1fr)' },
+                gap: 1,
+              }}
+            >
               <TextField
-                label="Patente / Nº"
+                  label="Patente / Nº / Serie"
+                  size="small"
+                  fullWidth
+                  value={String(equipmentDraft?.patent || '')}
+                  onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, patent: String(e.target.value || '').toLowerCase() } : prev)}
+                  inputProps={{ style: { textTransform: 'uppercase' } }}
+                />
+              <TextField
+                label="Aplicar desde"
                 size="small"
+                type="date"
                 fullWidth
-                value={String(equipmentDraft?.patent || '')}
-                onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, patent: String(e.target.value || '').toLowerCase() } : prev)}
-                inputProps={{ style: { textTransform: 'uppercase' } }}
+                value={String(equipmentEffectiveDate || equipmentDate || '').slice(0, 10)}
+                onChange={(e) => setEquipmentEffectiveDate(String(e.target.value || '').slice(0, 10))}
+                InputLabelProps={{ shrink: true }}
               />
-            <TextField
-              label="Aplicar desde"
-              size="small"
-              type="date"
-              fullWidth
-              value={String(equipmentEffectiveDate || equipmentDate || '').slice(0, 10)}
-              onChange={(e) => setEquipmentEffectiveDate(String(e.target.value || '').slice(0, 10))}
-              InputLabelProps={{ shrink: true }}
-            />
+            </Box>
             <Box
               sx={{
                 display: 'grid',
@@ -8992,21 +9456,38 @@ export default function ManagementPage() {
               value={equipmentDraft?.mileage_km === null || equipmentDraft?.mileage_km === undefined ? '' : String(equipmentDraft?.mileage_km)}
               onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, mileage_km: String(e.target.value).trim() === '' ? null : toNumber(e.target.value || 0) } : prev)}
             />
-            <TextField
-              label="Devolución / Término"
-              size="small"
-              type="date"
-              fullWidth
-              value={String(equipmentDraft?.return_date || '').slice(0, 10)}
-              onChange={(e) => setEquipmentDraft((prev) => {
-                if (!prev) return prev
-                const returnDate = String(e.target.value || '').slice(0, 10) || null
-                return returnDate
-                  ? { ...prev, return_date: returnDate, is_operational: false, in_maintenance: false, in_accreditation: false, in_breakdown: false }
-                  : { ...prev, return_date: null }
-              })}
-              InputLabelProps={{ shrink: true }}
-            />
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' },
+                gap: 1,
+              }}
+            >
+              <TextField
+                label="Ingreso"
+                size="small"
+                type="date"
+                fullWidth
+                value={String(equipmentDraft?.entry_date || '').slice(0, 10)}
+                onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, entry_date: String(e.target.value || '').slice(0, 10) || null } : prev)}
+                InputLabelProps={{ shrink: true }}
+              />
+              <TextField
+                label="Salida / Devolución"
+                size="small"
+                type="date"
+                fullWidth
+                value={String(equipmentDraft?.return_date || '').slice(0, 10)}
+                onChange={(e) => setEquipmentDraft((prev) => {
+                  if (!prev) return prev
+                  const returnDate = String(e.target.value || '').slice(0, 10) || null
+                  return returnDate
+                    ? { ...prev, return_date: returnDate, is_operational: false, in_maintenance: false, in_accreditation: false, in_breakdown: false }
+                    : { ...prev, return_date: null }
+                })}
+                InputLabelProps={{ shrink: true }}
+              />
+            </Box>
             <TextField
               label="Notas"
               size="small"
@@ -9141,6 +9622,69 @@ export default function ManagementPage() {
         onCancel={() => setDailyActivitiesConfirmFront(null)}
         onConfirm={toggleReportFrontDailyActivities}
       />
+      <Dialog
+        open={Boolean(equipmentPropagationConfirm)}
+        onClose={() => !equipmentSaving && setEquipmentPropagationConfirm(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Existen fechas posteriores</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1}>
+            <Typography sx={{ color: colors.slate700 }}>
+              Ya existen registros de equipos posteriores al {formatSpanishShortDate(equipmentPropagationConfirm?.targetDate || '')}.
+            </Typography>
+            <Typography sx={{ color: colors.slate600, fontSize: 14 }}>
+              Puedes guardar el cambio solo en esta fecha o aplicarlo también al mismo equipo en las fechas posteriores. Los demás equipos no se modificarán.
+            </Typography>
+            <Typography sx={{ color: colors.slate500, fontSize: 13 }}>
+              Fechas posteriores: {(equipmentPropagationConfirm?.futureDates || []).map(formatSpanishShortDate).join(', ')}.
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 1.5 }}>
+          <Button onClick={() => setEquipmentPropagationConfirm(null)} disabled={equipmentSaving}>Cancelar</Button>
+          <Button
+            variant="outlined"
+            disabled={equipmentSaving || !equipmentPropagationConfirm}
+            onClick={async () => {
+              const pending = equipmentPropagationConfirm;
+              if (!pending) return;
+              const ok = await persistEquipmentRows(pending.rows, pending.successMessage, pending.targetDate, {
+                identityKeys: pending.identityKeys,
+              });
+              if (ok) {
+                setEquipmentPropagationConfirm(null);
+                setEquipmentModalOpen(false);
+                setEquipmentDraft(null);
+                setEditingEquipmentIndex(null);
+              }
+            }}
+          >
+            Solo esta fecha
+          </Button>
+          <Button
+            variant="contained"
+            disabled={equipmentSaving || !equipmentPropagationConfirm}
+            onClick={async () => {
+              const pending = equipmentPropagationConfirm;
+              if (!pending) return;
+              const ok = await persistEquipmentRows(pending.rows, pending.successMessage, pending.targetDate, {
+                propagateToFuture: true,
+                identityKeys: pending.identityKeys,
+              });
+              if (ok) {
+                setEquipmentPropagationConfirm(null);
+                setEquipmentModalOpen(false);
+                setEquipmentDraft(null);
+                setEditingEquipmentIndex(null);
+              }
+            }}
+          >
+            Aplicar a fechas posteriores
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Snackbar
         open={!!notice}
         autoHideDuration={3500}

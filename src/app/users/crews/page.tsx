@@ -586,6 +586,55 @@ export default function CrewsPage() {
     return isCrewCreatedByLoggedUser(crew)
   }
 
+  function getCrewCreatorLabel(crew: any): string {
+    const creatorEmail = [crew?.created_by_email, crew?.owner_email, crew?.created_by_audit_email]
+      .map((value: any) => String(value || '').trim())
+      .find(Boolean)
+    if (creatorEmail) return `Creada por: ${creatorEmail}`
+
+    const creatorId = [
+      crew?.created_by_user_id,
+      crew?.created_by,
+      crew?.created_by_id,
+      crew?.creator_user_id,
+      crew?.user_id,
+      crew?.owner_user_id,
+      crew?.created_by_audit_user_id,
+    ].map((value: any) => String(value || '').trim()).find(Boolean)
+    if (creatorId) return `Creada por ID: ${creatorId}`
+
+    if (crew?.created_by_current_user === true) return 'Creada por el usuario actual (auditoría)'
+    return 'Creador no registrado'
+  }
+
+  function renderCrewCreatorHelper(crew: any) {
+    if (role !== 'admin' && role !== 'dev') return null
+
+    return (
+      <Tooltip title={getCrewCreatorLabel(crew)} arrow>
+        <span>
+          <IconButton
+            type="button"
+            size="small"
+            aria-label="Ver creador de cuadrilla"
+            sx={{
+              border: '1px solid',
+              borderColor: colors.gray8,
+              borderRadius: 1.5,
+              bgcolor: colors.white,
+              color: colors.slate500,
+              width: { xs: 30, sm: 34 },
+              height: { xs: 30, sm: 34 },
+              '&:hover': { bgcolor: colors.slate50 },
+            }}
+          >
+            <Info size={16} />
+          </IconButton>
+        </span>
+      </Tooltip>
+    )
+  }
+
   function getCrewFieldReportLockCount(crew: any): number {
     const count = Number(crew?.field_report_count ?? crew?.field_reports_count ?? 0)
     if (Number.isFinite(count) && count > 0) return count
@@ -4294,6 +4343,7 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
+                                        {renderCrewCreatorHelper(c)}
                                         {canDeleteCrew(c) ? renderDeleteCrewButton(c) : null}
                                       </>
                                     ) : (
@@ -4335,6 +4385,7 @@ export default function CrewsPage() {
                                             </span>
                                           </Tooltip>
                                         ) : null}
+                                        {renderCrewCreatorHelper(c)}
                                         {canDeleteCrew(c) ? renderDeleteCrewButton(c) : null}
                                       </>
                                     )}

@@ -64,6 +64,9 @@ const isCrewCreatedBySessionUser = (crew: any, session: any) => {
   return Boolean(userEmail && creatorEmailCandidates.some((value) => value === userEmail))
 }
 
+const hasCanonicalCrewCreator = (crew: any) =>
+  Boolean(String(crew?.created_by_user_id || '').trim() || normalizeIdentityText(crew?.created_by_email))
+
 const isCrewCreatedBySessionUserFromAudit = async (supabaseAdminClient: any, crewId: string, session: any) => {
   const id = String(crewId || '').trim()
   const userId = String(session?.user?.id || '').trim()
@@ -81,11 +84,18 @@ const isCrewCreatedBySessionUserFromAudit = async (supabaseAdminClient: any, cre
       .limit(25)
 
     if (error) return false
-    return (data || []).some((row: any) => {
+    const actorUserIds = new Set<string>()
+    const actorEmails = new Set<string>()
+    ;(data || []).forEach((row: any) => {
       const actorUserId = String(row?.actor_user_id || '').trim()
       const actorEmail = normalizeIdentityText(row?.actor_email)
-      return (userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)
+      if (actorUserId) actorUserIds.add(actorUserId)
+      if (actorEmail) actorEmails.add(actorEmail)
     })
+    if (actorUserIds.size > 1 || actorEmails.size > 1) return false
+    const actorUserId = Array.from(actorUserIds)[0] || ''
+    const actorEmail = Array.from(actorEmails)[0] || ''
+    return (userId && actorUserId === userId) || (userEmail && actorEmail === userEmail)
   } catch {
     return false
   }
@@ -585,11 +595,11 @@ export async function DELETE(req: NextRequest, ctx: any) {
     }
 
     if (!beforeCrew) return NextResponse.json({ error: 'Cuadrilla no encontrada' }, { status: 404 })
+    const ownedByStoredCreator = isCrewCreatedBySessionUser(beforeCrew, session)
+    const ownedByLegacyAudit = !hasCanonicalCrewCreator(beforeCrew) &&
+      await isCrewCreatedBySessionUserFromAudit(supabaseAdmin, id, session)
     const canDeleteCrew = role === 'admin' || role === 'dev' || (
-      role === 'user' && (
-        isCrewCreatedBySessionUser(beforeCrew, session) ||
-        await isCrewCreatedBySessionUserFromAudit(supabaseAdmin, id, session)
-      )
+      role === 'user' && (ownedByStoredCreator || ownedByLegacyAudit)
     )
     if (!canDeleteCrew) {
       return NextResponse.json({ error: 'Forbidden: solo admin/dev o el usuario creador puede eliminar esta cuadrilla' }, { status: 403 })
