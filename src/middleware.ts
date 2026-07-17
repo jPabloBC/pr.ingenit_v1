@@ -14,7 +14,8 @@ const RESOURCE_MAP: Record<string, string> = {
   '/users/profile': 'profile',
   '/users/admin/permissions': 'admin-permissions',
   '/users/management': 'management',
-  '/users/settings': 'settings'
+  '/users/settings': 'settings',
+  '/users/communications': 'communications'
 }
 
 // Keep middleware aligned with Aside/API during permission key migrations.
@@ -84,6 +85,15 @@ export async function middleware(req: NextRequest) {
   // even when project permissions are not yet assigned.
   if (resource === 'daily-report' && (role === 'user' || role === 'viewer')) {
     return NextResponse.next()
+  }
+
+  // Communications contains recipient data and delivery actions: admin only.
+  if (resource === 'communications') {
+    if (role === 'admin') return NextResponse.next()
+
+    const url = new URL('/users/dashboard', req.nextUrl.origin)
+    url.searchParams.set('error', 'access_denied')
+    return NextResponse.redirect(url)
   }
   
   // Check if user has permission: wildcard, explicit resource, or legacy alias.

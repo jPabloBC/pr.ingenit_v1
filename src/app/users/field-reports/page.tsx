@@ -24,6 +24,7 @@ import {
   ListItem,
   Stack,
   MenuItem,
+  ListSubheader,
   Checkbox,
   Tooltip,
   FormControlLabel,
@@ -12214,10 +12215,10 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
 
                         <tr>
                           <td style={{ border: '1px solid #111827', fontWeight: 700, textAlign: 'center', background: '#e5e7eb' }}>N°</td>
-                          <td colSpan={2} style={{ border: '1px solid #111827', fontWeight: 700, textAlign: 'center', background: '#e5e7eb' }}>PATENTE</td>
+                          <td colSpan={2} style={{ border: '1px solid #111827', fontWeight: 700, textAlign: 'center', background: '#e5e7eb' }}>PATENTE / SERIE</td>
                           <td colSpan={8} style={{ border: '1px solid #111827', fontWeight: 700, textAlign: 'center', background: '#e5e7eb' }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-                              <span>MAQUINARIA DE APOYO</span>
+                              <span>EQUIPOS / MAQUINARIA DE APOYO</span>
                               {!isView ? (
                                 <Button
                                   size="small"
@@ -12246,6 +12247,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               value: `${String(item.equipment_name || '').trim()}|||${String(item.patent || '').trim()}`,
                               label: String(item.equipment_name || '').trim(),
                               patent: String(item.patent || '').trim(),
+                              kind: String(item.equipment_kind || '').trim().toUpperCase(),
                               isOperational: item.is_operational !== false
                             }))
                             .filter((item) => item.label)
@@ -12306,24 +12308,55 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                     }}
                                     sx={{ width: '100%', '& .MuiInputBase-input': { fontSize: 12, py: 0.5 } }}
                                   >
-                                    <MenuItem value=""><em>SELECCIONAR EQUIPO</em></MenuItem>
+                                    <MenuItem value="" sx={{ minHeight: 34, fontSize: 13, color: '#475569' }}>
+                                      <em>SELECCIONAR EQUIPO</em>
+                                    </MenuItem>
                                     {!hasCurrentInOptions && currentName ? (
-                                      <MenuItem value={currentSelectValue} disabled={currentIsKnownNonOperational}>
+                                      <MenuItem
+                                        value={currentSelectValue}
+                                        disabled={currentIsKnownNonOperational}
+                                        sx={{ minHeight: 34, py: 0.75, px: 2.5, fontSize: 13, color: '#1f2937' }}
+                                      >
                                         {currentName.toUpperCase()}{currentPatent ? ` (${currentPatent.toUpperCase()})` : ''}
                                         {currentIsKnownNonOperational ? ' (NO OPERATIVA)' : ''}
                                       </MenuItem>
                                     ) : null}
-                                    {equipmentOptions.map((opt) => {
-                                      const [optName, optPatent] = String(opt.value || '').split('|||')
-                                      const optKey = normalizeMachineKey({ description: optName, code: optPatent })
-                                      const optUsedByOther = Boolean(optKey && usedMachineKeysByOtherReports.has(optKey))
-                                      const isCurrent = opt.value === currentSelectValue
-                                      return (
-                                      <MenuItem key={`equip-catalog-${machineIdx}-${opt.value}`} value={opt.value}>
-                                        {opt.label.toUpperCase()}{opt.patent ? ` (${opt.patent.toUpperCase()})` : ''}
-                                        {optUsedByOther && !isCurrent ? ' (USADO EN OTRO REPORTE)' : ''}
-                                      </MenuItem>
-                                    )})}
+                                    {(['MAYOR', 'MENOR'] as const).flatMap((kind) => {
+                                      const groupedOptions = equipmentOptions.filter((opt) => opt.kind === kind)
+                                      if (groupedOptions.length === 0) return []
+                                      return [
+                                        <ListSubheader
+                                          key={`equip-group-${machineIdx}-${kind}`}
+                                          sx={{
+                                            bgcolor: '#e9eef5',
+                                            color: '#0b2f5b',
+                                            fontWeight: 800,
+                                            fontSize: 14,
+                                            lineHeight: '38px',
+                                            borderTop: '1px solid #cbd5e1',
+                                            borderBottom: '1px solid #cbd5e1',
+                                          }}
+                                        >
+                                          {kind === 'MAYOR' ? 'EQUIPOS MAYORES' : 'EQUIPOS MENORES'}
+                                        </ListSubheader>,
+                                        ...groupedOptions.map((opt) => {
+                                          const [optName, optPatent] = String(opt.value || '').split('|||')
+                                          const optKey = normalizeMachineKey({ description: optName, code: optPatent })
+                                          const optUsedByOther = Boolean(optKey && usedMachineKeysByOtherReports.has(optKey))
+                                          const isCurrent = opt.value === currentSelectValue
+                                          return (
+                                            <MenuItem
+                                              key={`equip-catalog-${machineIdx}-${opt.value}`}
+                                              value={opt.value}
+                                              sx={{ minHeight: 34, py: 0.75, px: 2.5, fontSize: 13, color: '#1f2937' }}
+                                            >
+                                              {opt.label.toUpperCase()}{opt.patent ? ` (${opt.patent.toUpperCase()})` : ''}
+                                              {optUsedByOther && !isCurrent ? ' (USADO EN OTRO REPORTE)' : ''}
+                                            </MenuItem>
+                                          )
+                                        })
+                                      ]
+                                    })}
                                   </TextField>
                                 )}
                               </td>
@@ -13265,8 +13298,8 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                       <thead>
                         <tr style={{ background: '#f5f5f5', fontWeight: 600 }}>
                           <th style={{ border: '1px solid #ccc', padding: '6px 8px', width: 40 }}>N°</th>
-                          <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 140 }}>Código equipo</th>
-                          <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 260 }}>Descripción equipos</th>
+                          <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 140 }}>PATENTE / SERIE</th>
+                          <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 260 }}>EQUIPOS / MAQUINARIA DE APOYO</th>
                           <th style={{ border: '1px solid #ccc', padding: '6px 8px', minWidth: 300 }}>Descripción Actividad</th>
                           {Array.from({ length: activityCount }).map((_, idx) => (
                             <th key={idx} style={activityThStyle}>{`Act. ${idx + 1} [HH]`}</th>
@@ -13284,6 +13317,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                               value: `${String(item.equipment_name || '').trim()}|||${String(item.patent || '').trim()}`,
                               label: String(item.equipment_name || '').trim(),
                               patent: String(item.patent || '').trim(),
+                              kind: String(item.equipment_kind || '').trim().toUpperCase(),
                               isOperational: item.is_operational !== false
                             }))
                             .filter((item) => item.label)
@@ -13333,24 +13367,55 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                                     }}
                                     sx={{ width: '100%', '& .MuiInputBase-input': { fontSize: 13, padding: '6px 8px' } }}
                                   >
-                                    <MenuItem value=""><em>SELECCIONAR EQUIPO</em></MenuItem>
+                                    <MenuItem value="" sx={{ minHeight: 34, fontSize: 13, color: '#475569' }}>
+                                      <em>SELECCIONAR EQUIPO</em>
+                                    </MenuItem>
                                     {!hasCurrentInOptions && currentName ? (
-                                      <MenuItem value={currentSelectValue} disabled={currentIsKnownNonOperational}>
+                                      <MenuItem
+                                        value={currentSelectValue}
+                                        disabled={currentIsKnownNonOperational}
+                                        sx={{ minHeight: 34, py: 0.75, px: 2.5, fontSize: 13, color: '#1f2937' }}
+                                      >
                                         {currentName.toUpperCase()}{currentPatent ? ` (${currentPatent.toUpperCase()})` : ''}
                                         {currentIsKnownNonOperational ? ' (NO OPERATIVA)' : ''}
                                       </MenuItem>
                                     ) : null}
-                                    {equipmentOptions.map((opt) => {
-                                      const [optName, optPatent] = String(opt.value || '').split('|||')
-                                      const optKey = normalizeMachineKey({ description: optName, code: optPatent })
-                                      const optUsedByOther = Boolean(optKey && usedMachineKeysByOtherReports.has(optKey))
-                                      const isCurrent = opt.value === currentSelectValue
-                                      return (
-                                      <MenuItem key={`equip-catalog-grid-${rowIdx}-${opt.value}`} value={opt.value}>
-                                        {opt.label.toUpperCase()}{opt.patent ? ` (${opt.patent.toUpperCase()})` : ''}
-                                        {optUsedByOther && !isCurrent ? ' (USADO EN OTRO REPORTE)' : ''}
-                                      </MenuItem>
-                                    )})}
+                                    {(['MAYOR', 'MENOR'] as const).flatMap((kind) => {
+                                      const groupedOptions = equipmentOptions.filter((opt) => opt.kind === kind)
+                                      if (groupedOptions.length === 0) return []
+                                      return [
+                                        <ListSubheader
+                                          key={`equip-grid-group-${rowIdx}-${kind}`}
+                                          sx={{
+                                            bgcolor: '#e9eef5',
+                                            color: '#0b2f5b',
+                                            fontWeight: 800,
+                                            fontSize: 14,
+                                            lineHeight: '38px',
+                                            borderTop: '1px solid #cbd5e1',
+                                            borderBottom: '1px solid #cbd5e1',
+                                          }}
+                                        >
+                                          {kind === 'MAYOR' ? 'EQUIPOS MAYORES' : 'EQUIPOS MENORES'}
+                                        </ListSubheader>,
+                                        ...groupedOptions.map((opt) => {
+                                          const [optName, optPatent] = String(opt.value || '').split('|||')
+                                          const optKey = normalizeMachineKey({ description: optName, code: optPatent })
+                                          const optUsedByOther = Boolean(optKey && usedMachineKeysByOtherReports.has(optKey))
+                                          const isCurrent = opt.value === currentSelectValue
+                                          return (
+                                            <MenuItem
+                                              key={`equip-catalog-grid-${rowIdx}-${opt.value}`}
+                                              value={opt.value}
+                                              sx={{ minHeight: 34, py: 0.75, px: 2.5, fontSize: 13, color: '#1f2937' }}
+                                            >
+                                              {opt.label.toUpperCase()}{opt.patent ? ` (${opt.patent.toUpperCase()})` : ''}
+                                              {optUsedByOther && !isCurrent ? ' (USADO EN OTRO REPORTE)' : ''}
+                                            </MenuItem>
+                                          )
+                                        })
+                                      ]
+                                    })}
                                   </TextField>
                                 )}
                               </td>

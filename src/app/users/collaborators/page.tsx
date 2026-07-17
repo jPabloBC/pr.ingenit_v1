@@ -70,6 +70,7 @@ import CountryPhoneInput from '../../../components/CountryPhoneInput'
 import UserHeader from '../../../components/layout/UserHeader'
 import { AttendanceView } from '../../../components/attendance/AttendanceView'
 import { normalizeText, normalizeUppercaseDisplayText } from '../../../lib/normalize'
+import { notifyAttendanceDataUpdated } from '../../../lib/attendanceDataRefresh'
 
 interface Collaborator {
   id: string
@@ -2859,6 +2860,9 @@ export default function CollaboratorsPage() {
 
       if (!json) throw new Error('No se recibió resumen de importación')
       if (COLLABORATORS_DEBUG) console.log('Execute import: response=', json)
+      if (Number(json.attendance_rows_written || 0) > 0 || Number(json.inserted || 0) > 0) {
+        notifyAttendanceDataUpdated()
+      }
       setImporting(false)
       if (!opts.keepDialogState) resetImportState()
       const detectedDates = Array.isArray(json.attendance_dates_detected) ? json.attendance_dates_detected : []

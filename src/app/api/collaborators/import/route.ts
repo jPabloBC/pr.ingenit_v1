@@ -324,6 +324,19 @@ export async function POST(req: NextRequest) {
       const documentsMatchedSet = new Set<string>()
       const documentsNotFoundSet = new Set<string>()
       const documentsAttendanceUpdatedSet = new Set<string>()
+      type DailyStatusPayload = {
+        company_id: string
+        collaborator_id: string
+        work_date: string
+        status: string
+        reason: string | null
+        updated_by: string | null
+      }
+      type PendingDailyStatus = {
+        payload: DailyStatusPayload
+        sourceRow: number
+      }
+      const pendingDailyStatuses = new Map<string, PendingDailyStatus>()
       const errors: any[] = []
       let filtered_out = 0
       const today = new Date().toISOString().slice(0, 10)
@@ -627,14 +640,7 @@ export async function POST(req: NextRequest) {
           }
 
           const writeAllDailyStatuses = async (collaboratorId: string) => {
-            const payloads: Array<{
-              company_id: string
-              collaborator_id: string
-              work_date: string
-              status: string
-              reason: string | null
-              updated_by: string | null
-            }> = []
+            const payloads: DailyStatusPayload[] = []
 
             for (const entry of attendanceEntriesForImport) {
               if (!entry.work_date) continue
@@ -649,46 +655,15 @@ export async function POST(req: NextRequest) {
 
             const uniqueByDate = new Map<string, (typeof payloads)[number]>()
             for (const item of payloads) uniqueByDate.set(String(item.work_date), item)
-            let deduped = Array.from(uniqueByDate.values())
+            const deduped = Array.from(uniqueByDate.values())
 
-            if (attendanceWriteMode === 'insert_only' && deduped.length > 0) {
-              const dates = deduped.map((row) => String(row.work_date)).filter(Boolean)
-              const { data: existingRows, error: existingErr } = await supabaseAdmin
-                .from('pr_collaborator_daily_status')
-                .select('work_date')
-                .eq('company_id', session.user.companyId)
-                .eq('collaborator_id', collaboratorId)
-                .in('work_date', dates)
-
-              if (existingErr) {
-                throw new Error(`Error consultando asistencia existente (${collaboratorId}): ${existingErr.message}`)
-              }
-
-              const existingDateSet = new Set((existingRows || []).map((row: any) => String(row?.work_date || '')).filter(Boolean))
-              deduped = deduped.filter((row) => !existingDateSet.has(String(row.work_date)))
+            for (const payload of deduped) {
+              const key = `${payload.collaborator_id}:${payload.work_date}`
+              // insert_only preserves the first value, matching the previous
+              // read-before-insert behavior. Upsert preserves the latest value.
+              if (attendanceWriteMode === 'insert_only' && pendingDailyStatuses.has(key)) continue
+              pendingDailyStatuses.set(key, { payload, sourceRow: i + 1 })
             }
-
-            if (deduped.length === 0) return
-
-            const BATCH_SIZE = 300
-            for (let start = 0; start < deduped.length; start += BATCH_SIZE) {
-              const batch = deduped.slice(start, start + BATCH_SIZE)
-              const writeBuilder = supabaseAdmin.from('pr_collaborator_daily_status')
-              const writeResult = attendanceWriteMode === 'upsert'
-                ? await writeBuilder.upsert(batch, { onConflict: 'company_id,collaborator_id,work_date' })
-                : await writeBuilder.insert(batch)
-              const upsertError = writeResult.error
-
-              if (upsertError) {
-                if (String(upsertError.code) === '42P01') {
-                  throw new Error('Tabla pr_collaborator_daily_status no existe. Ejecuta migración.')
-                }
-                throw new Error(`Error escribiendo asistencia (${collaboratorId}): ${upsertError.message}`)
-              }
-            }
-
-            attendanceRowsWritten += deduped.length
-            deduped.forEach((row) => attendanceDatesWrittenSet.add(String(row.work_date)))
           }
 
           if (!attendanceOnly && onDuplicate === 'skip' && existingTarget) {
@@ -934,6 +909,102 @@ export async function POST(req: NextRequest) {
               percent,
               current: i + 1,
               total: rows.length,
+            })
+          }
+        }
+      }
+
+      if (pendingDailyStatuses.size > 0) {
+        push({
+          stage: 'writing_attendance',
+          message: `Guardando asistencia (${pendingDailyStatuses.size} registros)...`,
+          percent: 91,
+        })
+
+        let pendingRows = Array.from(pendingDailyStatuses.values())
+
+        if (attendanceWriteMode === 'insert_only') {
+          const collaboratorIds = Array.from(new Set(pendingRows.map((item) => item.payload.collaborator_id)))
+          const workDates = Array.from(new Set(pendingRows.map((item) => item.payload.work_date)))
+          const existingKeys = new Set<string>()
+          // Keep the maximum possible result below Supabase's usual 1,000-row
+          // response limit so existing statuses are never missed.
+          const ID_CHUNK_SIZE = 75
+          const DATE_CHUNK_SIZE = 10
+
+          for (let idStart = 0; idStart < collaboratorIds.length; idStart += ID_CHUNK_SIZE) {
+            const idChunk = collaboratorIds.slice(idStart, idStart + ID_CHUNK_SIZE)
+            for (let dateStart = 0; dateStart < workDates.length; dateStart += DATE_CHUNK_SIZE) {
+              const dateChunk = workDates.slice(dateStart, dateStart + DATE_CHUNK_SIZE)
+              const { data: existingRows, error: existingErr } = await supabaseAdmin
+                .from('pr_collaborator_daily_status')
+                .select('collaborator_id, work_date')
+                .eq('company_id', session.user.companyId)
+                .in('collaborator_id', idChunk)
+                .in('work_date', dateChunk)
+
+              if (existingErr) {
+                throw new Error(`Error consultando asistencia existente: ${existingErr.message}`)
+              }
+
+              for (const row of existingRows || []) {
+                existingKeys.add(`${String(row?.collaborator_id || '')}:${String(row?.work_date || '')}`)
+              }
+            }
+          }
+
+          pendingRows = pendingRows.filter((item) => {
+            const key = `${item.payload.collaborator_id}:${item.payload.work_date}`
+            return !existingKeys.has(key)
+          })
+        }
+
+        const markWritten = (items: PendingDailyStatus[]) => {
+          attendanceRowsWritten += items.length
+          items.forEach((item) => attendanceDatesWrittenSet.add(String(item.payload.work_date)))
+        }
+        const writePendingRows = async (items: PendingDailyStatus[]) => {
+          const payloads = items.map((item) => item.payload)
+          const writeBuilder = supabaseAdmin.from('pr_collaborator_daily_status')
+          return attendanceWriteMode === 'upsert'
+            ? await writeBuilder.upsert(payloads, { onConflict: 'company_id,collaborator_id,work_date' })
+            : await writeBuilder.insert(payloads)
+        }
+
+        const WRITE_BATCH_SIZE = 300
+        for (let start = 0; start < pendingRows.length; start += WRITE_BATCH_SIZE) {
+          const batch = pendingRows.slice(start, start + WRITE_BATCH_SIZE)
+          const batchResult = await writePendingRows(batch)
+          if (!batchResult.error) {
+            markWritten(batch)
+            continue
+          }
+
+          if (String(batchResult.error.code) === '42P01') {
+            throw new Error('Tabla pr_collaborator_daily_status no existe. Ejecuta migración.')
+          }
+
+          // Preserve the previous fault isolation: if a bulk write fails,
+          // retry each collaborator independently and report only failures.
+          const byCollaborator = new Map<string, PendingDailyStatus[]>()
+          for (const item of batch) {
+            const collaboratorId = item.payload.collaborator_id
+            const group = byCollaborator.get(collaboratorId) || []
+            group.push(item)
+            byCollaborator.set(collaboratorId, group)
+          }
+
+          for (const [collaboratorId, group] of byCollaborator.entries()) {
+            const retryResult = await writePendingRows(group)
+            if (!retryResult.error) {
+              markWritten(group)
+              continue
+            }
+            errors.push({
+              row: group[0]?.sourceRow || null,
+              reason: 'Error escribiendo asistencia',
+              details: retryResult.error.message,
+              id: collaboratorId,
             })
           }
         }

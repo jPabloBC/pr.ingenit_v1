@@ -50,13 +50,14 @@ const RESOURCES = [
   { key: 'program', label: 'Programa' },
   { key: 'admin-permissions', label: 'Administración' },
   { key: 'management', label: 'Gestión y Datos' },
+  { key: 'communications', label: 'Comunicaciones' },
   { key: 'settings', label: 'Ajustes' },
   { key: 'profile', label: 'Perfil' },
   { key: 'epp', label: 'EPP' },
   { key: 'payroll', label: 'Nómina' }
 ]
 
-const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions'])
+const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions', 'communications'])
 const HIDDEN_RESOURCE_KEYS = new Set<string>(['epp', 'payroll'])
 
 export default function Page() {

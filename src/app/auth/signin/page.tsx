@@ -136,8 +136,22 @@ export default function SignIn() {
         alignItems: 'center',
         py: { xs: 1, sm: 3, md: 4 },
         position: 'relative',
+        overflow: 'hidden',
         '@media (max-height: 760px), (max-width: 1366px)': {
           py: { md: 1.75 },
+        },
+        '@media (prefers-reduced-motion: reduce)': {
+          '&::after': {
+            animation: 'none',
+          },
+        },
+        '@keyframes signinBackgroundDrift': {
+          '0%': {
+            transform: 'translate3d(-3%, -2%, 0)',
+          },
+          '100%': {
+            transform: 'translate3d(3%, 2%, 0)',
+          },
         },
         '&::before': {
           content: '""',
@@ -148,6 +162,16 @@ export default function SignIn() {
           bottom: 0,
           background: `radial-gradient(ellipse at center, transparent 0%, ${colors.blue1}40 100%)`,
           pointerEvents: 'none'
+        },
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          inset: '-25%',
+          background: `repeating-linear-gradient(115deg, transparent 0 150px, ${colors.white}0D 150px 151px)`,
+          opacity: 0.65,
+          animation: 'signinBackgroundDrift 24s ease-in-out infinite alternate',
+          willChange: 'transform',
+          pointerEvents: 'none',
         }
       }}
     >
@@ -169,7 +193,7 @@ export default function SignIn() {
           <Paper 
             elevation={8} 
             sx={{ 
-              p: { xs: 1.35, sm: 3, md: 4 },
+              p: { xs: 2, sm: 2.75, md: 3 },
               width: { xs: 'min(calc(100vw - 32px), 410px)', sm: '100%' },
               mx: 'auto',
               maxWidth: { xs: 410, sm: 500, md: 460 },
@@ -189,7 +213,7 @@ export default function SignIn() {
           >
             <Box
               textAlign="center"
-              mb={{ xs: 1, sm: 2.5, md: 3 }}
+              mb={{ xs: 1.5, sm: 1.75, md: 2 }}
               onClick={() => router.push('/')}
               sx={{ cursor: 'pointer' }}
               role="link"
@@ -205,17 +229,17 @@ export default function SignIn() {
                 style={{ 
                   maxWidth: '100%',
                   height: 'auto',
-                  marginTop: '20px',
+                  marginTop: '4px',
                 }}
               />
             </Box>
 
-            <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1 }}>
+            <Box component="form" onSubmit={handleSubmit} sx={{ mt: .5 }}>
               {error && (
                 <Alert 
                   severity="error" 
                   sx={{ 
-                    mb: 2,
+                    mb: 1.5,
                     backgroundColor: `${colors.gold7}50`,
                     color: colors.gold1,
                     borderLeft: `4px solid ${colors.gold2}`,
@@ -231,7 +255,7 @@ export default function SignIn() {
               <Typography
                 variant="body2"
                 sx={{
-                  mb: { xs: 1.2, sm: 1.8, md: 2 },
+                  mb: { xs: 1.5, sm: 1.75 },
                   textAlign: 'center',
                   color: colors.blue11,
                   fontWeight: 400,
@@ -243,7 +267,7 @@ export default function SignIn() {
               </Typography>
               
               <TextField
-                margin="normal"
+                margin="none"
                 required
                 fullWidth
                 id="email"
@@ -255,8 +279,9 @@ export default function SignIn() {
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading || redirecting}
                 sx={{
-                  mb: 1.35,
+                  mb: 2.5,
                   '& .MuiOutlinedInput-root': {
+                    height: 48,
                     borderRadius: 2,
                     '&:hover fieldset': {
                       borderColor: colors.blue6,
@@ -274,7 +299,7 @@ export default function SignIn() {
               />
               
               <TextField
-                margin="normal"
+                margin="none"
                 required
                 fullWidth
                 name="password"
@@ -286,8 +311,19 @@ export default function SignIn() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading || redirecting}
                 sx={{
-                  mb: 1.8,
+                  mb: 2.5,
+                  '& input::-ms-reveal, & input::-ms-clear': {
+                    display: 'none',
+                  },
+                  '& input::-webkit-credentials-auto-fill-button': {
+                    visibility: 'hidden',
+                    display: 'none !important',
+                    pointerEvents: 'none',
+                    position: 'absolute',
+                    right: 0,
+                  },
                   '& .MuiOutlinedInput-root': {
+                    height: 48,
                     borderRadius: 2,
                     '&:hover fieldset': {
                       borderColor: colors.blue6,
@@ -319,7 +355,7 @@ export default function SignIn() {
               />
 
               {attemptsThisSession >= 3 && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 1.5 }}>
                   {resetError ? (
                     <Typography variant="body2" color="error" sx={{ mb: 1 }}>{resetError}</Typography>
                   ) : resetMessage ? (
@@ -390,11 +426,13 @@ export default function SignIn() {
                 variant="contained"
                 disabled={loading || redirecting}
                 sx={{ 
-                  py: { xs: 1.15, sm: 1.4, md: 1.5 },
+                  minHeight: 46,
+                  py: 0,
                   fontSize: { xs: '0.95rem', sm: '1.05rem', md: '1.08rem' },
                   fontWeight: 600,
                   '@media (max-height: 760px), (max-width: 1366px)': {
-                    py: { md: 1 },
+                    minHeight: 44,
+                    py: 0,
                     fontSize: { md: '0.98rem' },
                   },
                   borderRadius: 2,

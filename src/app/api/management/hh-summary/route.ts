@@ -1192,6 +1192,42 @@ const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
   }
 }
 
+const buildDailyReportDailySummaryMap = (dailyReports: any[]) => {
+  const byDate = new Map<string, {
+    direct_hh: number
+    indirect_hh: number
+    total_hh: number
+    report_count: number
+  }>()
+
+  getLatestDailyReports(dailyReports).forEach((record: any) => {
+    const date = String(record?.report_date || '').slice(0, 10)
+    if (!date) return
+
+    const summary = pickDailyReportSummaryHh(record)
+    const directRowsTotal = getDailyReportDirectSnapshotRows(record)
+      .reduce((acc: number, row: any) => acc + Number(row?.hh || 0), 0)
+    const indirectRowsTotal = getDailyReportIndirectSnapshotRows(record)
+      .reduce((acc: number, row: any) => acc + Number(row?.hh || 0), 0)
+    const directHh = directRowsTotal > 0 ? directRowsTotal : summary.directHh
+    const indirectHh = indirectRowsTotal > 0 ? indirectRowsTotal : summary.indirectHh
+    const current = byDate.get(date) || {
+      direct_hh: 0,
+      indirect_hh: 0,
+      total_hh: 0,
+      report_count: 0,
+    }
+
+    current.direct_hh += directHh
+    current.indirect_hh += indirectHh
+    current.total_hh = current.direct_hh + current.indirect_hh
+    current.report_count += 1
+    byDate.set(date, current)
+  })
+
+  return byDate
+}
+
 const buildSummary = (
   reports: any[],
   dateFrom: string,
@@ -1203,6 +1239,7 @@ const buildSummary = (
 ) => {
   const matrixDates = listDateKeysBetween(dateFrom, dateTo)
   const matrixWeeks = buildProjectWeeksBetween(dateFrom, dateTo)
+  const dailyReportSummaryByDate = buildDailyReportDailySummaryMap(dailyReports)
   const directHhByDaySpecialtyMap = new Map<string, { date: string; specialty: string; reports: number; peopleRows: number; hh: number; hhExtras: number }>()
   const peopleByDaySpecialty = new Map<string, Set<string>>()
   const rowsByMatrixKey = new Map<string, HhMatrixRow & { people: Set<string>; reportSet: Set<string> }>()
@@ -1388,6 +1425,7 @@ const buildSummary = (
   })
 
   const dashboardByDay = Array.from(dayMap.values()).map((day) => {
+    const dailyReportSummary = dailyReportSummaryByDate.get(day.date)
     const sortedByFront = sortGroups(Array.from(day.byFront.values()))
     const directAssigneeByFront = new Map<string, number>()
     const primaryFrontByPerson = new Map<string, string>()
@@ -1406,6 +1444,10 @@ const buildSummary = (
       date: day.date,
       hh: day.hh,
       hhExtras: day.hhExtras,
+      dailyReportDirectHh: Number(dailyReportSummary?.direct_hh || 0),
+      dailyReportIndirectHh: Number(dailyReportSummary?.indirect_hh || 0),
+      dailyReportHh: Number(dailyReportSummary?.total_hh || 0),
+      dailyReportCount: Number(dailyReportSummary?.report_count || 0),
       peopleRows: day.directPeople.size,
       reports: day.reports.size,
       indirectTurnoTotal: indirectTurnoRows.reduce((acc, item) => acc + Number(item.peopleRows || 0), 0),
