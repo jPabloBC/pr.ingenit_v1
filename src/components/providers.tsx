@@ -7,6 +7,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns'
 import { es } from 'date-fns/locale'
 import { theme } from '../theme/theme'
+import { AppSnackbarProvider } from '@/components/ui/AppSnackbarProvider'
 
 interface ProvidersProps {
   children: React.ReactNode
@@ -18,7 +19,7 @@ export default function Providers({ children }: ProvidersProps) {
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={es}>
-          {children}
+          <AppSnackbarProvider>{children}</AppSnackbarProvider>
         </LocalizationProvider>
       </ThemeProvider>
     </SessionProvider>

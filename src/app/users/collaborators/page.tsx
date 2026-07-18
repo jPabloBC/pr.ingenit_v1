@@ -19,7 +19,6 @@ import {
   Chip,
   CircularProgress,
   Container,
-  Fab,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -68,6 +67,7 @@ import { getSuggestedPositions, findSimilarPositions, isStandardPosition, valida
 import { IndustryType } from '../../../types'
 import CountryPhoneInput from '../../../components/CountryPhoneInput'
 import UserHeader from '../../../components/layout/UserHeader'
+import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton'
 import { AttendanceView } from '../../../components/attendance/AttendanceView'
 import { normalizeText, normalizeUppercaseDisplayText } from '../../../lib/normalize'
 import { notifyAttendanceDataUpdated } from '../../../lib/attendanceDataRefresh'
@@ -5536,41 +5536,7 @@ export default function CollaboratorsPage() {
           </Menu>
 
           {/* FAB para agregar colaborador */}
-          {!showAttendanceForUser && (
-          <Fab
-            aria-label="Agregar colaborador"
-            onClick={handleAddCollaborator}
-            sx={{
-              position: 'fixed',
-              top: { xs: 108, sm: 118 },
-              right: { xs: 16, sm: 28 },
-              zIndex: 1200,
-              bgcolor: colors.blue1,
-              color: '#ffffff',
-              border: '2px solid #7dd3fc',
-              boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
-              '&:hover': {
-                bgcolor: colors.blue1,
-                borderColor: '#bae6fd',
-                boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
-                '& .plus-icon': {
-                  color: '#7dd3fc',
-                  transform: 'scale(1.18)',
-                },
-              },
-            }}
-          >
-            <Add
-              className="plus-icon"
-              sx={{
-                fontSize: 30,
-                strokeWidth: 2,
-                color: colors.blue14,
-                transition: 'color 160ms ease, transform 160ms ease',
-              }}
-            />
-          </Fab>
-          )}
+          {!showAttendanceForUser && <AppFloatingActionButton ariaLabel="Agregar colaborador" tooltip="Agregar colaborador" offset="tabs" onClick={handleAddCollaborator} />}
 
           {/* Dialog para agregar/editar colaborador */}
           <Dialog open={openDialog} onClose={() => { resetCollaboratorForm(); setEditingCollaborator(null); setOpenDialog(false); }} maxWidth="md" fullWidth>

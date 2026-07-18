@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
-const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions', 'communications'])
+const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions'])
 
 export async function GET(req: NextRequest, { params }: any) {
   try {

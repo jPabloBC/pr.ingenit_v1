@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { canEditCommunications, getCommunicationsActor } from '@/lib/communications'
+import { getCommunicationsActor } from '@/lib/communications'
 import { createR2PresignedUrl } from '@/lib/r2Presign'
 import { sendNotificationMail } from '@/lib/notificationMailer'
 import { sendWhatsAppBridgeMessages } from '@/lib/whatsappBridge'
+import { todayYmd } from '@/lib/staffing/availableCollaborators'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 
 const MAX_RECIPIENTS = 300
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -14,6 +16,23 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const clean = (value: unknown) => String(value || '').trim()
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char))
 const normalPhone = (value: unknown) => clean(value).replace(/[^0-9]/g, '')
+const attendanceStatus = (status: unknown, reason: unknown) => {
+  const currentStatus = clean(status)
+  const currentReason = clean(reason).toLocaleLowerCase('es-CL')
+  if (!currentStatus) {
+    if (currentReason === '11' || currentReason.includes('turno') || currentReason.includes('presente')) return 'Turno'
+    if (currentReason === 'd' || currentReason.includes('descanso')) return 'Descanso'
+    if (currentReason === 'fo' || currentReason.includes('fuera de obra')) return 'Fuera de Obra'
+    if (currentReason === 'ac' || currentReason.includes('acreditacion')) return 'Acreditacion'
+    if (currentReason === 'p' || currentReason.includes('permiso')) return 'Permiso'
+    if (currentReason === 'l' || currentReason.includes('licencia')) return 'Licencia'
+    if (currentReason === 'f' || currentReason.includes('falla')) return 'Falla'
+    if (currentReason === 'vac' || currentReason.includes('vacacion')) return 'Vacaciones'
+    if (currentReason === 'fin' || currentReason.includes('finiquit')) return 'Finiquitado'
+  }
+  if (currentStatus === 'Otro' && (currentReason === 'fo' || currentReason.includes('fuera de obra'))) return 'Fuera de Obra'
+  return currentStatus || 'Sin registro'
+}
 
 const attachmentDownload = async (key: string) => {
   const bucket = process.env.R2_BUCKET_NAME
@@ -29,39 +48,55 @@ const attachmentDownload = async (key: string) => {
 
 export async function GET() {
   try {
-    const { actor, allowed } = await getCommunicationsActor()
+    const { actor, allowed, canSend, canManageForms } = await getCommunicationsActor()
     if (!actor?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-    const [collaboratorsResult, campaignsResult] = await Promise.all([
-      supabaseAdmin
+    const currentAttendanceDate = todayYmd()
+    const [collaboratorsResult, campaignsResult, attendanceResult] = await Promise.all([
+      (canSend || canManageForms) ? supabaseAdmin
         .from('pr_collaborators')
-        .select('id, first_name, last_name, position, specialty, phone, email')
+        .select('id, first_name, last_name, document, position, specialty, worker_type, shift_pattern, phone, email')
         .eq('company_id', actor.companyId)
         .eq('is_active', true)
         .order('position', { ascending: true })
-        .order('last_name', { ascending: true }),
-      supabaseAdmin
+        .order('last_name', { ascending: true }) : Promise.resolve({ data: [], error: null }),
+      canSend ? supabaseAdmin
         .from('pr_communication_campaigns')
         .select('id, title, message, channels, recipient_filter, attachment_name, attachment_content_type, attachment_size_bytes, attachment_access_token, attachment_expires_at, created_at, created_by')
         .eq('company_id', actor.companyId)
         .eq('project_id', actor.projectId || '00000000-0000-0000-0000-000000000000')
         .order('created_at', { ascending: false })
-        .limit(30),
+        .limit(30) : Promise.resolve({ data: [], error: null }),
+      (canSend || canManageForms) ? supabaseAdmin
+        .from('pr_collaborator_daily_status')
+        .select('collaborator_id, status, reason')
+        .eq('company_id', actor.companyId)
+        .eq('work_date', currentAttendanceDate) : Promise.resolve({ data: [], error: null }),
     ])
     if (collaboratorsResult.error) return NextResponse.json({ error: collaboratorsResult.error.message }, { status: 500 })
     if (campaignsResult.error) return NextResponse.json({ error: campaignsResult.error.message }, { status: 500 })
+    if (attendanceResult.error) console.warn('No fue posible cargar la asistencia actual para Comunicaciones:', attendanceResult.error.message)
+
+    const attendanceByCollaboratorId = new Map((attendanceResult.data || []).map((row: any) => [
+      String(row.collaborator_id),
+      attendanceStatus(row.status, row.reason),
+    ]))
 
     const collaborators = (collaboratorsResult.data || []).map((row: any) => ({
       id: row.id,
       name: `${clean(row.first_name)} ${clean(row.last_name)}`.replace(/\s+/g, ' ').trim(),
+      document: clean(row.document),
       position: clean(row.position),
       specialty: clean(row.specialty),
+      workerType: clean(row.worker_type),
+      attendanceStatus: attendanceByCollaboratorId.get(String(row.id)) || 'Sin registro',
+      shift: clean(row.shift_pattern),
       phone: clean(row.phone),
       email: clean(row.email).toLowerCase(),
     }))
     const positions = Array.from(new Set(collaborators.map((row) => row.position).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es'))
-    return NextResponse.json({ collaborators, positions, campaigns: campaignsResult.data || [], can_edit: canEditCommunications(actor) })
+    return NextResponse.json({ collaborators, positions, campaigns: campaignsResult.data || [], attendance_date: currentAttendanceDate, capabilities: { can_send: canSend, can_manage_forms: canManageForms } })
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 })
   }
@@ -69,18 +104,21 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { actor, allowed } = await getCommunicationsActor()
+    const { actor, allowed, canSend } = await getCommunicationsActor()
     if (!actor?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (!allowed || !canEditCommunications(actor)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!allowed || !canSend) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     if (!actor.projectId) return NextResponse.json({ error: 'Debes seleccionar un proyecto.' }, { status: 400 })
 
     const body = await req.json().catch(() => ({}))
     const title = clean(body?.title).slice(0, 160)
     const message = clean(body?.message).slice(0, 4000)
     const channels = Array.from(new Set<string>((Array.isArray(body?.channels) ? body.channels : []).map((value: unknown) => clean(value).toLowerCase()).filter((value: string) => value === 'email' || value === 'whatsapp')))
-    const collaboratorIds = Array.from(new Set((Array.isArray(body?.collaborator_ids) ? body.collaborator_ids : []).map(clean).filter(Boolean))).slice(0, MAX_RECIPIENTS)
+    const collaboratorIds = Array.from(new Set((Array.isArray(body?.collaborator_ids) ? body.collaborator_ids : []).map(clean).filter(Boolean)))
     if (!title || !message || !channels.length || !collaboratorIds.length) {
       return NextResponse.json({ error: 'Completa asunto, mensaje, canal y destinatarios.' }, { status: 400 })
+    }
+    if (collaboratorIds.length > MAX_RECIPIENTS) {
+      return NextResponse.json({ error: `La campaña admite un máximo de ${MAX_RECIPIENTS} destinatarios.` }, { status: 400 })
     }
 
     const attachmentInput = body?.attachment && typeof body.attachment === 'object' ? body.attachment : null
@@ -172,7 +210,16 @@ export async function POST(req: NextRequest) {
     let whatsappFailed = 0
     let whatsappAutomated = false
     if (channels.includes('whatsapp')) {
-      const whatsappDeliveries = (insertedDeliveries || []).filter((delivery: any) => delivery.channel === 'whatsapp' && normalPhone(delivery.recipient_phone))
+      const allWhatsappDeliveries = (insertedDeliveries || []).filter((delivery: any) => delivery.channel === 'whatsapp')
+      const whatsappDeliveries = allWhatsappDeliveries.filter((delivery: any) => normalPhone(delivery.recipient_phone))
+      const invalidPhoneDeliveries = allWhatsappDeliveries.filter((delivery: any) => !normalPhone(delivery.recipient_phone))
+      whatsappFailed = invalidPhoneDeliveries.length
+      if (invalidPhoneDeliveries.length) {
+        await supabaseAdmin
+          .from('pr_communication_deliveries')
+          .update({ status: 'failed', error_message: 'El destinatario no tiene un teléfono válido.', updated_at: new Date().toISOString() })
+          .in('id', invalidPhoneDeliveries.map((delivery: any) => delivery.id))
+      }
       const whatsappMessage = `*${title}*\n\n${message}`
       const attachmentUrl = attachment?.key && campaign.attachment_access_token
         ? `${req.nextUrl.origin}/api/communications/files/${campaign.attachment_access_token}`
@@ -190,14 +237,14 @@ export async function POST(req: NextRequest) {
           const sent = bridge.results.filter((result) => result.status === 'sent')
           const failed = bridge.results.filter((result) => result.status === 'failed')
           whatsappSent = sent.length
-          whatsappFailed = failed.length
+          whatsappFailed += failed.length
           await Promise.all([
             ...sent.map((result) => supabaseAdmin.from('pr_communication_deliveries').update({ status: 'sent', provider_message_id: clean(result.provider_message_id), sent_at: now, updated_at: now }).eq('id', result.id)),
             ...failed.map((result) => supabaseAdmin.from('pr_communication_deliveries').update({ status: 'failed', error_message: clean(result.error) || 'No fue posible enviar WhatsApp.', updated_at: now }).eq('id', result.id)),
           ])
         }
       } catch (error) {
-        whatsappFailed = whatsappDeliveries.length
+        whatsappFailed += whatsappDeliveries.length
         const errorMessage = clean(error instanceof Error ? error.message : String(error)).slice(0, 500)
         if (whatsappDeliveries.length) await supabaseAdmin.from('pr_communication_deliveries').update({ status: 'failed', error_message: errorMessage, updated_at: new Date().toISOString() }).in('id', whatsappDeliveries.map((delivery: any) => delivery.id))
       }

@@ -7,9 +7,9 @@ const phoneDigits = (value: unknown) => clean(value).replace(/[^0-9]/g, '')
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { actor, allowed } = await getCommunicationsActor()
+    const { actor, allowed, canSend } = await getCommunicationsActor()
     if (!actor?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!allowed || !canSend) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const { data: campaign, error } = await supabaseAdmin
       .from('pr_communication_campaigns')
       .select('id, title, message, attachment_name, attachment_access_token, attachment_expires_at, created_at')

@@ -8,6 +8,7 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  FormControlLabel,
   List,
   ListItem,
   ListItemButton,
@@ -39,7 +40,9 @@ type Summary = {
   without_access: number
 }
 
-const RESOURCES = [
+type ResourceOption = { key: string; label: string; children?: Array<{ key: string; label: string }> }
+
+const RESOURCES: ResourceOption[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'attendance', label: 'Asistencia' },
   { key: 'collaborators', label: 'Colaboradores' },
@@ -50,14 +53,17 @@ const RESOURCES = [
   { key: 'program', label: 'Programa' },
   { key: 'admin-permissions', label: 'Administración' },
   { key: 'management', label: 'Gestión y Datos' },
-  { key: 'communications', label: 'Comunicaciones' },
+  { key: 'communications', label: 'Comunicaciones', children: [
+    { key: 'communications.send', label: 'Envíos' },
+    { key: 'communications.forms', label: 'Formulario' },
+  ] },
   { key: 'settings', label: 'Ajustes' },
   { key: 'profile', label: 'Perfil' },
   { key: 'epp', label: 'EPP' },
   { key: 'payroll', label: 'Nómina' }
 ]
 
-const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions', 'communications'])
+const NON_DELEGABLE_RESOURCE_KEYS = new Set<string>(['admin-permissions'])
 const HIDDEN_RESOURCE_KEYS = new Set<string>(['epp', 'payroll'])
 
 export default function Page() {
@@ -127,7 +133,12 @@ export default function Page() {
       .then(data => {
         const p: Record<string, boolean> = {}
         ;(data.permissions || []).forEach((pp: any) => { p[pp.resource_key] = !!pp.can_view })
-        visibleResources.forEach(r => { if (!(r.key in p)) p[r.key] = false })
+        visibleResources.forEach(r => {
+          if (!(r.key in p)) p[r.key] = false
+          r.children?.forEach((child) => {
+            if (!(child.key in p)) p[child.key] = Boolean(p[r.key])
+          })
+        })
         setPermissions(p)
       })
       .catch(err => console.error(err))
@@ -159,13 +170,30 @@ export default function Page() {
   const selectedUser = useMemo(() => users.find(u => u.id === selected) || null, [users, selected])
 
   const handleToggle = (key: string) => {
-    setPermissions(prev => ({ ...prev, [key]: !prev[key] }))
+    const resource = visibleResources.find((item) => item.key === key)
+    if (resource?.children?.length) {
+      setPermissions((previous) => {
+        const enable = !resource.children?.every((child) => Boolean(previous[child.key]))
+        const next = { ...previous, [resource.key]: false }
+        resource.children?.forEach((child) => { next[child.key] = enable })
+        return next
+      })
+      return
+    }
+    setPermissions((previous) => ({ ...previous, [key]: !previous[key] }))
   }
 
   const handleSave = async () => {
     if (!selected) return
     setSaving(true)
-    const payload = { permissions: visibleResources.map(r => ({ resource_key: r.key, can_view: !!permissions[r.key] })) }
+    const payload = {
+      permissions: visibleResources.flatMap((resource) => resource.children?.length
+        ? [
+          { resource_key: resource.key, can_view: false },
+          ...resource.children.map((child) => ({ resource_key: child.key, can_view: Boolean(permissions[child.key]) })),
+        ]
+        : [{ resource_key: resource.key, can_view: Boolean(permissions[resource.key]) }]),
+    }
     try {
       const res = await fetch(`/api/admin/users/${selected}/permissions`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const json = await res.json()
@@ -201,7 +229,9 @@ export default function Page() {
     }
   }
 
-  const enabledCount = Object.values(permissions).filter(Boolean).length
+  const enabledCount = visibleResources.filter((resource) => resource.children?.length
+    ? resource.children.some((child) => Boolean(permissions[child.key]))
+    : Boolean(permissions[resource.key])).length
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -229,7 +259,7 @@ export default function Page() {
                   Gestión de permisos
                 </Typography>
                 <Typography variant="body2" sx={{ color: colors.gray4 }}>
-                  Asigna accesos por módulo para cada usuario.
+                  Asigna accesos por módulo y, cuando corresponda, por pestaña.
                 </Typography>
               </Box>
 
@@ -366,14 +396,22 @@ export default function Page() {
                         )}
                         {!loadingPerms && (
                           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1 }}>
-                            {visibleResources.map(r => (
-                              <Paper key={r.key} variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
-                                <Stack direction="row" alignItems="center" spacing={1}>
-                                  <Checkbox checked={!!permissions[r.key]} onChange={() => handleToggle(r.key)} />
-                                  <Typography>{r.label}</Typography>
+                            {visibleResources.map((resource) => {
+                              const childValues = resource.children?.map((child) => Boolean(permissions[child.key])) || []
+                              const allChildren = childValues.length > 0 && childValues.every(Boolean)
+                              const someChildren = childValues.some(Boolean)
+                              return <Paper key={resource.key} variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+                                <Stack spacing={resource.children?.length ? 0.75 : 0}>
+                                  <Stack direction="row" alignItems="center" spacing={1}>
+                                    <Checkbox checked={resource.children?.length ? allChildren : Boolean(permissions[resource.key])} indeterminate={Boolean(resource.children?.length && someChildren && !allChildren)} onChange={() => handleToggle(resource.key)} />
+                                    <Typography>{resource.label}</Typography>
+                                  </Stack>
+                                  {resource.children?.length ? <Stack sx={{ pl: 4.5 }}>
+                                    {resource.children.map((child) => <FormControlLabel key={child.key} control={<Checkbox size="small" checked={Boolean(permissions[child.key])} onChange={() => handleToggle(child.key)} />} label={child.label} />)}
+                                  </Stack> : null}
                                 </Stack>
                               </Paper>
-                            ))}
+                            })}
                           </Box>
                         )}
                         <Divider />
