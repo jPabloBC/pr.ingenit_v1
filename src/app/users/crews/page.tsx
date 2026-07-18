@@ -6,13 +6,15 @@ import { DateCalendar } from '@mui/x-date-pickers'
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AssignmentTurnedInOutlinedIcon from '@mui/icons-material/AssignmentTurnedInOutlined'
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Info, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Info, Trash2 } from 'lucide-react'
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
 import { normalizeText } from "../../../lib/normalize"
 import { supabase } from "../../../services/supabaseClient"
 import { useSession } from "next-auth/react"
 import { useSearchParams } from "next/navigation"
+import { AppWeekNavigator } from '@/components/ui/AppWeekNavigator'
+import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton'
 
 const parseYmdToDate = (value: string) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
@@ -3757,51 +3759,7 @@ export default function CrewsPage() {
     <Box sx={{ display: "flex" }}>
       <Box sx={{ flex: 1 }}>
         <UserHeader title="Cuadrillas" />
-        {isUserRole && canManageCrews ? (
-          <Tooltip title={showCreateForm ? "Cerrar formulario" : "Nueva cuadrilla"}>
-            <IconButton
-              color="primary"
-              onClick={openCreateCrewForm}
-              sx={{
-                position: 'fixed',
-                top: { xs: 64, sm: 70 },
-                right: { xs: 14, sm: 22 },
-                zIndex: 1200,
-                width: 52,
-                height: 52,
-                borderRadius: '50%',
-                bgcolor: colors.blue1,
-                color: colors.white,
-                border: `2px solid ${colors.sky300}`,
-                boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
-                transition: 'border-color 160ms ease, box-shadow 160ms ease',
-                '&:hover': {
-                  bgcolor: colors.blue1,
-                  borderColor: colors.sky100,
-                  boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
-                  '& .plus-icon': {
-                    color: colors.sky300,
-                    transform: 'scale(1.18)',
-                  },
-                },
-                '&.Mui-disabled': {
-                  bgcolor: colors.blue300,
-                  color: colors.sky50,
-                  borderColor: colors.sky100,
-                },
-              }}
-            >
-              <Plus
-                className="plus-icon"
-                size={22}
-                style={{
-                  color: colors.blue14,
-                  transition: 'color 160ms ease, transform 160ms ease',
-                }}
-              />
-            </IconButton>
-          </Tooltip>
-        ) : null}
+        {isUserRole && canManageCrews ? <AppFloatingActionButton ariaLabel={showCreateForm ? 'Cerrar formulario' : 'Nueva cuadrilla'} tooltip={showCreateForm ? 'Cerrar formulario' : 'Nueva cuadrilla'} onClick={openCreateCrewForm} /> : null}
         <Box component="main" sx={{ minWidth: 0, width: '100%', overflowX: 'hidden' }}>
           <Container
             maxWidth={false}
@@ -3830,110 +3788,27 @@ export default function CrewsPage() {
               </Box>
             ) : null}
             {/* <Typography variant="h4" gutterBottom sx={{ color: colors.blue1 }}>Cuadrillas</Typography> */}
-            <Paper
-              variant="outlined"
-              sx={{
-                mb: { xs: 1.5, sm: 2 },
-                mx: 'auto',
-                px: { xs: 1, sm: 1.25 },
-                py: 1,
-                width: { xs: '100%', lg: '70%' },
-                maxWidth: 1400,
-                borderColor: colors.blue15,
-                borderRadius: 1.5,
-                bgcolor: colors.white,
+            <AppWeekNavigator
+              periodLabel={crewWeekLabel}
+              value={crewWeekRange.start || ''}
+              options={crewAvailableWeeks.map((range) => ({
+                value: range.start,
+                shortLabel: `Semana ${getProjectWeekNumber(range.start)}`,
+                label: `Semana ${getProjectWeekNumber(range.start)} (${formatYmdDisplaySlash(range.start)} - ${formatYmdDisplaySlash(range.end)})`,
+              }))}
+              previousDisabled={crewAvailableDatesLoading || !previousCrewWeek}
+              nextDisabled={crewAvailableDatesLoading || !nextCrewWeek}
+              latestDisabled={crewAvailableDatesLoading || isViewingLatestCrewWeek}
+              selectDisabled={crewAvailableDatesLoading}
+              onPrevious={() => previousCrewWeek && setCrewWeekRange(previousCrewWeek)}
+              onNext={() => nextCrewWeek && setCrewWeekRange(nextCrewWeek)}
+              onLatest={() => setCrewWeekRange(latestCrewWeek)}
+              onChange={(value) => {
+                const selected = crewAvailableWeeks.find((range) => range.start === value)
+                if (selected) setCrewWeekRange(selected)
               }}
-            >
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 1,
-                  flexWrap: { xs: 'wrap', md: 'nowrap' }
-                }}
-              >
-                <Button
-                  variant="outlined"
-                  size="small"
-                  disabled={crewAvailableDatesLoading || !previousCrewWeek}
-                  onClick={() => previousCrewWeek && setCrewWeekRange(previousCrewWeek)}
-                  startIcon={<ChevronLeft size={16} />}
-                  sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                >
-                  Semana anterior
-                </Button>
-                <Typography
-                  sx={{
-                    flex: '1 1 auto',
-                    minWidth: { xs: '100%', md: 260 },
-                    textAlign: 'center',
-                    fontSize: { xs: 14, sm: 16 },
-                    fontWeight: 500,
-                    color: colors.gray4,
-                    order: { xs: -1, md: 0 }
-                  }}
-                >
-                  {crewWeekLabel}
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', md: 'flex-end' }, gap: 1, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
-                  <TextField
-                    select
-                    size="small"
-                    value={crewWeekRange.start || ''}
-                    disabled={crewAvailableDatesLoading}
-                    SelectProps={{
-                      renderValue: (value) => {
-                        const selected = crewAvailableWeeks.find((range) => range.start === value)
-                        return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
-                      },
-                    }}
-                    onChange={(event) => {
-                      const selected = crewAvailableWeeks.find((range) => range.start === event.target.value)
-                      if (selected) setCrewWeekRange(selected)
-                    }}
-                    sx={{
-                      width: { xs: '100%', sm: 142, md: 142 },
-                      minWidth: { xs: '100%', sm: 142, md: 142 },
-                      flex: { xs: '1 1 100%', sm: '0 0 142px' },
-                      '& .MuiInputBase-root': { height: 32 },
-                      '& .MuiSelect-select': {
-                        py: 0.55,
-                        fontWeight: 600,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      },
-                    }}
-                  >
-                    {crewAvailableWeeks.map((range) => (
-                      <MenuItem key={`crew-week-${range.start}`} value={range.start}>
-                        {`Semana ${getProjectWeekNumber(range.start)} (${formatYmdDisplaySlash(range.start)} - ${formatYmdDisplaySlash(range.end)})`}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    disabled={crewAvailableDatesLoading || isViewingLatestCrewWeek}
-                    onClick={() => setCrewWeekRange(latestCrewWeek)}
-                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                  >
-                    Última semana
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    disabled={crewAvailableDatesLoading || !nextCrewWeek}
-                    onClick={() => nextCrewWeek && setCrewWeekRange(nextCrewWeek)}
-                    endIcon={<ChevronRight size={16} />}
-                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                  >
-                    Semana siguiente
-                  </Button>
-                </Box>
-              </Box>
-            </Paper>
+              sx={{ mb: { xs: 1.5, sm: 2 } }}
+            />
             <Paper elevation={0} sx={{ p: 0, m: 0, minWidth: 0, overflow: 'visible', bgcolor: 'transparent', boxShadow: 'none' }}>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 2, gap: 1, flexWrap: 'wrap' }}>
                 {latePolicyFeatureEnabled && (role === 'dev' || role === 'admin') && (

@@ -253,18 +253,58 @@ const baseTheme = createTheme({
       },
     },
     MuiAlert: {
+      defaultProps: {
+        variant: 'standard',
+      },
       styleOverrides: {
+        root: {
+          alignItems: 'center',
+          border: '1px solid transparent',
+          borderRadius: 8,
+          padding: '8px 12px',
+          fontSize: '0.95rem',
+          fontWeight: 400,
+          lineHeight: 1.45,
+          '&.MuiAlert-filled': {
+            borderColor: 'transparent',
+          },
+        },
+        icon: {
+          marginRight: 10,
+          padding: 0,
+          fontSize: 22,
+        },
+        message: {
+          padding: '2px 0',
+        },
+        action: {
+          alignItems: 'center',
+          marginRight: 0,
+          padding: '0 0 0 12px',
+        },
         standardSuccess: {
-          backgroundColor: colors.blue15,
-          color: colors.blue1,
+          backgroundColor: colors.green100,
+          borderColor: '#bbf7d0',
+          color: colors.green800,
+          '& .MuiAlert-icon': { color: colors.green600 },
+        },
+        standardError: {
+          backgroundColor: colors.red50,
+          borderColor: colors.red200,
+          color: colors.red800,
+          '& .MuiAlert-icon': { color: colors.red600 },
         },
         standardInfo: {
-          backgroundColor: colors.blue15,
-          color: colors.blue1,
+          backgroundColor: colors.blue50,
+          borderColor: colors.blue200,
+          color: colors.blue800,
+          '& .MuiAlert-icon': { color: colors.blue600 },
         },
         standardWarning: {
-          backgroundColor: colors.gold7,
-          color: colors.gold,
+          backgroundColor: colors.amber50,
+          borderColor: colors.amber100,
+          color: colors.amber800,
+          '& .MuiAlert-icon': { color: colors.amber700 },
         },
       },
     },

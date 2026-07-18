@@ -9,7 +9,7 @@ const port = Number(process.env.PORT || 3101)
 const token = String(process.env.WHATSAPP_BRIDGE_TOKEN || '')
 const authPath = String(process.env.WHATSAPP_AUTH_PATH || '.wwebjs_auth')
 const allowedMediaOrigin = String(process.env.WHATSAPP_ALLOWED_MEDIA_ORIGIN || '')
-const maxRecipients = Math.min(Math.max(Number(process.env.WHATSAPP_MAX_RECIPIENTS || 30), 1), 50)
+const maxRecipients = Math.min(Math.max(Number(process.env.WHATSAPP_MAX_RECIPIENTS || 10), 1), 50)
 const headless = process.env.WHATSAPP_HEADLESS !== 'false'
 
 if (!token) throw new Error('WHATSAPP_BRIDGE_TOKEN is required.')
@@ -119,15 +119,16 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
   if (req.method === 'GET' && url.pathname === '/health') return sendJson(res, 200, { ok: true })
   if (!authorized(req)) return sendJson(res, 401, { error: 'Unauthorized' })
-  if (req.method === 'GET' && url.pathname === '/v1/status') return sendJson(res, 200, { ready, qr_available: Boolean(latestQr), error: startingError })
+  if (req.method === 'GET' && url.pathname === '/v1/status') return sendJson(res, 200, { ready, qr_available: Boolean(latestQr), max_recipients: maxRecipients, error: startingError })
   if (req.method !== 'POST' || url.pathname !== '/v1/messages') return sendJson(res, 404, { error: 'Not found' })
   if (!ready) return sendJson(res, 503, { error: 'WhatsApp is not ready. Scan the QR on the bridge host first.' })
 
   try {
     const body = await readBody(req)
     const message = String(body.message || '').trim().slice(0, 4_000)
-    const recipients = Array.isArray(body.recipients) ? body.recipients.slice(0, maxRecipients) : []
+    const recipients = Array.isArray(body.recipients) ? body.recipients : []
     if (!message || !recipients.length) return sendJson(res, 400, { error: 'Message and recipients are required.' })
+    if (recipients.length > maxRecipients) return sendJson(res, 400, { error: `A maximum of ${maxRecipients} recipients is allowed per batch.` })
     const media = await mediaFromUrl(body.attachment_url, body.attachment_name)
     const results = []
     for (const recipient of recipients) {

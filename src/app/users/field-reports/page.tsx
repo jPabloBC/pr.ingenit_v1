@@ -49,6 +49,8 @@ import UserHeader from '../../../components/layout/UserHeader'
 import { supabase } from '../../../lib/supabaseClient'
 import { colors } from '../../../theme/theme'
 import { normalizeText } from '@/lib/normalize'
+import { AppWeekNavigator } from '@/components/ui/AppWeekNavigator'
+import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton'
 import {
   MAX_MACHINE_HOURS_WITH_OVERTIME,
   MAX_PERSON_HOURS_WITH_OVERTIME,
@@ -10713,51 +10715,7 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
     <Box sx={{ display: 'flex', minWidth: 0, width: '100%', overflowX: 'hidden' }}>
       <Box sx={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <UserHeader title="Reportes de Terreno" />
-        {!isReadOnlyRole ? (
-          <Tooltip title="Nuevo Reporte">
-            <IconButton
-              color="primary"
-              onClick={openNewReport}
-              sx={{
-                position: 'fixed',
-                top: { xs: 64, sm: 70 },
-                right: { xs: 14, sm: 22 },
-                zIndex: 1200,
-                width: 52,
-                height: 52,
-                borderRadius: '50%',
-                bgcolor: colors.blue1,
-                color: '#ffffff',
-                border: '2px solid #7dd3fc',
-                boxShadow: '0 10px 24px rgba(0, 26, 51, 0.32)',
-                transition: 'border-color 160ms ease, box-shadow 160ms ease',
-                '&:hover': {
-                  bgcolor: colors.blue1,
-                  borderColor: '#bae6fd',
-                  boxShadow: '0 10px 28px rgba(125, 211, 252, 0.55)',
-                  '& .plus-icon': {
-                    color: '#7dd3fc',
-                    transform: 'scale(1.18)',
-                  },
-                },
-                '&.Mui-disabled': {
-                  bgcolor: '#93c5fd',
-                  color: '#e0f2fe',
-                  borderColor: '#bae6fd',
-                },
-              }}
-            >
-              <Plus
-                className="plus-icon"
-                size={22}
-                style={{
-                  color: colors.blue14,
-                  transition: 'color 160ms ease, transform 160ms ease',
-                }}
-              />
-            </IconButton>
-          </Tooltip>
-        ) : null}
+        {!isReadOnlyRole ? <AppFloatingActionButton ariaLabel="Nuevo reporte" tooltip="Nuevo reporte" onClick={openNewReport} /> : null}
         <Box component="main" sx={{ minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
           <Container
             maxWidth={false}
@@ -10769,111 +10727,27 @@ if (FIELD_REPORTS_DEV_DEBUG) console.log('[Excel V2 DEBUG] about to writeBuffer'
                 <Stack direction="row" spacing={1} />
               </Box>
 
-              <Paper
-                variant="outlined"
-                sx={{
-                  mt: { xs: 1, sm: 1.5 },
-                  mb: { xs: 1.5, sm: 2 },
-                  mx: 'auto',
-                  px: { xs: 1, sm: 1.25 },
-                  py: 1,
-                  width: { xs: '100%', lg: '70%' },
-                  maxWidth: 1400,
-                  borderColor: colors.blue15,
-                  borderRadius: 1.5,
-                  bgcolor: colors.white
+              <AppWeekNavigator
+                periodLabel={fieldReportWeekLabel}
+                value={fieldReportWeekRange?.start || ''}
+                options={fieldReportWeekOptions.map((range) => ({
+                  value: range.start,
+                  shortLabel: `Semana ${getProjectWeekNumber(range.start)}`,
+                  label: `Semana ${getProjectWeekNumber(range.start)} (${formatDateKeyCl(range.start)} - ${formatDateKeyCl(range.end)})`,
+                }))}
+                previousDisabled={reportsLoading || !previousReportWeek}
+                nextDisabled={reportsLoading || !nextReportWeek}
+                latestDisabled={reportsLoading || isViewingLatestReportWeek}
+                selectDisabled={reportsLoading}
+                onPrevious={() => loadFieldReportWeek(previousReportWeek)}
+                onNext={() => loadFieldReportWeek(nextReportWeek)}
+                onLatest={loadLatestFieldReportWeek}
+                onChange={(value) => {
+                  const selected = fieldReportWeekOptions.find((range) => range.start === value)
+                  if (selected) loadFieldReportWeek(selected)
                 }}
-              >
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 1,
-                    flexWrap: { xs: 'wrap', md: 'nowrap' }
-                  }}
-                >
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    onClick={() => loadFieldReportWeek(previousReportWeek)}
-                    disabled={reportsLoading || !previousReportWeek}
-                    startIcon={<ChevronLeft size={16} />}
-                    sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                  >
-                    Semana anterior
-                  </Button>
-                  <Typography
-                    sx={{
-                      flex: '1 1 auto',
-                      minWidth: { xs: '100%', md: 260 },
-                      textAlign: 'center',
-                      fontSize: { xs: 14, sm: 16 },
-                      fontWeight: 500,
-                      color: colors.gray4,
-                      order: { xs: -1, md: 0 }
-                    }}
-                  >
-                    {fieldReportWeekLabel}
-                  </Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: { xs: 'space-between', md: 'flex-end' }, gap: 1, flex: { xs: '1 1 100%', md: '0 0 auto' } }}>
-                    <TextField
-                      select
-                      size="small"
-                      value={fieldReportWeekRange?.start || ''}
-                      disabled={reportsLoading || fieldReportWeekOptions.length === 0}
-                      SelectProps={{
-                        renderValue: (value) => {
-                          const selected = fieldReportWeekOptions.find((range) => range.start === value)
-                          return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
-                        }
-                      }}
-                      onChange={(event) => {
-                        const selected = fieldReportWeekOptions.find((range) => range.start === event.target.value)
-                        if (selected) loadFieldReportWeek(selected)
-                      }}
-                      sx={{
-                        width: { xs: '100%', sm: 142, md: 142 },
-                        minWidth: { xs: '100%', sm: 142, md: 142 },
-                        flex: { xs: '1 1 100%', sm: '0 0 142px' },
-                        '& .MuiInputBase-root': { height: 32 },
-                        '& .MuiSelect-select': {
-                          py: 0.55,
-                          fontWeight: 600,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        },
-                      }}
-                    >
-                      {fieldReportWeekOptions.map((range) => (
-                        <MenuItem key={`field-report-week-${range.start}`} value={range.start}>
-                          {`Semana ${getProjectWeekNumber(range.start)} (${formatDateKeyCl(range.start)} - ${formatDateKeyCl(range.end)})`}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={loadLatestFieldReportWeek}
-                      disabled={reportsLoading || isViewingLatestReportWeek}
-                      sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                    >
-                      Última semana
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      onClick={() => loadFieldReportWeek(nextReportWeek)}
-                      disabled={reportsLoading || !nextReportWeek}
-                      endIcon={<ChevronRight size={16} />}
-                      sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
-                    >
-                      Semana siguiente
-                    </Button>
-                  </Box>
-                </Box>
-              </Paper>
+                sx={{ mt: { xs: 1, sm: 1.5 }, mb: { xs: 1.5, sm: 2 } }}
+              />
 
               <Box sx={{ mt: 0 }}>
                 {/* Activities removed here to avoid loading large program lists; use Programa screen instead. */}

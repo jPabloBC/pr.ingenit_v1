@@ -3,7 +3,6 @@
 import React from 'react';
 import {
   Box,
-  Button,
   Dialog,
   DialogActions,
   DialogContent,
@@ -13,6 +12,7 @@ import {
 import { alpha } from '@mui/material/styles';
 import { InfoOutlined, WarningAmberOutlined } from '@mui/icons-material';
 import { colors } from '@/theme/theme';
+import { AppButton } from '@/components/ui/AppButton';
 
 type ConfirmActionVariant = 'info' | 'warning' | 'danger';
 
@@ -110,22 +110,22 @@ export default function ConfirmActionDialog({
         ) : null}
       </DialogContent>
       <DialogActions sx={{ px: 2.25, pt: 1, pb: 2, gap: 1 }}>
-        <Button
+        <AppButton
           onClick={onCancel}
           disabled={loading}
           variant="outlined"
           sx={{ minWidth: 104, height: 36 }}
         >
           {cancelLabel}
-        </Button>
-        <Button
+        </AppButton>
+        <AppButton
           onClick={onConfirm}
           disabled={loading}
           variant="contained"
           sx={{ minWidth: 112, height: 36 }}
         >
           {loading ? 'Procesando...' : confirmLabel}
-        </Button>
+        </AppButton>
       </DialogActions>
     </Dialog>
   );

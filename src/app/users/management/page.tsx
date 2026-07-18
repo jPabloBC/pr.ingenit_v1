@@ -6,29 +6,21 @@ import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
-  Alert,
   Box,
-  Button,
-  Checkbox,
   CircularProgress,
   Container,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Fab,
   FormControl,
   FormControlLabel,
-  IconButton,
   InputAdornment,
   InputLabel,
   MenuItem,
   Paper,
   Popover,
-  Select,
-  Snackbar,
   Stack,
-  Tab,
   Table,
   TableBody,
   TableCell,
@@ -36,8 +28,6 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
-  Tabs,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -49,10 +39,8 @@ import { DateCalendar } from '@mui/x-date-pickers/DateCalendar';
 import { PickersDay, PickersDayProps } from '@mui/x-date-pickers/PickersDay';
 import { es } from 'date-fns/locale';
 import {
-  Add,
   AssignmentTurnedIn,
   AssignmentLateOutlined,
-  CloudUpload,
   CalendarMonth,
   ChevronLeft,
   ChevronRight,
@@ -64,6 +52,14 @@ import {
   PushPinOutlined,
   Search,
   Clear,
+  QueryStatsOutlined,
+  HistoryOutlined,
+  GroupsOutlined,
+  WarningAmberOutlined,
+  ConstructionOutlined,
+  AccountTreeOutlined,
+  SendOutlined,
+  PhotoLibraryOutlined,
 } from '@mui/icons-material';
 import { Trash2 } from 'lucide-react';
 import {
@@ -80,6 +76,15 @@ import {
 } from 'recharts';
 import UserHeader from '@/components/layout/UserHeader';
 import ConfirmActionDialog from '@/components/ui/ConfirmActionDialog';
+import { AppAlert } from '@/components/ui/AppAlert';
+import { AppButton } from '@/components/ui/AppButton';
+import { AppSelectControl, AppTextField } from '@/components/ui/FormControls';
+import { AppCheckbox, AppIconButton } from '@/components/ui/InteractiveControls';
+import { AppTabs } from '@/components/ui/AppTabs';
+import { useAppSnackbar } from '@/components/ui/AppSnackbarProvider';
+import { MultiFileDropzone } from '@/components/ui/FileDropzone';
+import { AppWeekNavigator } from '@/components/ui/AppWeekNavigator';
+import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
 import TransmittalPanel from './TransmittalPanel';
@@ -123,7 +128,7 @@ const EquipmentSearchInput = React.memo(function EquipmentSearchInput({
   };
 
   return (
-    <TextField
+    <AppTextField
       size="small"
       variant="outlined"
       placeholder="Buscar nombre, patente, serie o fecha"
@@ -138,7 +143,7 @@ const EquipmentSearchInput = React.memo(function EquipmentSearchInput({
         ),
         endAdornment: value ? (
           <InputAdornment position="end">
-            <IconButton
+            <AppIconButton
               size="small"
               aria-label="Limpiar búsqueda de equipos"
               title="Limpiar"
@@ -146,7 +151,7 @@ const EquipmentSearchInput = React.memo(function EquipmentSearchInput({
               sx={{ color: colors.slate400, p: 0.35 }}
             >
               <Clear sx={{ fontSize: 21 }} />
-            </IconButton>
+            </AppIconButton>
           </InputAdornment>
         ) : undefined,
       }}
@@ -1625,6 +1630,7 @@ const sortGroups = (groups: GroupSummary[]) => {
 };
 
 export default function ManagementPage() {
+  const { notify } = useAppSnackbar();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isActivitiesCompact = useMediaQuery(theme.breakpoints.down('md'));
@@ -1748,7 +1754,7 @@ export default function ManagementPage() {
   const [photoSelectActivityFilter, setPhotoSelectActivityFilter] = useState('');
   const [photoZoomEvidenceKey, setPhotoZoomEvidenceKey] = useState('');
   const [includedPhotoEvidenceOrder, setIncludedPhotoEvidenceOrder] = useState<string[]>([]);
-  const [notice, setNotice] = useState<{ message: string; severity: 'success' | 'error' | 'info' } | null>(null);
+  const setNotice = React.useCallback((notice: { message: string; severity: 'success' | 'error' | 'info' }) => notify(notice.message, { severity: notice.severity }), [notify]);
   const equipmentAvailableDatesSet = useMemo(() => new Set(equipmentAvailableDates), [equipmentAvailableDates]);
   const needsDetailedReports = activeTab === 'crew-personnel' || activeTab === 'activities' || activeTab === 'photo-report';
   const isActivitiesGlobalSearch = activeTab === 'activities' && activitiesSearch.trim().length > 0;
@@ -2477,7 +2483,7 @@ export default function ManagementPage() {
     } finally {
       setPhotoConfigSaving(false);
     }
-  }, [photoCoverReportNo, photoPeriodStartDate, photoPeriodEndDate, includedPhotoEvidenceKeys, includedPhotoEvidenceOrder, photoSlideTitleOverrides, photoPage3AreaTitle, photoPiscinasAreaTitle, photoAdicionalesAreaTitle, totalPhotoSlides]);
+  }, [photoCoverReportNo, photoPeriodStartDate, photoPeriodEndDate, includedPhotoEvidenceKeys, includedPhotoEvidenceOrder, photoSlideTitleOverrides, photoPage3AreaTitle, photoPiscinasAreaTitle, photoAdicionalesAreaTitle, totalPhotoSlides, setNotice]);
   const activePhotoEvidenceGroup = useMemo<{ areaTitle: string; group: PhotoSlideGroup } | null>(() => {
     if (photoPreviewSlide < 3) return null;
     const canaletasStart = 3;
@@ -3005,7 +3011,7 @@ export default function ManagementPage() {
     } finally {
       setPhotoExporting(false);
     }
-  }, [photoCoverBackgroundUrl, photoCoverLogoUrl, photoPage2BackgroundUrl, photoPage3BackgroundUrl, photoPage3AreaTitle, photoPiscinasAreaTitle, photoAdicionalesAreaTitle, photoCoverTitle, photoCoverReportNo, photoCoverPeriod, canaletasPhotoGroups, piscinasPhotoGroups, adicionalesPhotoGroups, includedPhotoEvidenceKeys, photoExportRangeStart, photoExportRangeEnd, totalPhotoSlides, getPhotoGroupTitle]);
+  }, [photoCoverLogoUrl, photoPage2BackgroundUrl, photoPage3BackgroundUrl, photoPage3AreaTitle, photoPiscinasAreaTitle, photoAdicionalesAreaTitle, photoCoverTitle, photoCoverReportNo, photoCoverPeriod, canaletasPhotoGroups, piscinasPhotoGroups, adicionalesPhotoGroups, includedPhotoEvidenceKeys, photoExportRangeStart, photoExportRangeEnd, totalPhotoSlides, getPhotoGroupTitle, setNotice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4967,7 +4973,7 @@ export default function ManagementPage() {
   const renderPhotoGroupTitleInput = (group: PhotoSlideGroup, fallbackTitle: string) => {
     const value = normalizePhotoSlideTitle(photoSlideTitleOverrides[group.key] ?? group.defaultTitle ?? fallbackTitle);
     return (
-      <TextField
+      <AppTextField
         size="small"
         value={value}
         onChange={(event) => {
@@ -5041,7 +5047,7 @@ export default function ManagementPage() {
               {item.evidence.activitySummary}
             </Box>
           ) : null}
-          <IconButton
+          <AppIconButton
             size="small"
             onClick={() => setPhotoEvidenceIncluded(item.evidence.key, false)}
             title="Quitar del reporte"
@@ -5060,7 +5066,7 @@ export default function ManagementPage() {
           >
             <PushPin className="pin-icon" fontSize="small" />
             <Trash2 className="remove-icon" size={16} />
-          </IconButton>
+          </AppIconButton>
         </>
       ) : null}
     </Box>
@@ -5101,73 +5107,9 @@ export default function ManagementPage() {
       <Script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js" strategy="afterInteractive" />
       <UserHeader title="Gestión y Datos" />
       {activeTab === 'interferences' ? (
-        <Fab
-          aria-label="Crear interferencia"
-          onClick={() => setInterferenceDialogOpen(true)}
-          sx={{
-            position: 'fixed',
-            top: { xs: 108, sm: 118 },
-            right: { xs: 16, sm: 28 },
-            zIndex: 1200,
-            bgcolor: colors.blue1,
-            color: colors.white,
-            border: `2px solid ${colors.blue14}`,
-            boxShadow: `0 10px 24px ${alpha(colors.blue1, 0.32)}`,
-            '&:hover': {
-              bgcolor: colors.blue1,
-              borderColor: colors.blue15,
-              boxShadow: `0 10px 28px ${alpha(colors.sky300, 0.55)}`,
-              '& .plus-icon': {
-                color: colors.blue14,
-                transform: 'scale(1.18)',
-              },
-            },
-          }}
-        >
-          <Add
-            className="plus-icon"
-            sx={{
-              fontSize: 30,
-              strokeWidth: 2,
-              color: colors.blue14,
-              transition: 'color 160ms ease, transform 160ms ease',
-            }}
-          />
-        </Fab>
+        <AppFloatingActionButton ariaLabel="Crear interferencia" tooltip="Crear interferencia" offset="tabs" onClick={() => setInterferenceDialogOpen(true)} />
       ) : activeTab === 'equipment' || activeTab === 'report-fronts' ? (
-        <Fab
-          aria-label={activeTab === 'equipment' ? 'Agregar equipo' : 'Crear frente'}
-          onClick={() => activeTab === 'equipment' ? openCreateEquipmentModal('MAYOR') : openCreateReportFrontDialog()}
-          sx={{
-            position: 'fixed',
-            top: { xs: 108, sm: 118 },
-            right: { xs: 16, sm: 28 },
-            zIndex: 1200,
-            bgcolor: colors.blue1,
-            color: colors.white,
-            border: `2px solid ${colors.blue14}`,
-            boxShadow: `0 10px 24px ${alpha(colors.blue1, 0.32)}`,
-            '&:hover': {
-              bgcolor: colors.blue1,
-              borderColor: colors.blue15,
-              boxShadow: `0 10px 28px ${alpha(colors.sky300, 0.55)}`,
-              '& .plus-icon': {
-                color: colors.blue14,
-                transform: 'scale(1.18)',
-              },
-            },
-          }}
-        >
-          <Add
-            className="plus-icon"
-            sx={{
-              fontSize: 30,
-              strokeWidth: 2,
-              color: colors.blue14,
-              transition: 'color 160ms ease, transform 160ms ease',
-            }}
-          />
-        </Fab>
+        <AppFloatingActionButton ariaLabel={activeTab === 'equipment' ? 'Agregar equipo' : 'Crear frente'} tooltip={activeTab === 'equipment' ? 'Agregar equipo' : 'Crear frente'} offset="tabs" onClick={() => activeTab === 'equipment' ? openCreateEquipmentModal('MAYOR') : openCreateReportFrontDialog()} />
       ) : null}
       <Container
         maxWidth={false}
@@ -5180,193 +5122,63 @@ export default function ManagementPage() {
       >
         <Stack spacing={0}>
           <Box sx={{ overflow: 'visible' }}>
-            <Tabs
+            <AppTabs
+              ariaLabel="Secciones de Gestión y Datos"
               value={activeTab}
-              onChange={(_event, value) => setActiveTab(value)}
-              variant="scrollable"
-              scrollButtons="auto"
-              allowScrollButtonsMobile
-              sx={{
-                position: 'fixed',
-                top: { xs: 56, md: 64 },
-                left: { xs: 0, md: 'var(--users-aside-width, 240px)' },
-                right: { xs: 0, md: 'auto' },
-                width: { xs: '100%', md: 'calc(100% - var(--users-aside-width, 240px))' },
-                zIndex: 1100,
-                px: { xs: 0.75, md: 1.25 },
-                pt: 0,
-                pb: 0,
-                borderBottom: `1px solid ${colors.blue13}`,
-                minHeight: { xs: 46, md: 50 },
-                background: colors.white,
-                backdropFilter: 'blur(10px)',
-                boxShadow: `0 3px 8px ${alpha(colors.slate900, 0.06)}`,
-                '& .MuiTabs-scroller': {
-                  borderRadius: 1,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                },
-                '& .MuiTabs-flexContainer': {
-                  gap: 0,
-                  alignItems: 'stretch',
-                },
-                '& .MuiTabs-scrollButtons': {
-                  width: 30,
-                  color: colors.blue7,
-                  borderRadius: 1,
-                  mx: 0.15,
-                  '&.Mui-disabled': { opacity: 0.25 },
-                },
-                '& .MuiTab-root': {
-                  minHeight: { xs: 46, md: 50 },
-                  fontWeight: 700,
-                  fontSize: { xs: 12.5, md: 13.5 },
-                  textTransform: 'none',
-                  px: { xs: 1.05, sm: 1.35, md: 1.55 },
-                  py: 0.45,
-                  minWidth: 'max-content',
-                  borderRadius: 0,
-                  color: colors.gray4,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  transition: 'background-color .18s ease, color .18s ease',
-                },
-                '& .MuiTab-root:hover': {
-                  color: colors.blue4,
-                  backgroundColor: colors.blue15,
-                },
-                '& .Mui-selected': {
-                  color: `${colors.blue6} !important`,
-                  backgroundColor: colors.white,
-                },
-                '& .Mui-selected:hover': {
-                  backgroundColor: `${colors.blue15} !important`,
-                },
-                '& .MuiTabs-indicator': {
-                  height: 3,
-                  borderRadius: '3px 3px 0 0',
-                  backgroundColor: colors.blue6,
+              onChange={(value) => setActiveTab(value as typeof activeTab)}
+              minItemWidth={150}
+              items={[
+                { value: 'hh', label: 'HH', icon: <QueryStatsOutlined /> },
+                { value: 'hh-history', label: 'HH histórico', icon: <HistoryOutlined /> },
+                { value: 'crew-personnel', label: 'Personal / Cuadrillas', icon: <GroupsOutlined /> },
+                { value: 'activities', label: 'Actividades', icon: <AssignmentTurnedIn /> },
+                { value: 'interferences', label: 'Interferencias', icon: <WarningAmberOutlined /> },
+                { value: 'equipment', label: 'Maquinaria / Equipos', icon: <ConstructionOutlined /> },
+                { value: 'report-fronts', label: 'Frentes / UDR', icon: <AccountTreeOutlined /> },
+                { value: 'transmittal', label: 'Transmittal', icon: <SendOutlined /> },
+                { value: 'photo-report', label: 'Informe Fotográfico', icon: <PhotoLibraryOutlined /> },
+              ]}
+              paperProps={{
+                sx: {
+                  position: 'fixed',
+                  top: { xs: 56, md: 64 },
+                  left: { xs: 0, md: 'var(--users-aside-width, 240px)' },
+                  width: { xs: '100%', md: 'calc(100% - var(--users-aside-width, 240px))' },
+                  zIndex: 1100,
                 },
               }}
-            >
-              <Tab label="HH" value="hh" />
-              <Tab label="HH histórico" value="hh-history" />
-              <Tab label="Personal / Cuadrillas" value="crew-personnel" />
-              <Tab label="Actividades" value="activities" />
-              <Tab label="Interferencias" value="interferences" />
-              <Tab label="Maquinaria / Equipos" value="equipment" />
-              <Tab label="Frentes / UDR" value="report-fronts" />
-              <Tab label="Transmittal" value="transmittal" />
-              <Tab label="Informe Fotográfico" value="photo-report" />
-            </Tabs>
+            />
 
-            <Box sx={{ px: { xs: 0.1, md: 0.1 }, pb: { xs: 0.75, md: 1 }, pt: { xs: 5.7, md: 6.1 } }}>
+            <Box sx={{ px: { xs: 0.1, md: 0.1 }, pb: { xs: 0.75, md: 1 }, pt: { xs: 10.4, md: 11.4 } }}>
               {activeTab === 'transmittal' ? (
                 <TransmittalPanel />
               ) : activeTab === 'hh' ? (
               <>
-              <Paper
-                variant="outlined"
-                sx={{
-                  mb: { xs: 1, md: 1.25 },
-                  mx: 'auto',
-                  p: { xs: 1, md: 1.1 },
-                  width: { xs: '100%', lg: '70%' },
-                  maxWidth: 1400,
-                  borderColor: colors.blue13,
-                  display: 'flex',
-                  flexDirection: { xs: 'column', md: 'row' },
-                  alignItems: { xs: 'stretch', md: 'center' },
-                  justifyContent: 'space-between',
-                  gap: 1,
+              <AppWeekNavigator
+                periodLabel={hhVisibleWeekLabel}
+                value={hhMatrixRange.start || ''}
+                options={hhWeekOptions.map((range) => ({
+                  value: range.start,
+                  shortLabel: `Semana ${getProjectWeekNumber(range.start)}`,
+                  label: `Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`,
+                }))}
+                previousDisabled={!canNavigateHhWeek}
+                nextDisabled={!canNavigateHhNextWeek}
+                latestDisabled={isViewingLatestAvailableHhWeek}
+                selectDisabled={loading}
+                onPrevious={() => moveHhWeek(-1)}
+                onNext={() => moveHhWeek(1)}
+                onLatest={loadLatestHhWeek}
+                onChange={(value) => {
+                  const selected = hhWeekOptions.find((range) => range.start === value);
+                  if (!selected) return;
+                  hhMatrixManualRangeChangeRef.current = true;
+                  hhMatrixRangeHydratedFromSummaryRef.current = false;
+                  setHhMatrixStartDate(selected.start);
+                  setHhMatrixEndDate(selected.end);
                 }}
-              >
-                <Button
-                  variant="outlined"
-                  size="small"
-                  disabled={!canNavigateHhWeek}
-                  onClick={() => moveHhWeek(-1)}
-                  sx={{ fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
-                >
-                  Semana anterior
-                </Button>
-                <Typography
-                  sx={{
-                    color: colors.gray4,
-                    fontWeight: 700,
-                    textAlign: 'center',
-                    flex: 1,
-                    minWidth: { md: 280 },
-                    whiteSpace: { md: 'nowrap' },
-                  }}
-                >
-                  {hhVisibleWeekLabel}
-                </Typography>
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  justifyContent={{ xs: 'stretch', md: 'flex-end' }}
-                  sx={{ flexShrink: 0, flexWrap: { xs: 'wrap', sm: 'nowrap' }, rowGap: 1 }}
-                >
-                  <TextField
-                    select
-                    size="small"
-                    value={hhMatrixRange.start || ''}
-                    disabled={loading || hhWeekOptions.length === 0}
-                    SelectProps={{
-                      renderValue: (value) => {
-                        const selected = hhWeekOptions.find((range) => range.start === value)
-                        return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana'
-                      },
-                    }}
-                    onChange={(event) => {
-                      const selected = hhWeekOptions.find((range) => range.start === event.target.value);
-                      if (!selected) return;
-                      hhMatrixManualRangeChangeRef.current = true;
-                      hhMatrixRangeHydratedFromSummaryRef.current = false;
-                      setHhMatrixStartDate(selected.start);
-                      setHhMatrixEndDate(selected.end);
-                    }}
-                    sx={{
-                      width: { xs: '100%', sm: 142, md: 142 },
-                      minWidth: { xs: '100%', sm: 142, md: 142 },
-                      flex: { xs: '1 1 100%', sm: '0 0 142px' },
-                      '& .MuiInputBase-root': { height: 32 },
-                      '& .MuiSelect-select': {
-                        py: 0.55,
-                        fontWeight: 600,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      },
-                    }}
-                  >
-                    {hhWeekOptions.map((range) => (
-                      <MenuItem key={`hh-week-${range.start}`} value={range.start}>
-                        {`Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`}
-                      </MenuItem>
-                    ))}
-                  </TextField>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    disabled={isViewingLatestAvailableHhWeek}
-                    onClick={loadLatestHhWeek}
-                  sx={{ fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
-                  >
-                    Última semana
-                  </Button>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    disabled={!canNavigateHhNextWeek}
-                    onClick={() => moveHhWeek(1)}
-                  sx={{ fontWeight: 600, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, md: '0 0 auto' } }}
-                  >
-                    Semana siguiente
-                  </Button>
-                </Stack>
-              </Paper>
+                sx={{ mb: { xs: 1, md: 1.25 }, borderColor: colors.blue13 }}
+              />
 
               <Paper
                 variant="outlined"
@@ -5450,14 +5262,14 @@ export default function ManagementPage() {
                             Matriz detallada
                           </Typography>
                         </Box>
-                        <Button
+                        <AppButton
                           variant="contained"
                           size="small"
                           onClick={() => setHhMatrixDialogOpen(true)}
                           sx={{ flex: '0 0 auto', minHeight: 32, px: 1.5, fontWeight: 700, textTransform: 'none', whiteSpace: 'nowrap' }}
                         >
                           Abrir
-                        </Button>
+                        </AppButton>
                       </Stack>
                     </Paper>
                   </Box>
@@ -5658,7 +5470,7 @@ export default function ManagementPage() {
                     </Typography>
                   </Box>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
-                    <TextField
+                    <AppTextField
                       label="Rango"
                       size="small"
                       value={
@@ -5722,10 +5534,10 @@ export default function ManagementPage() {
                           />
                         </LocalizationProvider>
                         <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ px: 1, pb: 1 }}>
-                          <Button size="small" onClick={() => setHhMatrixRangeAnchorEl(null)}>
+                          <AppButton size="small" onClick={() => setHhMatrixRangeAnchorEl(null)}>
                             Cancelar
-                          </Button>
-                          <Button
+                          </AppButton>
+                          <AppButton
                             size="small"
                             variant="contained"
                             onClick={() => {
@@ -5740,7 +5552,7 @@ export default function ManagementPage() {
                             }}
                           >
                             Aplicar
-                          </Button>
+                          </AppButton>
                         </Stack>
                       </Box>
                     </Popover>
@@ -5869,14 +5681,14 @@ export default function ManagementPage() {
                 </TableContainer>
                 </DialogContent>
                 <DialogActions sx={{ borderTop: `1px solid ${colors.gray200}`, px: 2, py: 1 }}>
-                  <Button onClick={() => setHhMatrixDialogOpen(false)} variant="outlined">
+                  <AppButton onClick={() => setHhMatrixDialogOpen(false)} variant="outlined">
                     Cerrar
-                  </Button>
+                  </AppButton>
                 </DialogActions>
               </Dialog>
 
               {error ? (
-                <Alert severity="error">{error}</Alert>
+                <AppAlert severity="error">{error}</AppAlert>
               ) : loading ? (
                 <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 4 }}>
                   <CircularProgress size={22} />
@@ -6136,7 +5948,7 @@ export default function ManagementPage() {
                   }}
                 >
                   {historicalHhError ? (
-                    <Alert severity="error">{historicalHhError}</Alert>
+                    <AppAlert severity="error">{historicalHhError}</AppAlert>
                   ) : historicalHhLoading ? (
                     <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                       <CircularProgress size={22} />
@@ -6194,7 +6006,7 @@ export default function ManagementPage() {
                                   <Typography sx={{ color: colors.blue100 }}>
                                     HM acum: {formatNumber(toNumber(lastRow?.major_hm_accum) + toNumber(lastRow?.minor_hm_accum))}
                                   </Typography>
-                                  <Button
+                                  <AppButton
                                     size="small"
                                     variant="outlined"
                                     startIcon={historicalHhExportingFront === frontGroup.front ? <CircularProgress size={14} sx={{ color: colors.white }} /> : <FileUpload />}
@@ -6217,7 +6029,7 @@ export default function ManagementPage() {
                                     }}
                                   >
                                     Excel
-                                  </Button>
+                                  </AppButton>
                                 </Stack>
                               </Stack>
                             </AccordionSummary>
@@ -6329,7 +6141,7 @@ export default function ManagementPage() {
                         </Typography>
                       </Box>
                       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
-                        <TextField
+                        <AppTextField
                           size="small"
                           label="Fecha"
                           placeholder="dd-mm-yyyy"
@@ -6382,7 +6194,7 @@ export default function ManagementPage() {
                               />
                             </LocalizationProvider>
                             <Stack direction="row" spacing={1} justifyContent="space-between" sx={{ px: 1, pb: 1 }}>
-                              <Button
+                              <AppButton
                                 size="small"
                                 onClick={() => {
                                   setCrewPersonnelDateFilter('');
@@ -6390,14 +6202,14 @@ export default function ManagementPage() {
                                 }}
                               >
                                 Todas
-                              </Button>
-                              <Button size="small" onClick={() => setCrewPersonnelDateAnchorEl(null)}>
+                              </AppButton>
+                              <AppButton size="small" onClick={() => setCrewPersonnelDateAnchorEl(null)}>
                                 Cerrar
-                              </Button>
+                              </AppButton>
                             </Stack>
                           </Box>
                         </Popover>
-                        <TextField
+                        <AppTextField
                           select
                           size="small"
                           label="Frente"
@@ -6411,8 +6223,8 @@ export default function ManagementPage() {
                               {front}
                             </MenuItem>
                           ))}
-                        </TextField>
-                        <TextField
+                        </AppTextField>
+                        <AppTextField
                           select
                           size="small"
                           label="Tipo"
@@ -6423,8 +6235,8 @@ export default function ManagementPage() {
                           <MenuItem value="">Todos</MenuItem>
                           <MenuItem value="DIRECTO">Directo</MenuItem>
                           <MenuItem value="INDIRECTO">Indirecto</MenuItem>
-                        </TextField>
-                        <TextField
+                        </AppTextField>
+                        <AppTextField
                           select
                           size="small"
                           label="HH"
@@ -6438,8 +6250,8 @@ export default function ManagementPage() {
                               {option.label}
                             </MenuItem>
                           ))}
-                        </TextField>
-                        <TextField
+                        </AppTextField>
+                        <AppTextField
                           select
                           size="small"
                           label="HH extras"
@@ -6453,8 +6265,8 @@ export default function ManagementPage() {
                               {option.label}
                             </MenuItem>
                           ))}
-                        </TextField>
-                        <TextField
+                        </AppTextField>
+                        <AppTextField
                           size="small"
                           label="Buscar personal"
                           placeholder="Nombre, RUT, cargo, frente, reporte..."
@@ -6462,7 +6274,7 @@ export default function ManagementPage() {
                           onChange={(event) => setCrewPersonnelSearch(event.target.value)}
                           sx={{ width: { xs: '100%', md: 360 } }}
                         />
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           disabled={crewPersonnelExporting || filteredCrewPersonnelRows.length === 0}
                           onClick={() => void exportVisibleCrewPersonnelRows()}
@@ -6480,9 +6292,9 @@ export default function ManagementPage() {
                           }}
                         >
                           {crewPersonnelExporting ? <CircularProgress size={19} /> : <Download sx={{ fontSize: 26 }} />}
-                        </IconButton>
+                        </AppIconButton>
                         {crewPersonnelDateFilter || crewPersonnelFrontFilter || crewPersonnelTypeFilter || crewPersonnelHhFilter || crewPersonnelExtraHhFilter || crewPersonnelSearch ? (
-                          <IconButton
+                          <AppIconButton
                             size="small"
                             onClick={() => {
                               setCrewPersonnelDateFilter('');
@@ -6497,7 +6309,7 @@ export default function ManagementPage() {
                             sx={{ border: `1px solid ${colors.slate300}`, borderRadius: 1, alignSelf: { xs: 'flex-end', sm: 'center' } }}
                           >
                             <Clear sx={{ fontSize: 18 }} />
-                          </IconButton>
+                          </AppIconButton>
                         ) : null}
                       </Stack>
                     </Stack>
@@ -6534,7 +6346,7 @@ export default function ManagementPage() {
                     </Typography>
 
                     {error ? (
-                      <Alert severity="error">{error}</Alert>
+                      <AppAlert severity="error">{error}</AppAlert>
                     ) : loading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                         <CircularProgress size={22} />
@@ -6595,102 +6407,27 @@ export default function ManagementPage() {
                 </Paper>
               ) : activeTab === 'activities' ? (
                 <>
-                <Paper
-                  variant="outlined"
-                  sx={{
-                    mb: { xs: 1, md: 1.25 },
-                    mx: 'auto',
-                    p: { xs: 1, md: 1.1 },
-                    width: { xs: '100%', lg: '70%' },
-                    maxWidth: 1400,
-                    borderColor: colors.managementBorder,
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', md: 'auto minmax(240px, 1fr) auto' },
-                    alignItems: { xs: 'stretch', md: 'center' },
-                    gap: 1,
+                <AppWeekNavigator
+                  periodLabel={activitiesWeekLabel}
+                  value={activitiesWeekRange?.start || ''}
+                  options={activitiesAvailableWeeks.map((range) => ({
+                    value: range.start,
+                    shortLabel: `Semana ${getProjectWeekNumber(range.start)}`,
+                    label: `Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`,
+                  }))}
+                  previousDisabled={isActivitiesGlobalSearch || !previousActivitiesWeek}
+                  nextDisabled={isActivitiesGlobalSearch || !nextActivitiesWeek}
+                  latestDisabled={isActivitiesGlobalSearch || isViewingLatestActivitiesWeek}
+                  selectDisabled={isActivitiesGlobalSearch}
+                  onPrevious={() => previousActivitiesWeek && setActivitiesWeekRange(previousActivitiesWeek)}
+                  onNext={() => nextActivitiesWeek && setActivitiesWeekRange(nextActivitiesWeek)}
+                  onLatest={() => setActivitiesWeekRange(latestAvailableActivitiesWeek)}
+                  onChange={(value) => {
+                    const selected = activitiesAvailableWeeks.find((range) => range.start === value);
+                    if (selected) setActivitiesWeekRange(selected);
                   }}
-                >
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    disabled={isActivitiesGlobalSearch || !previousActivitiesWeek}
-                    onClick={() => previousActivitiesWeek && setActivitiesWeekRange(previousActivitiesWeek)}
-                    sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap' }}
-                  >
-                    Semana anterior
-                  </Button>
-                  <Typography
-                    sx={{
-                      color: isActivitiesGlobalSearch ? colors.slate400 : colors.slate900,
-                      fontWeight: 600,
-                      textAlign: 'center',
-                      flex: 1,
-                      minWidth: 0,
-                      whiteSpace: { md: 'nowrap' },
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {activitiesWeekLabel}
-                  </Typography>
-                  <Stack direction="row" spacing={0.75} justifyContent={{ xs: 'stretch', md: 'flex-end' }} sx={{ flexShrink: 0, flexWrap: { xs: 'wrap', md: 'nowrap' } }}>
-                    <TextField
-                      select
-                      size="small"
-                      value={activitiesWeekRange?.start || ''}
-                      disabled={isActivitiesGlobalSearch}
-                      SelectProps={{
-                        renderValue: (value) => {
-                          const selected = activitiesAvailableWeeks.find((range) => range.start === value);
-                          return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : 'Semana';
-                        },
-                      }}
-                      onChange={(event) => {
-                        const selected = activitiesAvailableWeeks.find((range) => range.start === event.target.value);
-                        if (selected) setActivitiesWeekRange(selected);
-                      }}
-                      sx={{
-                        width: { xs: '100%', sm: 142, md: 142 },
-                        minWidth: { xs: '100%', sm: 142, md: 142 },
-                        flex: { xs: '1 1 100%', sm: '0 0 142px', md: '0 0 142px' },
-                        '& .MuiInputBase-root': {
-                          height: 32,
-                        },
-                        '& .MuiSelect-select': {
-                          py: 0.55,
-                          fontWeight: 500,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        },
-                      }}
-                    >
-                      {activitiesAvailableWeeks.map((range) => (
-                        <MenuItem key={`activities-week-${range.start}`} value={range.start}>
-                          {`Semana ${getProjectWeekNumber(range.start)} (${formatSpanishShortDate(range.start)} - ${formatSpanishShortDate(range.end)})`}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      disabled={isActivitiesGlobalSearch || isViewingLatestActivitiesWeek}
-                      onClick={() => setActivitiesWeekRange(latestAvailableActivitiesWeek)}
-                      sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
-                    >
-                      Última semana
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      disabled={isActivitiesGlobalSearch || !nextActivitiesWeek}
-                      onClick={() => nextActivitiesWeek && setActivitiesWeekRange(nextActivitiesWeek)}
-                      sx={{ height: 32, fontWeight: 500, textTransform: 'none', whiteSpace: 'nowrap', flex: { xs: 1, sm: '0 0 auto' } }}
-                    >
-                      Semana siguiente
-                    </Button>
-                  </Stack>
-                </Paper>
+                  sx={{ mb: { xs: 1, md: 1.25 }, borderColor: colors.managementBorder }}
+                />
                 <Paper
                   variant="outlined"
                   sx={{
@@ -6709,7 +6446,7 @@ export default function ManagementPage() {
                       <Typography sx={{ fontWeight: 700, color: colors.gray900 }}>
                         Actividades de reportes de terreno
                       </Typography>
-                      <TextField
+                      <AppTextField
                         size="small"
                         label="Buscar actividad"
                         placeholder="Nombre, frente, área, cuadrilla, unidad, fecha, reporte..."
@@ -6723,7 +6460,7 @@ export default function ManagementPage() {
                     </Typography>
 
                     {error ? (
-                      <Alert severity="error">{error}</Alert>
+                      <AppAlert severity="error">{error}</AppAlert>
                     ) : loading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                         <CircularProgress size={22} />
@@ -6914,7 +6651,7 @@ export default function ManagementPage() {
                       </Box>
                     </Stack>
 
-                    {reportFrontsError ? <Alert severity="error">{reportFrontsError}</Alert> : null}
+                    {reportFrontsError ? <AppAlert severity="error">{reportFrontsError}</AppAlert> : null}
                     {reportFrontsLoading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 2 }}>
                         <CircularProgress size={22} />
@@ -6983,7 +6720,7 @@ export default function ManagementPage() {
                                   </Typography>
                                 ) : (
                                   <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                                    <IconButton
+                                    <AppIconButton
                                       size="small"
                                       disabled={!front.is_active || !front.id || reportFrontSaving}
                                       onClick={() => requestToggleReportFrontDailyActivities(front)}
@@ -6999,13 +6736,13 @@ export default function ManagementPage() {
                                       title={front.include_in_daily_activities ? 'Excluir de Actividades' : 'Incluir en Actividades'}
                                     >
                                       <AssignmentTurnedIn sx={{ fontSize: 17 }} />
-                                    </IconButton>
-                                    <IconButton size="small" onClick={() => openEditReportFrontDialog(front)} aria-label="Editar frente" title="Editar" sx={{ color: colors.blue600 }}>
+                                    </AppIconButton>
+                                    <AppIconButton size="small" onClick={() => openEditReportFrontDialog(front)} aria-label="Editar frente" title="Editar" sx={{ color: colors.blue600 }}>
                                       <EditOutlined sx={{ fontSize: 18 }} />
-                                    </IconButton>
-                                    <IconButton size="small" disabled={!front.is_active || !front.id || reportFrontSaving} onClick={() => deactivateReportFront(front)} aria-label="Desactivar frente" title="Desactivar" sx={{ color: colors.red500 }}>
+                                    </AppIconButton>
+                                    <AppIconButton size="small" disabled={!front.is_active || !front.id || reportFrontSaving} onClick={() => deactivateReportFront(front)} aria-label="Desactivar frente" title="Desactivar" sx={{ color: colors.red500 }}>
                                       <Trash2 size={16} />
-                                    </IconButton>
+                                    </AppIconButton>
                                   </Stack>
                                 )}
                               </TableCell>
@@ -7040,7 +6777,7 @@ export default function ManagementPage() {
                           pr: { sm: 8 },
                         }}
                       >
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           disabled={equipmentAvailableDates.length === 0 || equipmentAvailableDates.indexOf(String(equipmentDate || '').slice(0, 10)) <= 0}
                           onClick={() => {
@@ -7052,8 +6789,8 @@ export default function ManagementPage() {
                           title="Día anterior"
                         >
                           <ChevronLeft fontSize="small" />
-                        </IconButton>
-                        <TextField
+                        </AppIconButton>
+                        <AppTextField
                           size="small"
                           label="Fecha con datos"
                           value={formatSpanishShortDate(String(equipmentDate || '').slice(0, 10)) || String(equipmentDate || '').slice(0, 10)}
@@ -7096,7 +6833,7 @@ export default function ManagementPage() {
                             />
                           </LocalizationProvider>
                         </Popover>
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           disabled={equipmentAvailableDates.length === 0 || equipmentAvailableDates.indexOf(String(equipmentDate || '').slice(0, 10)) === -1 || equipmentAvailableDates.indexOf(String(equipmentDate || '').slice(0, 10)) >= equipmentAvailableDates.length - 1}
                           onClick={() => {
@@ -7108,7 +6845,7 @@ export default function ManagementPage() {
                           title="Día siguiente"
                         >
                           <ChevronRight fontSize="small" />
-                        </IconButton>
+                        </AppIconButton>
                         <Typography
                           sx={{
                             color: colors.managementDisabledText,
@@ -7128,7 +6865,7 @@ export default function ManagementPage() {
                       </Box>
                     </Stack>
 
-                    {equipmentError ? <Alert severity="error">{equipmentError}</Alert> : null}
+                    {equipmentError ? <AppAlert severity="error">{equipmentError}</AppAlert> : null}
                     {equipmentLoading ? (
                       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 2 }}>
                         <CircularProgress size={22} />
@@ -7229,7 +6966,7 @@ export default function ManagementPage() {
                                       <Stack direction="row" spacing={0.15} sx={{ flex: '0 0 auto' }}>
                                         <Tooltip title={!getEquipmentDailyReportAvailability(row).available ? getEquipmentDailyReportAvailability(row).reason : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}>
                                           <span>
-                                            <IconButton
+                                            <AppIconButton
                                               size="small"
                                               onClick={() => toggleEquipmentDailyReport(index)}
                                               disabled={!row.id || equipmentSaving || !getEquipmentDailyReportAvailability(row).available}
@@ -7239,15 +6976,15 @@ export default function ManagementPage() {
                                               {row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available
                                                 ? <AssignmentLateOutlined sx={{ fontSize: 18 }} />
                                                 : <AssignmentTurnedIn sx={{ fontSize: 18 }} />}
-                                            </IconButton>
+                                            </AppIconButton>
                                           </span>
                                         </Tooltip>
-                                        <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600, p: 0.5 }}>
+                                        <AppIconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600, p: 0.5 }}>
                                           <EditOutlined sx={{ fontSize: 18 }} />
-                                        </IconButton>
-                                        <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500, p: 0.5 }}>
+                                        </AppIconButton>
+                                        <AppIconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500, p: 0.5 }}>
                                           <Trash2 size={16} />
-                                        </IconButton>
+                                        </AppIconButton>
                                       </Stack>
                                     </Box>
 
@@ -7401,14 +7138,14 @@ export default function ManagementPage() {
                                     <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={0.5}>
                                       <span>Nombre (máquina/equipo)</span>
                                       <Tooltip title={equipmentNamePinned ? 'Desfijar nombre' : 'Fijar nombre'}>
-                                        <IconButton
+                                        <AppIconButton
                                           size="small"
                                           aria-label={equipmentNamePinned ? 'Desfijar nombre' : 'Fijar nombre'}
                                           onClick={() => setEquipmentNamePinned((current) => !current)}
                                           sx={{ color: equipmentNamePinned ? colors.blue600 : colors.slate400, p: 0.25 }}
                                         >
                                           {equipmentNamePinned ? <PushPin sx={{ fontSize: 15 }} /> : <PushPinOutlined sx={{ fontSize: 15 }} />}
-                                        </IconButton>
+                                        </AppIconButton>
                                       </Tooltip>
                                     </Stack>
                                   </TableCell>
@@ -7430,7 +7167,7 @@ export default function ManagementPage() {
                                     <Stack direction="row" alignItems="center" justifyContent="center" spacing={0.5} sx={{ position: 'relative' }}>
                                       <span>Patente / Nº / Serie</span>
                                       <Tooltip title={equipmentPatentPinned ? 'Desfijar patente' : 'Fijar patente'}>
-                                        <IconButton
+                                        <AppIconButton
                                           size="small"
                                           aria-label={equipmentPatentPinned ? 'Desfijar patente' : 'Fijar patente'}
                                           onClick={() => setEquipmentPatentPinned((current) => !current)}
@@ -7442,7 +7179,7 @@ export default function ManagementPage() {
                                           }}
                                         >
                                           {equipmentPatentPinned ? <PushPin sx={{ fontSize: 15 }} /> : <PushPinOutlined sx={{ fontSize: 15 }} />}
-                                        </IconButton>
+                                        </AppIconButton>
                                       </Tooltip>
                                     </Stack>
                                   </TableCell>
@@ -7546,7 +7283,7 @@ export default function ManagementPage() {
                                     <TableCell align="center">
                                       <Tooltip title={!getEquipmentDailyReportAvailability(row).available ? getEquipmentDailyReportAvailability(row).reason : row.include_in_daily_report === false ? 'Incluir en reporte diario' : 'Excluir del reporte diario'}>
                                         <span>
-                                          <IconButton
+                                          <AppIconButton
                                             size="small"
                                             onClick={() => toggleEquipmentDailyReport(index)}
                                             disabled={!row.id || equipmentSaving || !getEquipmentDailyReportAvailability(row).available}
@@ -7556,15 +7293,15 @@ export default function ManagementPage() {
                                             {row.include_in_daily_report === false || !getEquipmentDailyReportAvailability(row).available
                                               ? <AssignmentLateOutlined sx={{ fontSize: 18 }} />
                                               : <AssignmentTurnedIn sx={{ fontSize: 18 }} />}
-                                          </IconButton>
+                                          </AppIconButton>
                                         </span>
                                       </Tooltip>
-                                      <IconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600 }}>
+                                      <AppIconButton size="small" onClick={() => openEditEquipmentModal(index)} aria-label="Editar equipo" title="Editar" sx={{ color: colors.blue600 }}>
                                         <EditOutlined sx={{ fontSize: 18 }} />
-                                      </IconButton>
-                                      <IconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500 }}>
+                                      </AppIconButton>
+                                      <AppIconButton size="small" onClick={() => removeEquipmentRow(index)} aria-label="Quitar equipo" title="Quitar" sx={{ color: colors.red500 }}>
                                         <Trash2 size={16} />
-                                      </IconButton>
+                                      </AppIconButton>
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -7625,7 +7362,7 @@ export default function ManagementPage() {
                         </Typography>
                       </Box>
                       <Stack direction="row" spacing={0.8} sx={{ alignSelf: { xs: 'flex-start', sm: 'auto' } }}>
-                        <Button
+                        <AppButton
                           variant="outlined"
                           startIcon={<PushPinOutlined />}
                           onClick={() => {
@@ -7642,8 +7379,8 @@ export default function ManagementPage() {
                           sx={{ textTransform: 'none', fontWeight: 700 }}
                         >
                           Seleccionar fotos ({Object.keys(includedPhotoEvidenceKeys).length})
-                        </Button>
-                        <Button
+                        </AppButton>
+                        <AppButton
                           variant="contained"
                           color="warning"
                           onClick={() => void savePhotoReportConfig()}
@@ -7662,8 +7399,8 @@ export default function ManagementPage() {
                           }}
                         >
                           {photoConfigSaving ? 'Guardando...' : 'Guardar configuración'}
-                        </Button>
-                        <Button
+                        </AppButton>
+                        <AppButton
                           variant="contained"
                           startIcon={photoExporting ? <CircularProgress size={16} sx={{ color: colors.white }} /> : <Download />}
                           onClick={() => void exportPhotoReportPptx()}
@@ -7678,7 +7415,7 @@ export default function ManagementPage() {
                           }}
                         >
                           {photoExporting ? 'Exportando...' : 'Exportar PPTX'}
-                        </Button>
+                        </AppButton>
                       </Stack>
                     </Stack>
 
@@ -7709,7 +7446,7 @@ export default function ManagementPage() {
                         <Stack spacing={1}>
                           <FormControl size="small" fullWidth>
                             <InputLabel id="saved-photo-config-label">Reportes guardados</InputLabel>
-                            <Select
+                            <AppSelectControl
                               labelId="saved-photo-config-label"
                               label="Reportes guardados"
                               value=""
@@ -7740,15 +7477,15 @@ export default function ManagementPage() {
                                   {`N°${cfg.report_no} | ${formatSpanishShortDate(String(cfg.period_start || ''))} - ${formatSpanishShortDate(String(cfg.period_end || ''))}`}
                                 </MenuItem>
                               ))}
-                            </Select>
+                            </AppSelectControl>
                           </FormControl>
-                          <TextField
+                          <AppTextField
                             size="small"
                             label="Titulo portada"
                             value={photoCoverTitle}
                             onChange={(event) => setPhotoCoverTitle(event.target.value)}
                           />
-                          <TextField
+                          <AppTextField
                             size="small"
                             label="N° informe"
                             value={photoCoverReportNo}
@@ -7776,7 +7513,7 @@ export default function ManagementPage() {
                             >
                               Período
                             </Typography>
-                            <TextField
+                            <AppTextField
                               size="small"
                               fullWidth
                               label="Rango de fechas"
@@ -7800,7 +7537,7 @@ export default function ManagementPage() {
                               }}
                             />
                           </Box>
-                          <TextField
+                          <AppTextField
                             size="small"
                             label="Filtrar por palabra o frase"
                             value={photoKeywordFilter}
@@ -7818,19 +7555,19 @@ export default function ManagementPage() {
                               ),
                               endAdornment: photoKeywordFilter ? (
                                 <InputAdornment position="end">
-                                  <IconButton
+                                  <AppIconButton
                                     size="small"
                                     onClick={() => setPhotoKeywordFilter('')}
                                     aria-label="Limpiar filtro fotográfico"
                                     sx={{ color: colors.slate500 }}
                                   >
                                     <Clear fontSize="small" />
-                                  </IconButton>
+                                  </AppIconButton>
                                 </InputAdornment>
                               ) : null,
                             }}
                           />
-                          <TextField
+                          <AppTextField
                             size="small"
                             label="Título subcarátula"
                             value={activePhotoSectionTitleValue}
@@ -7847,7 +7584,7 @@ export default function ManagementPage() {
                             }
                           />
                           <Stack direction="row" spacing={0.8} sx={{ width: '100%' }}>
-                            <TextField
+                            <AppTextField
                               size="small"
                               label="Desde pág."
                               type="number"
@@ -7863,7 +7600,7 @@ export default function ManagementPage() {
                               InputProps={{ sx: { '& input': { textAlign: 'center' } } }}
                               inputProps={{ min: 1, max: Math.max(1, totalPhotoSlides) }}
                             />
-                            <TextField
+                            <AppTextField
                               size="small"
                               label="Hasta pág."
                               type="number"
@@ -7882,7 +7619,7 @@ export default function ManagementPage() {
                           </Stack>
                           <FormControl size="small" fullWidth>
                             <InputLabel id="photo-sector-jump-label">Ir a sector</InputLabel>
-                            <Select
+                            <AppSelectControl
                               labelId="photo-sector-jump-label"
                               label="Ir a sector"
                               value={activeSectorIndex >= 0 ? String(activeSectorIndex) : ''}
@@ -7893,25 +7630,25 @@ export default function ManagementPage() {
                                   {s.label} ({s.start}-{s.end})
                                 </MenuItem>
                               ))}
-                            </Select>
+                            </AppSelectControl>
                           </FormControl>
                           <Stack direction="row" spacing={0.8}>
-                            <Button
+                            <AppButton
                               size="small"
                               variant="outlined"
                               disabled={activeSectorIndex <= 0}
                               onClick={() => goToSector(activeSectorIndex - 1)}
                             >
                               Sector anterior
-                            </Button>
-                            <Button
+                            </AppButton>
+                            <AppButton
                               size="small"
                               variant="outlined"
                               disabled={activeSectorIndex < 0 || activeSectorIndex >= sectorPageRanges.length - 1}
                               onClick={() => goToSector(activeSectorIndex + 1)}
                             >
                               Sector siguiente
-                            </Button>
+                            </AppButton>
                           </Stack>
                           <Accordion disableGutters elevation={0} sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1.25, '&:before': { display: 'none' } }}>
                             <AccordionSummary expandIcon={<ExpandMore />} sx={{ minHeight: 36 }}>
@@ -7919,25 +7656,25 @@ export default function ManagementPage() {
                             </AccordionSummary>
                             <AccordionDetails sx={{ pt: 0.5 }}>
                               <Stack spacing={1}>
-                                <TextField
+                                <AppTextField
                                   size="small"
                                   label="URL fondo"
                                   value={photoCoverBackgroundUrl}
                                   onChange={(event) => setPhotoCoverBackgroundUrl(event.target.value)}
                                 />
-                                <TextField
+                                <AppTextField
                                   size="small"
                                   label="URL logo central"
                                   value={photoCoverLogoUrl}
                                   onChange={(event) => setPhotoCoverLogoUrl(event.target.value)}
                                 />
-                                <TextField
+                                <AppTextField
                                   size="small"
                                   label="URL fondo página 2"
                                   value={photoPage2BackgroundUrl}
                                   onChange={(event) => setPhotoPage2BackgroundUrl(event.target.value)}
                                 />
-                                <TextField
+                                <AppTextField
                                   size="small"
                                   label="URL fondo página 3"
                                   value={photoPage3BackgroundUrl}
@@ -8349,7 +8086,7 @@ export default function ManagementPage() {
                           </Box>
                         </Box>
 
-                        {totalPhotoSlides > 1 ? <IconButton
+                        {totalPhotoSlides > 1 ? <AppIconButton
                           onClick={() => setPhotoPreviewSlide((prev) => (prev <= 0 ? Math.max(0, totalPhotoSlides - 1) : prev - 1))}
                           aria-label="Anterior"
                           sx={{
@@ -8364,8 +8101,8 @@ export default function ManagementPage() {
                           }}
                         >
                           <ChevronLeft />
-                        </IconButton> : null}
-                        {totalPhotoSlides > 1 ? <IconButton
+                        </AppIconButton> : null}
+                        {totalPhotoSlides > 1 ? <AppIconButton
                           onClick={() => setPhotoPreviewSlide((prev) => (prev >= Math.max(0, totalPhotoSlides - 1) ? 0 : prev + 1))}
                           aria-label="Siguiente"
                           sx={{
@@ -8380,7 +8117,7 @@ export default function ManagementPage() {
                           }}
                         >
                           <ChevronRight />
-                        </IconButton> : null}
+                        </AppIconButton> : null}
                       </Box>
                     </Box>
                   </Stack>
@@ -8395,7 +8132,7 @@ export default function ManagementPage() {
                   }}
                 >
                   {interferencesError ? (
-                    <Alert severity="error">{interferencesError}</Alert>
+                    <AppAlert severity="error">{interferencesError}</AppAlert>
                   ) : interferencesLoading ? (
                     <Stack direction="row" spacing={1.5} alignItems="center" sx={{ py: 3 }}>
                       <CircularProgress size={22} />
@@ -8471,9 +8208,9 @@ export default function ManagementPage() {
             <Typography sx={{ color: colors.slate500 }}>No hay imágenes candidatas para este rango.</Typography>
           ) : (
             <Stack spacing={1} sx={{ minHeight: 0, flex: 1 }}>
-              <Alert severity="info" sx={{ py: 0.35 }}>
+              <AppAlert severity="info" sx={{ py: 0.35 }}>
                 {photoPeriodInputLabel ? `Período: ${photoPeriodInputLabel}` : 'Selecciona un período antes de elegir imágenes.'}
-              </Alert>
+              </AppAlert>
               <Box
                 sx={{
                   display: 'grid',
@@ -8503,7 +8240,7 @@ export default function ManagementPage() {
                   },
                 }}
               >
-                <Button
+                <AppButton
                   size="small"
                   variant="outlined"
                   onClick={() => {
@@ -8521,8 +8258,8 @@ export default function ManagementPage() {
                   }}
                 >
                   Seleccionar todo
-                </Button>
-                <Button
+                </AppButton>
+                <AppButton
                   size="small"
                   variant="outlined"
                   onClick={() => {
@@ -8531,8 +8268,8 @@ export default function ManagementPage() {
                   }}
                 >
                   Limpiar selección
-                </Button>
-                <Button
+                </AppButton>
+                <AppButton
                   size="small"
                   variant="outlined"
                   onClick={() => {
@@ -8543,17 +8280,17 @@ export default function ManagementPage() {
                   }}
                 >
                   Limpiar filtros
-                </Button>
-                <Button
+                </AppButton>
+                <AppButton
                   size="small"
                   variant="text"
                   color="error"
                   onClick={() => setPhotoRestoreSelection({})}
                 >
                   Quitar todas
-                </Button>
+                </AppButton>
               </Stack>
-              <TextField
+              <AppTextField
                 size="small"
                 fullWidth
                 label="Filtrar por palabra o frase"
@@ -8572,14 +8309,14 @@ export default function ManagementPage() {
                   ),
                   endAdornment: photoKeywordFilter ? (
                     <InputAdornment position="end">
-                      <IconButton
+                      <AppIconButton
                         size="small"
                         onClick={() => setPhotoKeywordFilter('')}
                         aria-label="Limpiar filtro fotográfico"
                         sx={{ color: colors.slate500 }}
                       >
                         <Clear fontSize="small" />
-                      </IconButton>
+                      </AppIconButton>
                     </InputAdornment>
                   ) : null,
                 }}
@@ -8591,7 +8328,7 @@ export default function ManagementPage() {
                   gap: 1,
                 }}
               >
-                <TextField
+                <AppTextField
                   select
                   size="small"
                   label="Frente"
@@ -8602,8 +8339,8 @@ export default function ManagementPage() {
                   {photoSelectFrontOptions.map((front) => (
                     <MenuItem key={`photo-select-front-${front}`} value={front}>{front}</MenuItem>
                   ))}
-                </TextField>
-                <TextField
+                </AppTextField>
+                <AppTextField
                   select
                   size="small"
                   label="Reporte"
@@ -8614,7 +8351,7 @@ export default function ManagementPage() {
                   {photoSelectReportOptions.map((report) => (
                     <MenuItem key={`photo-select-report-${report}`} value={report}>{report}</MenuItem>
                   ))}
-                </TextField>
+                </AppTextField>
               </Box>
               <Paper
                 variant="outlined"
@@ -8638,14 +8375,14 @@ export default function ManagementPage() {
                     </Typography>
                   </Box>
                   {photoSelectActivityFilter ? (
-                    <Button
+                    <AppButton
                       size="small"
                       variant="text"
                       onClick={() => setPhotoSelectActivityFilter('')}
                       sx={{ textTransform: 'none', fontWeight: 700, flexShrink: 0 }}
                     >
                       Ver todas
-                    </Button>
+                    </AppButton>
                   ) : null}
                 </Stack>
                 {photoActivitySuggestionSections.length === 0 ? (
@@ -8745,7 +8482,7 @@ export default function ManagementPage() {
                       return (
                         <TableRow key={`select-photo-${key}`}>
                           <TableCell padding="checkbox">
-                            <Checkbox
+                            <AppCheckbox
                               checked={Boolean(photoRestoreSelection[key])}
                               onChange={(event) => {
                                 const checked = event.target.checked;
@@ -8824,13 +8561,13 @@ export default function ManagementPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPhotoRestoreDialogOpen(false)}>Cancelar</Button>
-          <Button
+          <AppButton onClick={() => setPhotoRestoreDialogOpen(false)}>Cancelar</AppButton>
+          <AppButton
             variant="contained"
             onClick={restoreSelectedPhotoEvidence}
           >
             Aplicar selección
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
       <Dialog
@@ -8851,9 +8588,9 @@ export default function ManagementPage() {
           <Typography sx={{ fontWeight: 700, color: colors.slate900 }}>
             Vista ampliada
           </Typography>
-          <Button onClick={() => setPhotoZoomEvidenceKey('')} sx={{ textTransform: 'none' }}>
+          <AppButton onClick={() => setPhotoZoomEvidenceKey('')} sx={{ textTransform: 'none' }}>
             Cerrar
-          </Button>
+          </AppButton>
         </DialogTitle>
         <DialogContent dividers sx={{ minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) 340px' }, gap: 1.5 }}>
           <Box
@@ -8880,7 +8617,7 @@ export default function ManagementPage() {
             )}
             {zoomPhotoList.length > 1 ? (
               <>
-                <IconButton
+                <AppIconButton
                   onClick={() => goToZoomPhoto(-1)}
                   aria-label="Foto anterior"
                   sx={{
@@ -8894,8 +8631,8 @@ export default function ManagementPage() {
                   }}
                 >
                   <ChevronLeft />
-                </IconButton>
-                <IconButton
+                </AppIconButton>
+                <AppIconButton
                   onClick={() => goToZoomPhoto(1)}
                   aria-label="Foto siguiente"
                   sx={{
@@ -8909,35 +8646,35 @@ export default function ManagementPage() {
                   }}
                 >
                   <ChevronRight />
-                </IconButton>
+                </AppIconButton>
               </>
             ) : null}
           </Box>
           <Stack spacing={1.1} sx={{ minWidth: 0 }}>
             <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="space-between">
-              <IconButton
+              <AppIconButton
                 size="small"
                 onClick={() => goToZoomPhoto(-1)}
                 disabled={zoomPhotoList.length <= 1}
                 aria-label="Foto anterior"
               >
                 <ChevronLeft />
-              </IconButton>
+              </AppIconButton>
               <Typography sx={{ fontSize: 12.5, color: colors.slate500, fontWeight: 700 }}>
                 {zoomPhotoIndex >= 0 ? `${zoomPhotoIndex + 1} de ${zoomPhotoList.length}` : `1 de ${Math.max(1, zoomPhotoList.length)}`}
               </Typography>
-              <IconButton
+              <AppIconButton
                 size="small"
                 onClick={() => goToZoomPhoto(1)}
                 disabled={zoomPhotoList.length <= 1}
                 aria-label="Foto siguiente"
               >
                 <ChevronRight />
-              </IconButton>
+              </AppIconButton>
             </Stack>
             <FormControlLabel
               control={
-                <Checkbox
+                <AppCheckbox
                   checked={Boolean(photoRestoreSelection[photoZoomEvidenceKey])}
                   onChange={(event) => {
                     const checked = event.target.checked;
@@ -8956,7 +8693,7 @@ export default function ManagementPage() {
               }
               label="Incluir en el informe"
             />
-            <Button
+            <AppButton
 	              variant={photoRestoreSelection[photoZoomEvidenceKey] ? 'outlined' : 'contained'}
 	              onClick={() => {
 	                const checked = !photoRestoreSelection[photoZoomEvidenceKey];
@@ -8974,7 +8711,7 @@ export default function ManagementPage() {
               sx={{ textTransform: 'none', fontWeight: 700 }}
             >
               {photoRestoreSelection[photoZoomEvidenceKey] ? 'Quitar de selección' : 'Seleccionar imagen'}
-            </Button>
+            </AppButton>
             <Box sx={{ borderTop: `1px solid ${colors.slate200}`, pt: 1 }}>
               <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Frente</Typography>
               <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.front || '-'}</Typography>
@@ -9052,8 +8789,8 @@ export default function ManagementPage() {
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: { xs: 1.5, sm: 2 }, py: 1 }}>
-          <Button onClick={() => setPhotoRangeDialogOpen(false)}>Cancelar</Button>
-          <Button
+          <AppButton onClick={() => setPhotoRangeDialogOpen(false)}>Cancelar</AppButton>
+          <AppButton
             onClick={() => {
               if (!photoTempStartDate || !photoTempEndDate) return;
               const nextStart = formatIsoFromDate(photoTempStartDate);
@@ -9069,7 +8806,7 @@ export default function ManagementPage() {
             sx={{ fontWeight: 700, textTransform: 'none', px: 2.25 }}
           >
             Aplicar
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
       <Dialog
@@ -9088,7 +8825,7 @@ export default function ManagementPage() {
           <Stack spacing={2} sx={{ pt: 0.5 }}>
             <FormControl size="small" fullWidth>
               <InputLabel id="management-interference-front-label">Frente</InputLabel>
-              <Select
+              <AppSelectControl
                 labelId="management-interference-front-label"
                 label="Frente"
                 value={interferenceForm.workFront}
@@ -9097,12 +8834,12 @@ export default function ManagementPage() {
                 {MANAGEMENT_WORK_FRONT_OPTIONS.map((front) => (
                   <MenuItem key={front} value={front}>{front}</MenuItem>
                 ))}
-              </Select>
+              </AppSelectControl>
             </FormControl>
 
             <FormControl size="small" fullWidth>
               <InputLabel id="management-interference-time-type-label">Tipo</InputLabel>
-              <Select
+              <AppSelectControl
                 labelId="management-interference-time-type-label"
                 label="Tipo"
                 value={interferenceForm.timeType}
@@ -9115,12 +8852,12 @@ export default function ManagementPage() {
                 {Object.keys(MANAGEMENT_TIME_REASON_OPTIONS).map((type) => (
                   <MenuItem key={type} value={type}>{type}</MenuItem>
                 ))}
-              </Select>
+              </AppSelectControl>
             </FormControl>
 
             <FormControl size="small" fullWidth>
               <InputLabel id="management-interference-time-detail-label">Detalle tipo</InputLabel>
-              <Select
+              <AppSelectControl
                 labelId="management-interference-time-detail-label"
                 label="Detalle tipo"
                 value={interferenceForm.timeDetail}
@@ -9129,11 +8866,11 @@ export default function ManagementPage() {
                 {detailTypeOptions.map((detail) => (
                   <MenuItem key={detail} value={detail}>{detail}</MenuItem>
                 ))}
-              </Select>
+              </AppSelectControl>
             </FormControl>
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <TextField
+              <AppTextField
                 size="small"
                 label="Fecha"
                 type="date"
@@ -9142,7 +8879,7 @@ export default function ManagementPage() {
                 InputLabelProps={{ shrink: true }}
                 fullWidth
               />
-              <TextField
+              <AppTextField
                 size="small"
                 label="Inicio interferencia"
                 type="time"
@@ -9151,7 +8888,7 @@ export default function ManagementPage() {
                 InputLabelProps={{ shrink: true }}
                 fullWidth
               />
-              <TextField
+              <AppTextField
                 size="small"
                 label="Fin interferencia"
                 type="time"
@@ -9162,7 +8899,7 @@ export default function ManagementPage() {
               />
             </Stack>
 
-            <TextField
+            <AppTextField
               size="small"
               label="Detalle / Observación / Nota"
               value={interferenceForm.note}
@@ -9172,45 +8909,18 @@ export default function ManagementPage() {
               fullWidth
             />
 
-            <Box
-              sx={{
-                border: `1px dashed ${colors.slate400}`,
-                borderRadius: 1.5,
-                p: 1.5,
-                background: colors.slate50,
-              }}
-            >
-              <Stack spacing={1}>
-                <Button
-                  component="label"
-                  variant="outlined"
-                  startIcon={<CloudUpload />}
-                  sx={{ alignSelf: 'flex-start' }}
-                >
-                  Imágenes
-                  <input
-                    hidden
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(event) => {
-                      const files = Array.from(event.target.files || []);
-                      setInterferenceFiles(files);
-                      event.currentTarget.value = '';
-                    }}
-                  />
-                </Button>
-                <Typography variant="caption" sx={{ color: colors.slate500 }}>
-                  {interferenceFiles.length > 0
-                    ? `${interferenceFiles.length} imagen(es) seleccionada(s): ${interferenceFiles.map((file) => file.name).join(', ')}`
-                    : 'Sin imágenes seleccionadas.'}
-                </Typography>
-              </Stack>
-            </Box>
+            <MultiFileDropzone
+              files={interferenceFiles}
+              accept="image/*"
+              disabled={interferenceSaving}
+              label="Arrastra y suelta las imágenes aquí"
+              helperText="Puedes seleccionar varias imágenes"
+              onFilesChange={setInterferenceFiles}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button
+          <AppButton
             onClick={() => {
               setInterferenceDialogOpen(false);
               resetInterferenceForm();
@@ -9218,10 +8928,10 @@ export default function ManagementPage() {
             disabled={interferenceSaving}
           >
             Cancelar
-          </Button>
-          <Button variant="contained" onClick={saveInterference} disabled={interferenceSaving}>
+          </AppButton>
+          <AppButton variant="contained" onClick={saveInterference} disabled={interferenceSaving}>
             {interferenceSaving ? 'Guardando...' : 'Guardar'}
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
       <Dialog open={equipmentModalOpen} onClose={() => setEquipmentModalOpen(false)} fullWidth maxWidth="sm">
@@ -9242,7 +8952,7 @@ export default function ManagementPage() {
                 {(['MAYOR', 'MENOR'] as EquipmentKind[]).map((kind) => {
                   const selected = (equipmentDraft?.equipment_kind || 'MAYOR') === kind;
                   return (
-                    <Button
+                    <AppButton
                       key={kind}
                       type="button"
                       aria-pressed={selected}
@@ -9265,14 +8975,14 @@ export default function ManagementPage() {
                       }}
                     >
                       {kind}
-                    </Button>
+                    </AppButton>
                   );
                 })}
               </Box>
             </Box>
             <FormControl fullWidth size="small">
               <InputLabel id="equipment-name-select-label">Nombre (máquina/equipo)</InputLabel>
-              <Select
+              <AppSelectControl
                 labelId="equipment-name-select-label"
                 label="Nombre (máquina/equipo)"
                 value={equipmentNameCustomMode ? '__OTHER__' : String(equipmentDraft?.equipment_name || '').trim().toUpperCase()}
@@ -9309,10 +9019,10 @@ export default function ManagementPage() {
                     <MenuItem key={name} value={name}>{name}</MenuItem>
                   ))}
                 <MenuItem value="__OTHER__">OTRO...</MenuItem>
-              </Select>
+              </AppSelectControl>
             </FormControl>
             {equipmentNameCustomMode ? (
-              <TextField
+              <AppTextField
                 label="Escribe nuevo equipo"
                 size="small"
                 fullWidth
@@ -9327,7 +9037,7 @@ export default function ManagementPage() {
                 gap: 1,
               }}
             >
-              <TextField
+              <AppTextField
                   label="Patente / Nº / Serie"
                   size="small"
                   fullWidth
@@ -9335,7 +9045,7 @@ export default function ManagementPage() {
                   onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, patent: String(e.target.value || '').toLowerCase() } : prev)}
                   inputProps={{ style: { textTransform: 'uppercase' } }}
                 />
-              <TextField
+              <AppTextField
                 label="Aplicar desde"
                 size="small"
                 type="date"
@@ -9363,7 +9073,7 @@ export default function ManagementPage() {
                   bgcolor: Boolean(equipmentDraft?.is_operational) ? colors.managementFlagSoft : 'transparent',
                 }}
                 control={
-                  <Checkbox
+                  <AppCheckbox
                     checked={Boolean(equipmentDraft?.is_operational)}
                     sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }}
                     onChange={(e) => setEquipmentDraft((prev) => prev ? {
@@ -9387,7 +9097,7 @@ export default function ManagementPage() {
                   borderRadius: 1,
                   bgcolor: Boolean(equipmentDraft?.in_maintenance) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_maintenance)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: true, in_accreditation: false, in_breakdown: false } : prev)} />}
+                control={<AppCheckbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_maintenance)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: true, in_accreditation: false, in_breakdown: false } : prev)} />}
                 label="Mantención"
               />
               <FormControlLabel
@@ -9399,7 +9109,7 @@ export default function ManagementPage() {
                   borderRadius: 1,
                   bgcolor: Boolean(equipmentDraft?.in_accreditation) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_accreditation)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: true, in_breakdown: false } : prev)} />}
+                control={<AppCheckbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_accreditation)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: true, in_breakdown: false } : prev)} />}
                 label="Acreditación"
               />
               <FormControlLabel
@@ -9411,7 +9121,7 @@ export default function ManagementPage() {
                   borderRadius: 1,
                   bgcolor: Boolean(equipmentDraft?.in_breakdown) ? colors.managementFlagSoft : 'transparent',
                 }}
-                control={<Checkbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_breakdown)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: false, in_breakdown: true } : prev)} />}
+                control={<AppCheckbox sx={{ color: colors.managementCheckbox, '&.Mui-checked': { color: colors.blue10 } }} checked={Boolean(equipmentDraft?.in_breakdown)} disabled={Boolean(equipmentDraft?.is_operational)} onChange={() => setEquipmentDraft((prev) => prev ? { ...prev, in_maintenance: false, in_accreditation: false, in_breakdown: true } : prev)} />}
                 label="Panne"
               />
             </Box>
@@ -9423,7 +9133,7 @@ export default function ManagementPage() {
                 alignItems: 'center',
               }}
             >
-              <TextField
+              <AppTextField
                 label="Cantidad"
                 size="small"
                 type="number"
@@ -9431,7 +9141,7 @@ export default function ManagementPage() {
                 value={equipmentDraft?.quantity === null || equipmentDraft?.quantity === undefined ? '1' : String(equipmentDraft?.quantity)}
                 onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, quantity: String(e.target.value).trim() === '' ? 1 : toNumber(e.target.value || 1) } : prev)}
               />
-              <TextField
+              <AppTextField
                 label="CANALETAS"
                 size="small"
                 type="number"
@@ -9439,7 +9149,7 @@ export default function ManagementPage() {
                 value={equipmentDraft?.canaletas_qty === null || equipmentDraft?.canaletas_qty === undefined ? '0' : String(equipmentDraft?.canaletas_qty)}
                 onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, canaletas_qty: String(e.target.value).trim() === '' ? 0 : toNumber(e.target.value || 0) } : prev)}
               />
-              <TextField
+              <AppTextField
                 label="PISCINAS"
                 size="small"
                 type="number"
@@ -9448,7 +9158,7 @@ export default function ManagementPage() {
                 onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, piscinas_qty: String(e.target.value).trim() === '' ? 0 : toNumber(e.target.value || 0) } : prev)}
               />
             </Box>
-            <TextField
+            <AppTextField
               label="Kilometraje"
               size="small"
               type="number"
@@ -9463,7 +9173,7 @@ export default function ManagementPage() {
                 gap: 1,
               }}
             >
-              <TextField
+              <AppTextField
                 label="Ingreso"
                 size="small"
                 type="date"
@@ -9472,7 +9182,7 @@ export default function ManagementPage() {
                 onChange={(e) => setEquipmentDraft((prev) => prev ? { ...prev, entry_date: String(e.target.value || '').slice(0, 10) || null } : prev)}
                 InputLabelProps={{ shrink: true }}
               />
-              <TextField
+              <AppTextField
                 label="Salida / Devolución"
                 size="small"
                 type="date"
@@ -9488,7 +9198,7 @@ export default function ManagementPage() {
                 InputLabelProps={{ shrink: true }}
               />
             </Box>
-            <TextField
+            <AppTextField
               label="Notas"
               size="small"
               fullWidth
@@ -9500,10 +9210,10 @@ export default function ManagementPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEquipmentModalOpen(false)}>Cancelar</Button>
-          <Button variant="contained" onClick={saveEquipmentModal} disabled={!equipmentModalHasChanges || equipmentSaving}>
+          <AppButton onClick={() => setEquipmentModalOpen(false)}>Cancelar</AppButton>
+          <AppButton variant="contained" onClick={saveEquipmentModal} disabled={!equipmentModalHasChanges || equipmentSaving}>
             {equipmentSaving ? 'Guardando...' : 'Guardar'}
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
       <Dialog
@@ -9515,21 +9225,21 @@ export default function ManagementPage() {
         <DialogTitle>{reportFrontDraft.id ? 'Editar frente / UDR' : 'Nuevo frente / UDR'}</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={1.25} sx={{ pt: 0.5 }}>
-            <TextField
+            <AppTextField
               label="Nombre"
               size="small"
               fullWidth
               value={reportFrontDraft.name}
               onChange={(e) => updateReportFrontDraft({ name: String(e.target.value || '').toUpperCase() })}
             />
-            <TextField
+            <AppTextField
               label="Prefijo del título"
               size="small"
               fullWidth
               value={reportFrontDraft.title_prefix}
               onChange={(e) => updateReportFrontDraft({ title_prefix: String(e.target.value || '').toUpperCase() })}
             />
-            <TextField
+            <AppTextField
               label="Código"
               size="small"
               fullWidth
@@ -9537,7 +9247,7 @@ export default function ManagementPage() {
               onChange={(e) => updateReportFrontDraft({ code: String(e.target.value || '').toUpperCase() })}
             />
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1 }}>
-              <TextField
+              <AppTextField
                 select
                 label="Tipo"
                 size="small"
@@ -9547,8 +9257,8 @@ export default function ManagementPage() {
                 <MenuItem value="udr">UDR</MenuItem>
                 <MenuItem value="base">Contrato base</MenuItem>
                 <MenuItem value="other">Otro</MenuItem>
-              </TextField>
-              <TextField
+              </AppTextField>
+              <AppTextField
                 select
                 label="Modo correlativo"
                 size="small"
@@ -9557,10 +9267,10 @@ export default function ManagementPage() {
               >
                 <MenuItem value="incremental">Incremental</MenuItem>
                 <MenuItem value="date_anchor">Por fecha</MenuItem>
-              </TextField>
+              </AppTextField>
             </Box>
             {reportFrontDraft.sequence_mode === 'incremental' ? (
-              <TextField
+              <AppTextField
                 label="Próximo número"
                 size="small"
                 type="number"
@@ -9570,7 +9280,7 @@ export default function ManagementPage() {
               />
             ) : (
               <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1 }}>
-                <TextField
+                <AppTextField
                   label="Fecha ancla"
                   size="small"
                   type="date"
@@ -9578,7 +9288,7 @@ export default function ManagementPage() {
                   value={reportFrontDraft.date_anchor}
                   onChange={(e) => updateReportFrontDraft({ date_anchor: String(e.target.value || '') })}
                 />
-                <TextField
+                <AppTextField
                   label="Número en fecha ancla"
                   size="small"
                   type="number"
@@ -9590,7 +9300,7 @@ export default function ManagementPage() {
             )}
             <FormControlLabel
               control={
-                <Checkbox
+                <AppCheckbox
                   checked={reportFrontDraft.is_active}
                   onChange={(e) => updateReportFrontDraft({ is_active: e.target.checked })}
                 />
@@ -9600,10 +9310,10 @@ export default function ManagementPage() {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setReportFrontDialogOpen(false)}>Cancelar</Button>
-          <Button variant="contained" onClick={saveReportFront} disabled={reportFrontSaving}>
+          <AppButton onClick={() => setReportFrontDialogOpen(false)}>Cancelar</AppButton>
+          <AppButton variant="contained" onClick={saveReportFront} disabled={reportFrontSaving}>
             {reportFrontSaving ? 'Guardando...' : 'Guardar'}
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
       <ConfirmActionDialog
@@ -9643,8 +9353,8 @@ export default function ManagementPage() {
           </Stack>
         </DialogContent>
         <DialogActions sx={{ px: 3, py: 1.5 }}>
-          <Button onClick={() => setEquipmentPropagationConfirm(null)} disabled={equipmentSaving}>Cancelar</Button>
-          <Button
+          <AppButton onClick={() => setEquipmentPropagationConfirm(null)} disabled={equipmentSaving}>Cancelar</AppButton>
+          <AppButton
             variant="outlined"
             disabled={equipmentSaving || !equipmentPropagationConfirm}
             onClick={async () => {
@@ -9662,8 +9372,8 @@ export default function ManagementPage() {
             }}
           >
             Solo esta fecha
-          </Button>
-          <Button
+          </AppButton>
+          <AppButton
             variant="contained"
             disabled={equipmentSaving || !equipmentPropagationConfirm}
             onClick={async () => {
@@ -9682,21 +9392,9 @@ export default function ManagementPage() {
             }}
           >
             Aplicar a fechas posteriores
-          </Button>
+          </AppButton>
         </DialogActions>
       </Dialog>
-      <Snackbar
-        open={!!notice}
-        autoHideDuration={3500}
-        onClose={() => setNotice(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      >
-        {notice ? (
-          <Alert severity={notice.severity} onClose={() => setNotice(null)} sx={{ width: '100%' }}>
-            {notice.message}
-          </Alert>
-        ) : undefined}
-      </Snackbar>
     </Box>
   );
 }

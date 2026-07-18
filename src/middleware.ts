@@ -32,6 +32,7 @@ function matchResource(pathname: string) {
 
 function hasPermission(perms: string[], resource: string) {
   if (perms.includes('*') || perms.includes(resource)) return true
+  if (resource === 'communications' && (perms.includes('communications.send') || perms.includes('communications.forms'))) return true
   const aliases = RESOURCE_ALIASES[resource] || []
   return aliases.some((k) => perms.includes(k))
 }
@@ -49,7 +50,7 @@ export async function middleware(req: NextRequest) {
   // Only protect /users routes
   if (!pathname.startsWith('/users')) return NextResponse.next()
 
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET }) as any
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
   if (!token) {
     const url = new URL('/auth/signin', req.nextUrl.origin)
     url.searchParams.set('error', 'access_denied')
@@ -57,7 +58,7 @@ export async function middleware(req: NextRequest) {
   }
 
   // Dev no longer operates in this app.
-  if (token.role === 'dev') {
+  if (String(token.role || '').trim().toLowerCase() === 'dev') {
     const url = new URL('/auth/signin', req.nextUrl.origin)
     url.searchParams.set('error', 'dev_area_moved_to_ingenit_v2')
     return NextResponse.redirect(url)
@@ -81,19 +82,14 @@ export async function middleware(req: NextRequest) {
   const perms: string[] = Array.isArray(token.permissions) ? token.permissions : []
   const role = String(token.role || '').trim().toLowerCase()
 
-  // Direct access: allow user/viewer roles into daily report screen
-  // even when project permissions are not yet assigned.
-  if (resource === 'daily-report' && (role === 'user' || role === 'viewer')) {
+  // Viewer keeps its historical read-only access to daily report.
+  if (resource === 'daily-report' && role === 'viewer') {
     return NextResponse.next()
   }
 
-  // Communications contains recipient data and delivery actions: admin only.
+  // Communications is action-restricted by its APIs; module access follows project permissions.
   if (resource === 'communications') {
-    if (role === 'admin') return NextResponse.next()
-
-    const url = new URL('/users/dashboard', req.nextUrl.origin)
-    url.searchParams.set('error', 'access_denied')
-    return NextResponse.redirect(url)
+    if (role === 'admin' || hasPermission(perms, resource) || perms.includes('communications.send') || perms.includes('communications.forms')) return NextResponse.next()
   }
   
   // Check if user has permission: wildcard, explicit resource, or legacy alias.

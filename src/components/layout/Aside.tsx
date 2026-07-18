@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Drawer, List, ListItem, ListItemIcon, ListItemText, Toolbar, Box, IconButton, CircularProgress, Tooltip } from '@mui/material';
+import { Drawer, List, ListItem, ListItemIcon, ListItemText, Toolbar, Box, IconButton, CircularProgress, SvgIcon, Tooltip } from '@mui/material';
 import { useTheme, useMediaQuery, alpha } from '@mui/material';
 import { useRouter, usePathname } from 'next/navigation';
 import {
@@ -20,7 +20,6 @@ import {
   ReceiptLong,
   AdminPanelSettings,
   Work,
-  Campaign,
 } from '@mui/icons-material';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { colors } from '../../theme/theme';
@@ -30,6 +29,19 @@ const drawerWidth = 220;
 const collapsedDrawerWidth = 56;
 const mobileDrawerWidth = 236;
 const ASIDE_COLLAPSED_STORAGE_KEY = 'users_aside_collapsed_v1';
+
+const CommunicationShareIcon = () => (
+  <SvgIcon
+    viewBox="0 0 24 24"
+    sx={{ fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round', strokeLinejoin: 'round' }}
+  >
+    <path d="M8 9h8" />
+    <path d="M8 13h6" />
+    <path d="M13 18l-5 3v-3h-2a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v6" />
+    <path d="m16 22 5-5" />
+    <path d="M21 21.5V17h-4.5" />
+  </SvgIcon>
+);
 
 const menuItemGroupsUsers = [
   [
@@ -42,7 +54,7 @@ const menuItemGroupsUsers = [
     { text: 'Programa', path: '/users/program', icon: <EventNote />, resourceKey: 'program' },
     { text: 'Reportabilidad', path: '/users/field-reports', icon: <ViewList />, resourceKey: 'field-reports' },
     { text: 'Reporte diario', path: '/users/daily-report', icon: <ReceiptLong />, resourceKey: 'daily-report', legacyResourceKey: 'admin-daily-report', visibleRoles: ['admin', 'dev', 'user', 'viewer'] },
-    { text: 'Comunicaciones', path: '/users/communications', icon: <Campaign />, resourceKey: 'communications', visibleRoles: ['admin'] },
+    { text: 'Comunicaciones', path: '/users/communications', icon: <CommunicationShareIcon />, resourceKey: 'communications' },
   ],
   [
     { text: 'Administración', path: '/users/admin/permissions', icon: <AdminPanelSettings />, resourceKey: 'admin-permissions', hideRoles: ['dev'] },
@@ -50,6 +62,11 @@ const menuItemGroupsUsers = [
     { text: 'Ajustes', path: '/users/settings', icon: <Settings />, resourceKey: 'settings' },
   ],
 ];
+
+const asideLabelCollator = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+const sortedMenuItemGroupsUsers = menuItemGroupsUsers.map((group) =>
+  [...group].sort((left, right) => asideLabelCollator.compare(left.text, right.text)),
+);
 
 const Aside: React.FC = () => {
   const appVersion = String(process.env.NEXT_PUBLIC_APP_VERSION || 'local')
@@ -59,6 +76,7 @@ const Aside: React.FC = () => {
   const pathname = usePathname();
   const { data: session, status } = useSession();
   const [collapsed, setCollapsed] = useState(true);
+  const isExpandedAside = isMobile || !collapsed
   const [mobileOpen, setMobileOpen] = useState(false)
   const [companyLogoUrl, setCompanyLogoUrl] = useState<string>('');
   const [, setIsLoading] = useState(false);
@@ -243,9 +261,13 @@ const Aside: React.FC = () => {
                 src={'/assets/icon_ingenIT_wt.png'}
                 alt="Default Logo"
                 style={{
-                  maxWidth: (!isMobile && collapsed) ? '56%' : '23%',
+                  width: isMobile ? 56 : (collapsed ? undefined : 48),
+                  height: isMobile ? 56 : (collapsed ? 'auto' : 48),
+                  maxWidth: (!isMobile && collapsed) ? '56%' : (isMobile ? 56 : 48),
+                  maxHeight: isMobile ? 56 : (collapsed ? undefined : 48),
                   minWidth: (!isMobile && collapsed) ? 24 : undefined,
-                  height: 'auto',
+                  objectFit: 'contain',
+                  display: 'block',
                   borderRadius: (!isMobile && collapsed) ? 0 : 6,
                   marginBottom: (!isMobile && collapsed) ? 8 : 0,
                 }}
@@ -254,12 +276,13 @@ const Aside: React.FC = () => {
                 <Box
                   sx={{
                     mt: (!isMobile && collapsed) ? 1 : 0,
-                    width: (!isMobile && collapsed) ? 46 : 58,
-                    minHeight: (!isMobile && collapsed) ? 46 : 40,
+                    width: (!isMobile && collapsed) ? 46 : (isMobile ? 76 : 68),
+                    height: isMobile ? 64 : (collapsed ? 'auto' : 56),
+                    minHeight: (!isMobile && collapsed) ? 46 : (isMobile ? 64 : 56),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    overflow: 'hidden',
+                    overflow: isExpandedAside ? 'visible' : 'hidden',
                     flexShrink: 0,
                   }}
                 >
@@ -273,10 +296,14 @@ const Aside: React.FC = () => {
                       console.error('[Aside company logo] image failed to load:', companyLogoUrl);
                     }}
                     style={{
-                      maxWidth: '100%',
-                      maxHeight: (!isMobile && collapsed) ? 40 : 34,
+                      width: 'auto',
+                      height: isMobile ? 56 : (collapsed ? 'auto' : 48),
+                      maxWidth: (!isMobile && collapsed) ? '100%' : (isMobile ? 76 : 68),
+                      maxHeight: (!isMobile && collapsed) ? 40 : (isMobile ? 56 : 48),
                       objectFit: 'contain',
                       display: 'block',
+                      transform: isExpandedAside ? 'scale(1.22)' : 'none',
+                      transformOrigin: 'center',
                     }}
                   />
                 </Box>
@@ -286,7 +313,7 @@ const Aside: React.FC = () => {
         </Box>
       </Toolbar>
       <List>
-        {menuItemGroupsUsers.map((group, groupIndex) => (
+        {sortedMenuItemGroupsUsers.map((group, groupIndex) => (
           <React.Fragment key={`menu-group-${groupIndex}`}>
             {group.map((item) => {
           const isActive = pathname === item.path;
@@ -302,6 +329,7 @@ const Aside: React.FC = () => {
           const hasPermission = roleIsPrivileged || (item.resourceKey === 'daily-report' && role === 'viewer') || (item.resourceKey === 'communications' && role === 'admin') || (Array.isArray(permissions) && (
             permissions.includes('*') ||
             permissions.includes(item.resourceKey) ||
+            (item.resourceKey === 'communications' && (permissions.includes('communications.send') || permissions.includes('communications.forms'))) ||
             (!!legacyKey && permissions.includes(legacyKey))
           ));
           if (!hasPermission) return null;
@@ -331,8 +359,8 @@ const Aside: React.FC = () => {
                   px: collapsed && !isMobile ? 0 : 2,
                   justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
                   bgcolor: isActive || isPending ? alpha(colors.white, 0.14) : undefined,
-                  color: colors.white,
-                  fontWeight: isActive || isPending ? 'bold' : undefined,
+                  color: isExpandedAside ? colors.blue9 : colors.white,
+                  fontWeight: isExpandedAside ? 300 : (isActive || isPending ? 'bold' : undefined),
                   opacity: pendingPath && !isPending ? 0.65 : 1,
                   '&:hover': {
                     bgcolor: alpha(colors.white, 0.10),
@@ -359,7 +387,7 @@ const Aside: React.FC = () => {
             </Tooltip>
           )
             })}
-            {groupIndex === 0 ? (
+            {groupIndex < sortedMenuItemGroupsUsers.length - 1 ? (
               <Box
                 component="li"
                 sx={{
@@ -496,8 +524,8 @@ const Aside: React.FC = () => {
               color: alpha(colors.white, 0.82),
             },
             '& .MuiListItemText-primary': {
-              color: colors.white,
-              fontWeight: 600,
+              color: isExpandedAside ? colors.blue9 : colors.white,
+              fontWeight: isExpandedAside ? 300 : 600,
             },
           },
         }}

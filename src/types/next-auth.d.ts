@@ -1,4 +1,4 @@
-import NextAuth from 'next-auth'
+import 'next-auth'
 import { UserRole } from './index'
 
 declare module 'next-auth' {
@@ -13,6 +13,7 @@ declare module 'next-auth' {
       specialty?: string | null
       projectId?: string | null
       projectName?: string | null
+      permissions?: string[]
     }
   }
 
@@ -26,6 +27,7 @@ declare module 'next-auth' {
     specialty?: string | null
     projectId?: string | null
     projectName?: string | null
+    permissions?: string[]
   }
 }
 
@@ -38,5 +40,6 @@ declare module 'next-auth/jwt' {
     specialty?: string | null
     projectId?: string | null
     projectName?: string | null
+    permissions?: string[]
   }
 }

@@ -28,9 +28,11 @@ import {
 import { DateCalendar, LocalizationProvider } from "@mui/x-date-pickers"
 import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns"
 import { es } from "date-fns/locale"
-import { ChevronLeft, ChevronRight, Cloud, CloudRain, Eye, History, Pencil, Plus, RefreshCw, Snowflake, Sun, Trash2, Wind } from "lucide-react"
+import { ChevronLeft, ChevronRight, Cloud, CloudRain, Eye, History, Pencil, RefreshCw, Snowflake, Sun, Trash2, Wind } from "lucide-react"
 import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
+import { AppWeekNavigator } from "@/components/ui/AppWeekNavigator"
+import { AppFloatingActionButton } from "@/components/ui/AppFloatingActionButton"
 import {
   getCurrentWorkdayMetadata,
   resolveCalculationVersion,
@@ -13626,157 +13628,29 @@ export default function DailyReportPage() {
               <RefreshCw size={20} />
             </IconButton>
           </Tooltip>
-          {canMutateDailyReport ? (
-            <Tooltip title="Nuevo Reporte Diario">
-              <IconButton
-                color="primary"
-                onClick={openNew}
-                sx={{
-                  position: "fixed",
-                  top: { xs: 64, sm: 70 },
-                  right: { xs: 14, sm: 22 },
-                  zIndex: 1200,
-                  width: 52,
-                  height: 52,
-                  borderRadius: "50%",
-                  bgcolor: colors.blue1,
-                  color: colors.white,
-                  border: `2px solid ${colors.blue14}`,
-                  boxShadow: "0 10px 24px rgba(0, 26, 51, 0.32)",
-                  transition: "border-color 160ms ease, box-shadow 160ms ease",
-                  "&:hover": {
-                    bgcolor: colors.blue1,
-                    borderColor: colors.blue15,
-                    boxShadow: "0 10px 28px rgba(125, 211, 252, 0.55)",
-                    "& .plus-icon": {
-                      color: colors.blue14,
-                      transform: "scale(1.18)",
-                    },
-                  },
-                  "&.Mui-disabled": {
-                    bgcolor: colors.blue14,
-                    color: colors.blue15,
-                    borderColor: colors.blue15,
-                  },
-                }}
-              >
-                <Plus
-                  className="plus-icon"
-                  size={25}
-                  style={{
-                    color: colors.blue14,
-                    transition: "color 160ms ease, transform 160ms ease",
-                  }}
-                />
-              </IconButton>
-            </Tooltip>
-          ) : null}
+          {canMutateDailyReport ? <AppFloatingActionButton ariaLabel="Nuevo reporte diario" tooltip="Nuevo reporte diario" onClick={openNew} /> : null}
         </Stack>
         <Box component="main" sx={{ py: { xs: 3.5, sm: 4 }, px: { xs: 1, sm: 1.5, md: 2 } }}>
-          <Paper
-            variant="outlined"
-            sx={{
-              mb: { xs: 1.5, sm: 2 },
-              mx: "auto",
-              px: { xs: 1, sm: 1.25 },
-              py: 1,
-              width: { xs: "100%", lg: "70%" },
-              maxWidth: 1400,
-              borderColor: colors.blue15,
-              borderRadius: 1.5,
-              bgcolor: colors.white
+          <AppWeekNavigator
+            periodLabel={dailyReportWeekLabel}
+            value={dailyReportWeekRange?.start || ""}
+            options={dailyReportWeekOptions.map((range) => ({
+              value: range.start,
+              shortLabel: `Semana ${getProjectWeekNumber(range.start)}`,
+              label: `Semana ${getProjectWeekNumber(range.start)} (${formatDateDisplaySlash(range.start)} - ${formatDateDisplaySlash(range.end)})`,
+            }))}
+            previousDisabled={!previousDailyReportWeek}
+            nextDisabled={!nextDailyReportWeek}
+            latestDisabled={isViewingLatestDailyReportWeek}
+            onPrevious={() => previousDailyReportWeek && setDailyReportWeekRange(previousDailyReportWeek)}
+            onNext={() => nextDailyReportWeek && setDailyReportWeekRange(nextDailyReportWeek)}
+            onLatest={() => setDailyReportWeekRange(latestDailyReportWeek)}
+            onChange={(value) => {
+              const selected = dailyReportWeekOptions.find((range) => range.start === value)
+              if (selected) setDailyReportWeekRange(selected)
             }}
-          >
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 1,
-                flexWrap: { xs: "wrap", md: "nowrap" }
-              }}
-            >
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={!previousDailyReportWeek}
-                onClick={() => previousDailyReportWeek && setDailyReportWeekRange(previousDailyReportWeek)}
-                startIcon={<ChevronLeft size={16} />}
-                sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
-              >
-                Semana anterior
-              </Button>
-              <Typography
-                sx={{
-                  flex: "1 1 auto",
-                  minWidth: { xs: "100%", md: 260 },
-                  textAlign: "center",
-                  fontSize: { xs: 14, sm: 16 },
-                  fontWeight: 500,
-                  color: colors.gray4,
-                  order: { xs: -1, md: 0 }
-                }}
-              >
-                {dailyReportWeekLabel}
-              </Typography>
-              <Box sx={{ display: "flex", alignItems: "center", justifyContent: { xs: "space-between", md: "flex-end" }, gap: 1, flex: { xs: "1 1 100%", md: "0 0 auto" } }}>
-                <TextField
-                  select
-                  size="small"
-                  value={dailyReportWeekRange?.start || ""}
-                  disabled={dailyReportWeekOptions.length === 0}
-                  SelectProps={{
-                    renderValue: (value) => {
-                      const selected = dailyReportWeekOptions.find((range) => range.start === value)
-                      return selected ? `Semana ${getProjectWeekNumber(selected.start)}` : "Semana"
-                    }
-                  }}
-                  onChange={(event) => {
-                    const selected = dailyReportWeekOptions.find((range) => range.start === event.target.value)
-                    if (selected) setDailyReportWeekRange(selected)
-                  }}
-                  sx={{
-                    width: { xs: "100%", sm: 142, md: 142 },
-                    minWidth: { xs: "100%", sm: 142, md: 142 },
-                    flex: { xs: "1 1 100%", sm: "0 0 142px" },
-                    "& .MuiInputBase-root": { height: 32 },
-                    "& .MuiSelect-select": {
-                      py: 0.55,
-                      fontWeight: 600,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap"
-                    }
-                  }}
-                >
-                  {dailyReportWeekOptions.map((range) => (
-                    <MenuItem key={`daily-report-week-${range.start}`} value={range.start}>
-                      {`Semana ${getProjectWeekNumber(range.start)} (${formatDateDisplaySlash(range.start)} - ${formatDateDisplaySlash(range.end)})`}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <Button
-                  variant="contained"
-                  size="small"
-                  disabled={isViewingLatestDailyReportWeek}
-                  onClick={() => setDailyReportWeekRange(latestDailyReportWeek)}
-                  sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
-                >
-                  Última semana
-                </Button>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  disabled={!nextDailyReportWeek}
-                  onClick={() => nextDailyReportWeek && setDailyReportWeekRange(nextDailyReportWeek)}
-                  endIcon={<ChevronRight size={16} />}
-                  sx={{ textTransform: "none", fontWeight: 600, flexShrink: 0 }}
-                >
-                  Semana siguiente
-                </Button>
-              </Box>
-            </Box>
-          </Paper>
+            sx={{ mb: { xs: 1.5, sm: 2 } }}
+          />
           <Box sx={{ overflowX: "auto" }}>
                 <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900, border: `1px solid ${colors.blue13}` }}>
                   <colgroup>
