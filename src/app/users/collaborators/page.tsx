@@ -68,6 +68,7 @@ import { IndustryType } from '../../../types'
 import CountryPhoneInput from '../../../components/CountryPhoneInput'
 import UserHeader from '../../../components/layout/UserHeader'
 import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton'
+import { COLLABORATOR_PROFILE_IMPORT_FIELDS } from '../../../lib/collaboratorProfileImport'
 import { AttendanceView } from '../../../components/attendance/AttendanceView'
 import { normalizeText, normalizeUppercaseDisplayText } from '../../../lib/normalize'
 import { notifyAttendanceDataUpdated } from '../../../lib/attendanceDataRefresh'
@@ -277,6 +278,33 @@ export default function CollaboratorsPage() {
   const [selectedImportSheet, setSelectedImportSheet] = useState<string>('')
   const [importWorkbook, setImportWorkbook] = useState<any | null>(null)
   const [mapping, setMapping] = useState<Record<string,string>>({})
+  const [openMappingSelectKey, setOpenMappingSelectKey] = useState<string | null>(null)
+
+  const refreshCollaborators = async () => {
+    try {
+      // Invalidate the module cache before requesting the persisted state.
+      // Otherwise a card opened after an import can reuse the previous row.
+      collaboratorsPageCache = null
+      collaboratorsPageInFlight = null
+      const response = await fetch(`/api/collaborators?refresh=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const payload = await response.json()
+      const rows = Array.isArray(payload) ? payload : []
+      collaboratorsPageCache = rows
+      setCollaborators(rows)
+      setEditingCollaborator((current) => {
+        if (!current?.id) return current
+        return rows.find((row: Collaborator) => row.id === current.id) || current
+      })
+      return rows
+    } catch (error) {
+      console.warn('No se pudo refrescar la lista de colaboradores:', error)
+      return null
+    }
+  }
   // Columns present in `pr_collaborators` (source of truth for mapping)
   const collaboratorColumns = [
     'is_active','created_at','updated_at','salary','hire_date','birth_date','company_id','user_id','epp_details','last_activity','is_online','id','worker_type','contract','shift_pattern','condition','exception_condition','gender','nationality','marital_status','photo_url','signature_url','password_hash','specialty','document','first_name','last_name','email','phone','country','region','commune','address','position','emergency_contact','shoe_size','upper_clothing_size','lower_clothing_size'
@@ -356,7 +384,9 @@ export default function CollaboratorsPage() {
   }
   const requiredImportFields = ['first_name','last_name','document','email']
   const suggestedImportFields = ['position','specialty','worker_type','contract','shift_pattern','condition','exception_condition','phone','hire_date','birth_date','salary','address','emergency_contact','nationality','marital_status']
-  const profileUpdateHiddenFields = ['id', 'company_id', 'user_id', 'created_at', 'updated_at', 'last_activity', 'is_online', 'password_hash']
+  const profileUpdateHiddenFields = collaboratorColumns.filter(
+    (column) => column !== 'document' && !(COLLABORATOR_PROFILE_IMPORT_FIELDS as readonly string[]).includes(column)
+  )
   const newCollaboratorImportFields = [
     'document',
     'first_name',
@@ -534,6 +564,7 @@ export default function CollaboratorsPage() {
     setSelectedImportSheet('')
     setImportWorkbook(null)
     setMapping({})
+    setOpenMappingSelectKey(null)
     setImportHeaderStartCell('A1')
     importHeaderStartCellDraftRef.current = 'A1'
     setImportOperation('attendance_new_only')
@@ -999,11 +1030,7 @@ export default function CollaboratorsPage() {
         setOpenDialog(false)
         // Refrescar lista de colaboradores y defaults de la compañía
         try {
-          const resp = await fetch('/api/collaborators')
-          if (resp.ok) {
-            const data = await resp.json()
-            setCollaborators(data)
-          }
+          await refreshCollaborators()
           if (session?.user?.companyId) await fetchCompanyData(session.user.companyId)
         } catch (e) {
           console.warn('No se pudo refrescar tras crear colaborador:', e)
@@ -1471,11 +1498,7 @@ export default function CollaboratorsPage() {
         setEditingCollaborator(null)
         // Recargar la lista de colaboradores
         if (session?.user?.companyId) {
-          const response = await fetch('/api/collaborators')
-          if (response.ok) {
-            const data = await response.json()
-            setCollaborators(data)
-          }
+          await refreshCollaborators()
         }
       } else {
         console.error('❌ Error al actualizar colaborador:', result)
@@ -1554,11 +1577,7 @@ export default function CollaboratorsPage() {
         alert('✅ Colaborador desactivado exitosamente')
         // Recargar la lista de colaboradores
         if (session?.user?.companyId) {
-          const response = await fetch('/api/collaborators')
-          if (response.ok) {
-            const data = await response.json()
-            setCollaborators(data)
-          }
+          await refreshCollaborators()
         }
       } else {
         console.error('❌ Error al desactivar colaborador:', result)
@@ -1598,11 +1617,7 @@ export default function CollaboratorsPage() {
         alert('✅ Colaborador activado exitosamente')
         // Recargar la lista de colaboradores
         if (session?.user?.companyId) {
-          const resp = await fetch('/api/collaborators')
-          if (resp.ok) {
-            const data = await resp.json()
-            setCollaborators(data)
-          }
+          await refreshCollaborators()
         }
       } else {
         console.error('❌ Error al activar colaborador:', result)
@@ -1933,6 +1948,13 @@ export default function CollaboratorsPage() {
       }
       map[key] = matched || 'ignore'
     })
+
+    if (importOperation === 'profile_specific_columns') {
+      const allowedProfileFields = new Set<string>(['document', ...COLLABORATOR_PROFILE_IMPORT_FIELDS])
+      Object.keys(map).forEach((key) => {
+        if (map[key] !== 'ignore' && !allowedProfileFields.has(map[key])) map[key] = 'ignore'
+      })
+    }
     return map
   }
 
@@ -2072,7 +2094,7 @@ export default function CollaboratorsPage() {
   const selectableCollaboratorColumns = importPrimaryAction === 'new_collaborators'
     ? newCollaboratorImportFields.filter((column) => collaboratorColumns.includes(column))
     : importOperation === 'profile_specific_columns'
-      ? collaboratorColumns.filter((column) => !profileUpdateHiddenFields.includes(column))
+      ? ['document', ...COLLABORATOR_PROFILE_IMPORT_FIELDS]
       : collaboratorColumns
   const unmappedCollaboratorColumns = collaboratorColumns.filter(c => !mappedFieldsSet.has(c))
   const excelIgnoredHeaders = (importHeaders || []).filter((h, idx) => {
@@ -2532,7 +2554,12 @@ export default function CollaboratorsPage() {
   const resetMappingForHeaders = () => {
     const next: Record<string, string> = {}
     ;(importHeaders || []).forEach((h, idx) => { next[headerMapKey(h, idx)] = 'ignore' })
+    if (importOperation === 'profile_specific_columns') {
+      const documentEntry = Object.entries(mapping || {}).find(([, field]) => field === 'document')
+      if (documentEntry) next[documentEntry[0]] = 'document'
+    }
     setMapping(next)
+    setOpenMappingSelectKey(null)
   }
 
   const normalizeEmail = (s: string) => {
@@ -2903,8 +2930,7 @@ export default function CollaboratorsPage() {
             message,
           })
         }
-        const resp = await fetch('/api/collaborators')
-        if (resp.ok) setCollaborators(await resp.json())
+        await refreshCollaborators()
         setImportStatusMessage('')
         setImportProgress(0)
         return json
@@ -2945,8 +2971,7 @@ export default function CollaboratorsPage() {
           message: fullNotice
         })
       }
-      const resp = await fetch('/api/collaborators')
-      if (resp.ok) setCollaborators(await resp.json())
+      await refreshCollaborators()
       setImportStatusMessage('')
       setImportProgress(0)
       return json
@@ -4293,9 +4318,17 @@ export default function CollaboratorsPage() {
                             (attendanceStartColumnIndex >= 0 && idx >= attendanceStartColumnIndex)
                           )
                         const selected = mapping?.[currentHeaderKey] || ''
+                        const isLockedProfileDocument = importOperation === 'profile_specific_columns' && selected === 'document'
                         const missingRequired = missingRequiredFields.length > 0 && !selected
                         const isIgnored = !selected || selected === 'ignore'
                         const isInvalidDuplicate = !!selected && selected !== 'ignore' && duplicateMappedFields.includes(selected)
+                        const availableProfileMappingOptions = selectableCollaboratorColumns.filter((col) => {
+                          if (col === 'document') return false
+                          if (multiMapAllowedFields.has(col)) return true
+                          return !Object.entries(mapping || {}).some(
+                            ([otherKey, mapped]) => otherKey !== currentHeaderKey && mapped === col
+                          )
+                        })
                         return (
                           <Paper key={`${idx}-${hdr}`} variant="outlined" sx={{ p: 1.25, borderColor: isAttendanceColumn ? 'info.main' : (isInvalidDuplicate ? 'warning.main' : (missingRequired ? 'error.main' : (isIgnored ? 'warning.main' : 'divider'))), minWidth: 200 }}>
                             <Box display="flex" justifyContent="space-between" alignItems="center" gap={1}>
@@ -4334,10 +4367,96 @@ export default function CollaboratorsPage() {
                               )}
                             </Box>
 
+                            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            {isLockedProfileDocument ? (
+                              <Box
+                                sx={{
+                                  flex: 1,
+                                  minHeight: 36,
+                                  px: 1.5,
+                                  border: '1px solid',
+                                  borderColor: 'success.main',
+                                  borderRadius: 1,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: 1,
+                                  backgroundColor: 'rgba(46, 125, 50, 0.04)',
+                                }}
+                              >
+                                <Typography variant="body2" sx={{ color: 'success.dark', fontWeight: 700 }}>
+                                  Documento
+                                </Typography>
+                                <Box
+                                  component="span"
+                                  sx={{
+                                    px: 0.75,
+                                    py: 0.1,
+                                    borderRadius: 1,
+                                    color: 'success.dark',
+                                    backgroundColor: 'rgba(46, 125, 50, 0.1)',
+                                    fontSize: '0.7rem',
+                                    lineHeight: 1.4,
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  Identificador fijo
+                                </Box>
+                              </Box>
+                            ) : importOperation === 'profile_specific_columns' ? (
+                            <Autocomplete
+                              size="small"
+                              options={availableProfileMappingOptions}
+                              value={selected && selected !== 'ignore' ? selected : null}
+                              open={openMappingSelectKey === currentHeaderKey}
+                              onOpen={() => setOpenMappingSelectKey(currentHeaderKey)}
+                              onClose={() => setOpenMappingSelectKey(null)}
+                              onChange={(_, value) => {
+                                if (!value) return
+                                setMapping((prev) => ({ ...prev, [currentHeaderKey]: value }))
+                                setOpenMappingSelectKey(null)
+                              }}
+                              getOptionLabel={(option) => getColumnLabel(option)}
+                              isOptionEqualToValue={(option, value) => option === value}
+                              clearIcon={null}
+                              noOptionsText="No se encontraron campos"
+                              renderOption={(props, option) => (
+                                <Box component="li" {...props} key={option} sx={{ alignItems: 'flex-start !important' }}>
+                                  <Box>
+                                    <Typography variant="body2" sx={{ fontWeight: 500, lineHeight: 1.25 }}>
+                                      {getColumnLabel(option)}
+                                    </Typography>
+                                    {collaboratorColumnDescriptions?.[option] && (
+                                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.25 }}>
+                                        {collaboratorColumnDescriptions[option]}
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                </Box>
+                              )}
+                              renderInput={(params) => (
+                                <TextField
+                                  {...params}
+                                  label="Mapear a"
+                                  placeholder="Buscar campo"
+                                  sx={{
+                                    flex: 1,
+                                    '& .MuiInputBase-root': { minHeight: 36, py: '0 !important' },
+                                    '& .MuiInputBase-input': {
+                                      fontWeight: selected && selected !== 'ignore' ? 600 : 400,
+                                      color: selected && selected !== 'ignore' ? 'primary.main' : 'text.primary',
+                                    },
+                                  }}
+                                />
+                              )}
+                              sx={{ flex: 1 }}
+                            />
+                            ) : (
                             <FormControl
                               fullWidth
                               size="small"
                               sx={{
+                                flex: 1,
                                 '& .MuiInputBase-root': { minHeight: 36 },
                                 '& .MuiSelect-select': {
                                   py: 0.75,
@@ -4350,10 +4469,16 @@ export default function CollaboratorsPage() {
                               <Select
                                 value={isAttendanceColumn ? '' : selected}
                                 label="Mapear a"
-                                disabled={isAttendanceColumn}
+                                disabled={isAttendanceColumn || isLockedProfileDocument}
+                                open={!isAttendanceColumn && !isLockedProfileDocument && openMappingSelectKey === currentHeaderKey}
+                                onOpen={() => setOpenMappingSelectKey(currentHeaderKey)}
+                                onClose={() => setOpenMappingSelectKey(null)}
                                 displayEmpty
                                 renderValue={(value) => value && value !== 'ignore' ? getColumnLabel(String(value)) : 'No mapear'}
-                                onChange={(e) => setMapping((prev: any) => ({ ...(prev || {}), [currentHeaderKey]: e.target.value }))}
+                                onChange={(e) => {
+                                  setMapping((prev) => ({ ...prev, [currentHeaderKey]: String(e.target.value) }))
+                                  setOpenMappingSelectKey(null)
+                                }}
                                 MenuProps={{
                                   PaperProps: {
                                     sx: {
@@ -4435,9 +4560,33 @@ export default function CollaboratorsPage() {
                                 })}
                               </Select>
                             </FormControl>
+                            )}
+                            {importOperation === 'profile_specific_columns' && !isAttendanceColumn && !isLockedProfileDocument && (
+                              <Button
+                                size="small"
+                                variant={isIgnored ? 'contained' : 'outlined'}
+                                onClick={() => {
+                                  if (isIgnored) {
+                                    setOpenMappingSelectKey(currentHeaderKey)
+                                  } else {
+                                    setMapping((prev) => ({ ...prev, [currentHeaderKey]: 'ignore' }))
+                                    setOpenMappingSelectKey(null)
+                                  }
+                                }}
+                                sx={{ minHeight: 36, whiteSpace: 'nowrap' }}
+                              >
+                                {isIgnored ? 'Mapear' : 'No mapear'}
+                              </Button>
+                            )}
+                            </Box>
 
                             {missingRequired && (
                               <Typography variant="caption" color="error">Campo requerido no mapeado</Typography>
+                            )}
+                            {isLockedProfileDocument && (
+                              <Typography variant="caption" color="primary.main">
+                                Identificador obligatorio. Se utiliza para buscar al colaborador y no se modifica.
+                              </Typography>
                             )}
                             {isAttendanceColumn && (
                               <Typography variant="caption" color="info.main">Esta columna se usará para importar asistencia diaria.</Typography>
