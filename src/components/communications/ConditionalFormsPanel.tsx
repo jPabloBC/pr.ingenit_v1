@@ -201,22 +201,49 @@ export default function ConditionalFormsPanel({ collaborators, canCreate, attend
   const [exportingFormId, setExportingFormId] = useState<string | null>(null)
   const setNotice = useCallback((notice: { severity: 'success' | 'error' | 'info'; text: string }) => notify(notice.text, { severity: notice.severity }), [notify])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
-      const response = await fetch('/api/communications/forms', { cache: 'no-store' })
+      const response = await fetch(`/api/communications/forms?refresh=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data?.error || 'No fue posible cargar los formularios.')
-      setForms(Array.isArray(data.forms) ? data.forms : [])
+      const nextForms = Array.isArray(data.forms) ? data.forms as FormRow[] : []
+      setForms(nextForms)
+      setLinksForm((current) => current ? nextForms.find((form) => form.id === current.id) || null : current)
       setCanAdminister(Boolean(data?.capabilities?.can_edit && data?.capabilities?.can_delete))
+      return nextForms
     } catch (error) {
-      setNotice({ severity: 'error', text: error instanceof Error ? error.message : String(error) })
+      if (!silent) setNotice({ severity: 'error', text: error instanceof Error ? error.message : String(error) })
+      return null
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [setNotice])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    const refreshVisibleForms = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+      void load(true)
+    }
+    const interval = window.setInterval(refreshVisibleForms, 10_000)
+    window.addEventListener('focus', refreshVisibleForms)
+    document.addEventListener('visibilitychange', refreshVisibleForms)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshVisibleForms)
+      document.removeEventListener('visibilitychange', refreshVisibleForms)
+    }
+  }, [load])
+
+  const openResponses = async (form: FormRow) => {
+    setLinksForm(form)
+    await load(true)
+  }
 
   const reset = () => {
     setTitle('')
@@ -491,7 +518,7 @@ export default function ConditionalFormsPanel({ collaborators, canCreate, attend
                 <AppChip color="success" variant="outlined" label={`${form.summary.completed} respuestas`} />
                 <AppChip color="warning" variant="outlined" label={`${form.summary.expected_pending} pendientes`} />
                 <Tooltip title="Copiar enlace público"><AppIconButton onClick={() => void copy(form.public_url)}><ContentCopyOutlined /></AppIconButton></Tooltip>
-                <Tooltip title="Ver respuestas"><AppIconButton onClick={() => setLinksForm(form)}><AssessmentOutlined /></AppIconButton></Tooltip>
+                <Tooltip title="Ver respuestas"><AppIconButton onClick={() => void openResponses(form)}><AssessmentOutlined /></AppIconButton></Tooltip>
                 <Tooltip title="Descargar respuestas en Excel"><AppIconButton disabled={Boolean(exportingFormId)} onClick={() => void exportResponses(form)}><FileDownloadOutlined /></AppIconButton></Tooltip>
                 {canAdminister && <Tooltip title="Editar"><AppIconButton onClick={() => setEditForm({ id: form.id, title: form.title, description: form.description, status: form.status as EditDraft['status'] })}><EditOutlined /></AppIconButton></Tooltip>}
                 {canAdminister && <Tooltip title="Eliminar"><AppIconButton color="error" onClick={() => setDeleteForm(form)}><DeleteOutline /></AppIconButton></Tooltip>}

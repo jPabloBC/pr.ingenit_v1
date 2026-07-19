@@ -4,6 +4,7 @@ import { authOptions } from '../../../../lib/auth'
 import { normalizeText } from '../../../../lib/normalize'
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin'
 import { createCollaboratorsImportNotification } from '../../../../lib/collaboratorNotifications'
+import { COLLABORATOR_PROFILE_IMPORT_FIELDS } from '../../../../lib/collaboratorProfileImport'
 
 const normalizeKey = (value: unknown) => {
   if (value === undefined || value === null) return ''
@@ -57,6 +58,24 @@ const toLegacyConditionValue = (value: unknown): string | null => {
 
 const isConditionConstraintError = (error: any) =>
   String(error?.message || '').includes('pr_collaborators_condition_chk')
+
+const hasOwn = (value: unknown, key: PropertyKey) =>
+  Boolean(value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key))
+
+const normalizeEppDetails = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value !== 'string') return value
+  const raw = value.trim()
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    // `epp_details` is JSON-backed but the import UI accepts free text.
+    // A JSON string is valid here and preserves the user's value instead of
+    // silently replacing it with an empty object.
+    return raw
+  }
+}
 
 const parseIsActiveValue = (value: unknown): boolean | null => {
   if (value === undefined || value === null) return null
@@ -606,7 +625,10 @@ export async function POST(req: NextRequest) {
             shoe_size: r.shoe_size || null,
             gender: normalizeGender(r.gender),
             photo_url: r.photo_url || null,
-            epp_details: r.epp_details ? (typeof r.epp_details === 'string' ? (() => { try { return JSON.parse(r.epp_details) } catch { return {} } })() : r.epp_details) : {},
+            signature_url: r.signature_url || null,
+            epp_details: profileOnly
+              ? normalizeEppDetails(r.epp_details)
+              : (normalizeEppDetails(r.epp_details) ?? {}),
             is_active: effectiveIsActive,
             user_id: userId
           }
@@ -763,15 +785,25 @@ export async function POST(req: NextRequest) {
               continue
             }
 
+            // Update only fields explicitly mapped in this incoming row. Using
+            // the complete `record` here would leak creation defaults into an
+            // existing collaborator (active, vigente and an empty EPP object).
             const updatePayload: Record<string, any> = {}
-            for (const [key, value] of Object.entries(record)) {
-              if (key === 'company_id' || key === 'user_id' || key === 'document') continue
+            for (const key of COLLABORATOR_PROFILE_IMPORT_FIELDS) {
+              if (key === 'condition' || key === 'is_active') continue
+              if (!hasOwn(r, key)) continue
+              const value = record[key]
               if (value === undefined || value === null || value === '') continue
               updatePayload[key] = value
             }
-            if (parsedIsActive !== null || hasStatusSignal) {
-              updatePayload.is_active = effectiveIsActive
-              updatePayload.condition = effectiveCondition
+
+            // Vigencia and condition are a coupled invariant. Change them only
+            // when one was mapped and its value is recognized.
+            const hasExplicitProfileStatus = hasOwn(r, 'is_active') || hasOwn(r, 'condition')
+            const explicitProfileIsActive = parsedIsActive ?? statusFromCode.effectiveIsActive
+            if (hasExplicitProfileStatus && explicitProfileIsActive !== null) {
+              updatePayload.is_active = explicitProfileIsActive
+              updatePayload.condition = explicitProfileIsActive ? 'vigente' : 'finiquitado'
             }
             if (Object.keys(updatePayload).length === 0) {
               skipped++

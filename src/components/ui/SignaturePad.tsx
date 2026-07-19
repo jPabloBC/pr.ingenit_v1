@@ -10,11 +10,14 @@ type Point = { x: number; y: number }
 
 type SignaturePadProps = {
   disabled?: boolean
+  initialValue?: string
+  fullScreen?: boolean
   onChange: (dataUrl: string) => void
 }
 
-export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) {
+export function SignaturePad({ disabled = false, initialValue = '', fullScreen = false, onChange }: SignaturePadProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const baseImageRef = useRef<HTMLImageElement | null>(null)
   const strokesRef = useRef<Point[][]>([])
   const activeStrokeRef = useRef<Point[] | null>(null)
   const [hasSignature, setHasSignature] = useState(false)
@@ -30,6 +33,13 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
     context.setTransform(ratio, 0, 0, ratio, 0, 0)
     context.fillStyle = colors.white
     context.fillRect(0, 0, width, height)
+    const baseImage = baseImageRef.current
+    if (baseImage) {
+      const scale = Math.min(width / baseImage.naturalWidth, height / baseImage.naturalHeight)
+      const imageWidth = baseImage.naturalWidth * scale
+      const imageHeight = baseImage.naturalHeight * scale
+      context.drawImage(baseImage, (width - imageWidth) / 2, (height - imageHeight) / 2, imageWidth, imageHeight)
+    }
     context.strokeStyle = colors.blue1
     context.fillStyle = colors.blue1
     context.lineWidth = 2.2
@@ -52,6 +62,28 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
       context.stroke()
     }
   }, [])
+
+  useEffect(() => {
+    strokesRef.current = []
+    activeStrokeRef.current = null
+    if (!initialValue) {
+      baseImageRef.current = null
+      setHasSignature(false)
+      drawStrokes()
+      return
+    }
+
+    let cancelled = false
+    const image = new Image()
+    image.onload = () => {
+      if (cancelled) return
+      baseImageRef.current = image
+      setHasSignature(true)
+      drawStrokes()
+    }
+    image.src = initialValue
+    return () => { cancelled = true }
+  }, [drawStrokes, initialValue])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -104,6 +136,7 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
   }
 
   const clear = () => {
+    baseImageRef.current = null
     strokesRef.current = []
     activeStrokeRef.current = null
     setHasSignature(false)
@@ -112,10 +145,11 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
   }
 
   return (
-    <Box>
+    <Box sx={fullScreen ? { position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } : undefined}>
       <Box
         sx={{
           position: 'relative',
+          ...(fullScreen ? { flex: 1, minHeight: 0 } : {}),
           overflow: 'hidden',
           border: `1px solid ${colors.managementBorder}`,
           borderRadius: 1,
@@ -133,7 +167,7 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
           onPointerMove={continueStroke}
           onPointerUp={finishStroke}
           onPointerCancel={finishStroke}
-          sx={{ display: 'block', width: '100%', height: { xs: 180, sm: 210 }, cursor: disabled ? 'not-allowed' : 'crosshair', touchAction: 'none' }}
+          sx={{ display: 'block', width: '100%', height: fullScreen ? '100%' : { xs: 180, sm: 210 }, minHeight: fullScreen ? 220 : undefined, cursor: disabled ? 'not-allowed' : 'crosshair', touchAction: 'none' }}
         />
         {!hasSignature && (
           <Typography
@@ -145,7 +179,10 @@ export function SignaturePad({ disabled = false, onChange }: SignaturePadProps) 
         )}
         <Box sx={{ position: 'absolute', left: 20, right: 20, bottom: 28, borderBottom: `1px solid ${colors.gray8}`, pointerEvents: 'none' }} />
       </Box>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mt: 1 }}>
+      <Box sx={fullScreen
+        ? { position: 'absolute', right: { xs: 8, sm: 12 }, top: { xs: 8, sm: 12 }, zIndex: 2, display: 'flex' }
+        : { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', mt: 1 }
+      }>
         <AppButton size="small" variant="outlined" startIcon={<DeleteOutline />} onClick={clear} disabled={disabled || !hasSignature}>
           Limpiar
         </AppButton>
