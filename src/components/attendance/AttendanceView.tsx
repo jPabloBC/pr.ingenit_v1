@@ -4,11 +4,8 @@ import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'r
 import { useSession } from 'next-auth/react'
 import {
   Box,
-  Button,
   Card,
   CardContent,
-  Checkbox,
-  Chip,
   CircularProgress,
   Container,
   Dialog,
@@ -16,15 +13,11 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
-  IconButton,
   InputAdornment,
   InputLabel,
   MenuItem,
   Paper,
   Popover,
-  Select,
-  Tab,
-  Tabs,
   Table,
   TableBody,
   TableCell,
@@ -32,7 +25,6 @@ import {
   TableHead,
   TableSortLabel,
   TableRow,
-  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -51,6 +43,11 @@ import {
 } from 'recharts'
 import UserHeader from '../layout/UserHeader'
 import { colors } from '../../theme/theme'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { AppTabs } from '@/components/ui/AppTabs'
+import { AppSearchField, AppSelectControl, AppTextField } from '@/components/ui/FormControls'
+import { AppCheckbox, AppChip, AppIconButton } from '@/components/ui/InteractiveControls'
 import {
   ATTENDANCE_DATA_REFRESH_EVENT,
   ATTENDANCE_DATA_REFRESH_STORAGE_KEY,
@@ -281,23 +278,27 @@ const ContactHoverContent = ({ collaborator, rowKey }: { collaborator?: Collabor
             </Box>
             <Box sx={{ display: 'flex', gap: 0.35, flexShrink: 0 }}>
               {whatsappUrl && (
-                <IconButton
-                  size="small"
+                <Box
                   component="a"
                   href={whatsappUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(event) => event.stopPropagation()}
-                  sx={{
-                    color: '#25D366',
-                    p: 0.35,
-                    '&:hover': { bgcolor: `${colors.white}22` },
-                  }}
+                  sx={{ display: 'inline-flex', color: 'inherit', textDecoration: 'none' }}
                 >
-                  <WhatsApp sx={{ fontSize: 16 }} />
-                </IconButton>
+                  <AppIconButton
+                    size="small"
+                    sx={{
+                      color: '#25D366',
+                      p: 0.35,
+                      '&:hover': { bgcolor: `${colors.white}22` },
+                    }}
+                  >
+                    <WhatsApp sx={{ fontSize: 16 }} />
+                  </AppIconButton>
+                </Box>
               )}
-              <IconButton
+              <AppIconButton
                 size="small"
                 onClick={(event) => {
                   event.stopPropagation()
@@ -310,7 +311,7 @@ const ContactHoverContent = ({ collaborator, rowKey }: { collaborator?: Collabor
                 }}
               >
                 <ContentCopy sx={{ fontSize: 15 }} />
-              </IconButton>
+              </AppIconButton>
             </Box>
           </Box>
         )
@@ -1530,53 +1531,63 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   const maxDailyAvailableDate = dailyAvailableDates.length > 0 ? dailyAvailableDates[0] : ''
 
   return (
-    <Box sx={{ display: 'flex', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+    <Box sx={{ display: 'flex', width: '100%', maxWidth: '100%', minHeight: '100vh', overflowX: 'hidden', bgcolor: colors.managementWhiteSoft }}>
       <Box sx={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <UserHeader title="Asistencia" />
         <Container
+          component="main"
           maxWidth={false}
+          disableGutters
           sx={{
-            pt: { xs: 1, md: 1.25 },
+            pt: 0,
             pb: 2,
-            px: { xs: 1, sm: 1.5, md: 2 },
+            px: 0,
             minWidth: 0,
             width: '100%',
             maxWidth: '100%',
             overflowX: 'hidden',
           }}
         >
+          <AppTabs
+            ariaLabel="Secciones de asistencia"
+            value={tab}
+            onChange={(value) => setTab(value as 'daily' | 'history')}
+            items={[
+              { value: 'daily', label: 'Diaria', icon: <CalendarMonth /> },
+              { value: 'history', label: 'Histórica', icon: <Assessment /> },
+            ]}
+          />
+          <Box sx={{ minWidth: 0, px: { xs: 1, sm: 1.5, md: 2 } }}>
           <Card
+            variant="outlined"
             sx={{
               mb: 1.25,
               position: 'sticky',
               top: 4,
               zIndex: 8,
-              boxShadow: '0 6px 16px rgba(15, 23, 42, 0.08)',
-              overflowX: 'hidden',
+              borderColor: colors.managementBorder,
+              borderRadius: 1.5,
+              boxShadow: 'none',
+              overflowX: 'clip',
+              overflowY: 'visible',
             }}
           >
-            <CardContent sx={{ p: { xs: 0.75, md: 1.4 }, '&:last-child': { pb: { xs: 0.75, md: 1.4 } } }}>
-              <Tabs
-                value={tab}
-                onChange={(_, v) => setTab(v)}
-                sx={{
-                  mb: 1,
-                  minHeight: 30,
-                  '& .MuiTab-root': { minHeight: 30, py: 0.2, px: { xs: 1.25, md: 1.5 } },
-                }}
-              >
-                <Tab value="daily" label="Diaria" />
-                <Tab value="history" label="Historica" />
-              </Tabs>
-
+            <CardContent
+              sx={{
+                px: { xs: 0.75, md: 1.4 },
+                pt: { xs: 1.5, md: 1.75 },
+                pb: { xs: 1, md: 1.4 },
+                '&:last-child': { pb: { xs: 1, md: 1.4 } },
+              }}
+            >
               <Box
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: { xs: 0.45, md: 0.55 },
                   flexWrap: 'wrap',
-                  overflowX: 'hidden',
-                  pt: 0.5,
+                  overflowX: 'visible',
+                  pt: 0,
                   pb: 0,
                   minWidth: 0,
                   '& > .MuiTextField-root, & > .MuiFormControl-root': {
@@ -1601,19 +1612,21 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                     minWidth: 0,
                   },
                   '& > .attendance-week-action': {
-                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 1 132px' },
+                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 0 auto' },
                   },
                   '& > .attendance-latest-action': {
-                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 1 118px' },
+                    flex: { xs: '1 1 calc(50% - 6px)', sm: '0 0 auto' },
                   },
                   '& > .attendance-compact-action': {
                     flex: '0 0 auto',
                   },
                   '& .MuiButton-root': {
-                    px: { xs: 1, md: 1.15 },
-                    minWidth: 0,
-                    height: 34,
-                    py: 0.35,
+                    height: 44,
+                    minHeight: 44,
+                  },
+                  '& .MuiIconButton-root': {
+                    width: 44,
+                    height: 44,
                   },
                   '& .MuiButton-startIcon': {
                     mr: 0.35,
@@ -1621,25 +1634,13 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                   '& .MuiButton-endIcon': {
                     ml: 0.35,
                   },
-                  '& .MuiInputBase-input': {
-                    textOverflow: 'ellipsis',
-                    py: 0.75,
-                  },
-                  '& .MuiInputLabel-root': {
-                    transform: 'translate(14px, 7px) scale(1)',
-                  },
-                  '& .MuiInputLabel-shrink': {
-                    transform: 'translate(14px, -8px) scale(0.75)',
-                  },
-                  '& .MuiOutlinedInput-root': {
-                    minHeight: 34,
-                  },
+                  '& .MuiInputBase-input': { textOverflow: 'ellipsis' },
                 }}
               >
                 {tab === 'daily' ? (
                   <>
                     <Box className="attendance-date-field" sx={{ minWidth: 0 }}>
-                      <TextField
+                      <AppTextField
                         label="Fecha"
                         value={
                           dailyDatesLoading
@@ -1692,7 +1693,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                     </Box>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Tipo trabajador</InputLabel>
-                      <Select
+                      <AppSelectControl
                         value={dailySelectedWorkerType}
                         label="Tipo trabajador"
                         onChange={(e) => setDailySelectedWorkerType(String(e.target.value || 'all'))}
@@ -1701,11 +1702,11 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         {workerTypeOptions.map((workerType) => (
                           <MenuItem key={workerType} value={workerType}>{formatWorkerTypeLabel(workerType)}</MenuItem>
                         ))}
-                      </Select>
+                      </AppSelectControl>
                     </FormControl>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Asistencia</InputLabel>
-                      <Select
+                      <AppSelectControl
                         value={dailySelectedAttendance}
                         label="Asistencia"
                         onChange={(e) => setDailySelectedAttendance(String(e.target.value || 'all'))}
@@ -1714,9 +1715,9 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         {STATUS_OPTIONS.map((statusOption) => (
                           <MenuItem key={statusOption} value={statusOption}>{statusOption}</MenuItem>
                         ))}
-                      </Select>
+                      </AppSelectControl>
                     </FormControl>
-                    <TextField
+                    <AppSearchField
                       className="attendance-search-field"
                       label="Buscar"
                       placeholder="Documento, colaborador, cargo, tipo, estado, asistencia"
@@ -1728,19 +1729,18 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                   </>
                 ) : (
                   <>
-                    <Button
+                    <AppButton
                       className="attendance-action attendance-week-action"
                       variant="outlined"
-                      size="small"
                       disabled={!previousHistoryWeek}
                       onClick={() => previousHistoryWeek && applyHistoryRange(previousHistoryWeek)}
-                      startIcon={<ChevronLeft />}
-                      sx={{ textTransform: 'none', fontWeight: 800 }}
+                      startIcon={<ChevronLeft sx={{ fontSize: 18 }} />}
+                      sx={{ height: 44, minHeight: 44, whiteSpace: 'nowrap' }}
                     >
                       Semana anterior
-                    </Button>
+                    </AppButton>
                     <Box className="attendance-period-field" sx={{ minWidth: 0 }}>
-                      <TextField
+                      <AppTextField
                         label="Período"
                         value={historyRangeLabel}
                         onClick={(e) => {
@@ -1762,8 +1762,12 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         '& .MuiInputBase-root, & .MuiInputBase-input': {
                           cursor: 'pointer',
                         },
+                        '& .MuiInputBase-root': {
+                          height: 44,
+                        },
                         '& .MuiInputBase-input': {
                           fontSize: 14,
+                          fontWeight: 500,
                         },
                       }}
                       />
@@ -1804,10 +1808,10 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                             }}
                           />
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, px: 1, pb: 1 }}>
-                            <Button size="small" onClick={() => setHistoryRangeAnchorEl(null)} sx={{ textTransform: 'none' }}>
+                            <AppButton size="small" onClick={() => setHistoryRangeAnchorEl(null)} sx={{ textTransform: 'none' }}>
                               Cancelar
-                            </Button>
-                            <Button
+                            </AppButton>
+                            <AppButton
                               size="small"
                               variant="contained"
                               disabled={!historyTempStartDate || !historyTempEndDate}
@@ -1823,35 +1827,33 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                               sx={{ textTransform: 'none', fontWeight: 800 }}
                             >
                               Aplicar
-                            </Button>
+                            </AppButton>
                           </Box>
                         </Box>
                       </Popover>
                     </Box>
-                    <Button
-                      className="attendance-action attendance-week-action"
-                      variant="outlined"
-                      size="small"
-                      disabled={!nextHistoryWeek}
-                      onClick={() => nextHistoryWeek && applyHistoryRange(nextHistoryWeek)}
-                      endIcon={<ChevronRight />}
-                      sx={{ textTransform: 'none', fontWeight: 800 }}
-                    >
-                      Semana siguiente
-                    </Button>
-                    <Button
+                    <AppButton
                       className="attendance-action attendance-latest-action"
                       variant="contained"
-                      size="small"
                       disabled={isViewingLatestHistoryWeek}
                       onClick={() => applyHistoryRange(latestHistoryWeek, true)}
-                      sx={{ textTransform: 'none', fontWeight: 800 }}
+                      sx={{ height: 44, minHeight: 44, whiteSpace: 'nowrap' }}
                     >
                       Última semana
-                    </Button>
+                    </AppButton>
+                    <AppButton
+                      className="attendance-action attendance-week-action"
+                      variant="outlined"
+                      disabled={!nextHistoryWeek}
+                      onClick={() => nextHistoryWeek && applyHistoryRange(nextHistoryWeek)}
+                      endIcon={<ChevronRight sx={{ fontSize: 18 }} />}
+                      sx={{ height: 44, minHeight: 44, whiteSpace: 'nowrap' }}
+                    >
+                      Semana siguiente
+                    </AppButton>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Tipo trabajador</InputLabel>
-                      <Select
+                      <AppSelectControl
                         value={historySelectedWorkerType}
                         label="Tipo trabajador"
                         onChange={(e) => setHistorySelectedWorkerType(String(e.target.value || 'all'))}
@@ -1860,11 +1862,11 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         {workerTypeOptions.map((workerType) => (
                           <MenuItem key={workerType} value={workerType}>{formatWorkerTypeLabel(workerType)}</MenuItem>
                         ))}
-                      </Select>
+                      </AppSelectControl>
                     </FormControl>
                     <FormControl size="small" fullWidth>
                       <InputLabel>Asistencia</InputLabel>
-                      <Select
+                      <AppSelectControl
                         value={historySelectedStatus}
                         label="Asistencia"
                         onChange={(e) => setHistorySelectedStatus(String(e.target.value || 'all'))}
@@ -1873,9 +1875,9 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         {STATUS_OPTIONS.map((statusOption) => (
                           <MenuItem key={statusOption} value={statusOption}>{statusOption}</MenuItem>
                         ))}
-                      </Select>
+                      </AppSelectControl>
                     </FormControl>
-                    <TextField
+                    <AppSearchField
                       className="attendance-search-field"
                       label="Buscar"
                       placeholder="Documento, colaborador, cargo, tipo, estado, asistencia"
@@ -1886,15 +1888,15 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                     />
                   </>
                 )}
-                <Button
+                <AppButton
                   className="attendance-action attendance-compact-action"
                   variant="contained"
                   startIcon={<Search />}
                   onClick={handleSearchAction}
                 >
                   Buscar
-                </Button>
-                <Button
+                </AppButton>
+                <AppButton
                   className="attendance-action attendance-compact-action"
                   variant="outlined"
                   startIcon={<Refresh />}
@@ -1922,17 +1924,18 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                   }}
                 >
                   Limpiar filtros
-                </Button>
+                </AppButton>
                 {renderImportAction?.()}
                 <Tooltip title="Ver resumen" arrow>
                   <span className="attendance-action attendance-compact-action">
-                    <IconButton
+                    <AppIconButton
+                      size="medium"
                       onClick={() => setSummaryModalOpen(true)}
                       aria-label="Ver resumen"
                       disabled={attendanceSummaryRows.length === 0}
                       sx={{
-                        width: 38,
-                        height: 34,
+                        width: 44,
+                        height: 44,
                         border: `1px solid ${colors.blue6}`,
                         borderRadius: 1,
                         color: colors.blue6,
@@ -1949,12 +1952,13 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       }}
                     >
                       <Assessment fontSize="small" />
-                    </IconButton>
+                    </AppIconButton>
                   </span>
                 </Tooltip>
                 <Tooltip title="Exportar Excel" arrow>
                   <span className="attendance-action attendance-compact-action">
-                    <IconButton
+                    <AppIconButton
+                      size="medium"
                       onClick={handleExportExcel}
                       aria-label="Exportar Excel"
                       disabled={
@@ -1962,8 +1966,8 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         (tab === 'daily' ? dailyMatrixRows.length === 0 : filteredHistoryRows.length === 0)
                       }
                       sx={{
-                        width: 40,
-                        height: 36,
+                        width: 44,
+                        height: 44,
                         border: `1px solid ${colors.blue6}`,
                         borderRadius: 1,
                         color: colors.blue6,
@@ -1980,11 +1984,11 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       }}
                     >
                       <Download fontSize="small" />
-                    </IconButton>
+                    </AppIconButton>
                   </span>
                 </Tooltip>
                 {tab === 'daily' && canEditSelectedDailyAttendance && (
-                  <Button
+                  <AppButton
                     className="attendance-action"
                     variant="contained"
                     color="success"
@@ -1992,7 +1996,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                     disabled={savingDaily || dailyPendingEntries.length === 0}
                   >
                     {savingDaily ? 'Guardando...' : `Guardar cambios (${dailyPendingEntries.length})`}
-                  </Button>
+                  </AppButton>
                 )}
               </Box>
               {tab === 'history' && pinnedHistoryRows.length > 0 && (
@@ -2011,7 +2015,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                     Fijados:
                   </Typography>
                   {pinnedHistoryRows.map((row) => (
-                    <Chip
+                    <AppChip
                       key={`pinned-${row.collaborator_id}`}
                       size="small"
                       label={formatFullName(row.collaborator)}
@@ -2032,27 +2036,27 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       }}
                     />
                   ))}
-                  <Button
+                  <AppButton
                     size="small"
                     variant="text"
                     onClick={() => setPinnedHistoryCollaboratorIds([])}
                     sx={{ textTransform: 'none', fontWeight: 800, ml: 0.25 }}
                   >
                     Limpiar fijados
-                  </Button>
+                  </AppButton>
                 </Box>
               )}
             </CardContent>
           </Card>
 
-          <Paper elevation={2} sx={{ p: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+          <Paper variant="outlined" sx={{ p: 0, width: '100%', maxWidth: '100%', overflowX: 'hidden', borderColor: colors.managementBorder, borderRadius: 1.5 }}>
             {loading ? (
               <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
                 <CircularProgress />
               </Box>
             ) : error ? (
               <Box sx={{ p: 2 }}>
-                <Typography color="error">{error}</Typography>
+                <AppAlert severity="error">{error}</AppAlert>
               </Box>
             ) : tab === 'daily' ? (
               <>
@@ -2142,7 +2146,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                           <TableCell align="center" sx={{ minWidth: 176, py: 0.45 }}>
                             {canEditSelectedDailyAttendance ? (
                               <FormControl size="small" fullWidth>
-                                <Select
+                                <AppSelectControl
                                   value={String(dailyDraftStatusByCollaborator[row.collaborator_id] || formatAttendanceStatus(row.status, row.reason) || '')}
                                   onChange={(e) => handleDailyStatusChange(row.collaborator_id, String(e.target.value || ''))}
                                   displayEmpty
@@ -2162,7 +2166,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                                       {statusOption}
                                     </MenuItem>
                                   ))}
-                                </Select>
+                                </AppSelectControl>
                               </FormControl>
                             ) : (
                               <Typography
@@ -2268,73 +2272,73 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                         </TableCell>
                         <TableCell sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('document', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('document')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('document'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'document'} direction={historySortDirection} onClick={() => handleHistorySort('document')}>Documento</TableSortLabel>
                           </Box>
                         </TableCell>
                         <TableCell sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('name', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('name')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('name'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'name'} direction={historySortDirection} onClick={() => handleHistorySort('name')}>Colaborador</TableSortLabel>
                           </Box>
                         </TableCell>
                         <TableCell sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('position', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('position')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('position'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'position'} direction={historySortDirection} onClick={() => handleHistorySort('position')}>Cargo</TableSortLabel>
                           </Box>
                         </TableCell>
                         <TableCell align="center" sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('worker_type', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('worker_type')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('worker_type'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'worker_type'} direction={historySortDirection} onClick={() => handleHistorySort('worker_type')}>Tipo Trabajador</TableSortLabel>
                           </Box>
                         </TableCell>
                         <TableCell sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('specialty', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('specialty')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('specialty'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'specialty'} direction={historySortDirection} onClick={() => handleHistorySort('specialty')}>Especialidad</TableSortLabel>
                           </Box>
                         </TableCell>
                         <TableCell align="center" sx={{ fontWeight: 800, color: colors.white, ...getStickyCellSx('is_active', true) }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 0, width: '100%' }}>
-                            <IconButton
+                            <AppIconButton
                               size="small"
                               onClick={() => togglePinnedHistoryColumn('is_active')}
                               sx={historyPinButtonSx(isPinnedHistoryColumn('is_active'))}
                             >
                               <PushPin />
-                            </IconButton>
+                            </AppIconButton>
                             <TableSortLabel active={historySortField === 'is_active'} direction={historySortDirection} onClick={() => handleHistorySort('is_active')}>Vigencia</TableSortLabel>
                           </Box>
                         </TableCell>
@@ -2368,7 +2372,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                               boxShadow: '1px 0 0 rgba(15,23,42,0.08)',
                             }}
                           >
-                            <Checkbox
+                            <AppCheckbox
                               size="small"
                               checked={pinnedHistoryCollaboratorIds.includes(String(row.collaborator_id))}
                               onChange={(event) => {
@@ -2594,11 +2598,12 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
               </Box>
             </DialogContent>
             <DialogActions sx={{ px: 2, py: 1, bgcolor: colors.white, borderTop: `1px solid ${colors.gray9}` }}>
-              <Button onClick={() => setSummaryModalOpen(false)} variant="outlined" sx={{ textTransform: 'none', fontWeight: 800 }}>
+              <AppButton onClick={() => setSummaryModalOpen(false)} variant="outlined" sx={{ textTransform: 'none', fontWeight: 800 }}>
                 Cerrar
-              </Button>
+              </AppButton>
             </DialogActions>
           </Dialog>
+          </Box>
         </Container>
       </Box>
     </Box>

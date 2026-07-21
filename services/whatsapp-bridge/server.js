@@ -10,6 +10,7 @@ const token = String(process.env.WHATSAPP_BRIDGE_TOKEN || '')
 const authPath = String(process.env.WHATSAPP_AUTH_PATH || '.wwebjs_auth')
 const allowedMediaOrigin = String(process.env.WHATSAPP_ALLOWED_MEDIA_ORIGIN || '')
 const maxRecipients = Math.min(Math.max(Number(process.env.WHATSAPP_MAX_RECIPIENTS || 10), 1), 50)
+const sendDelayMs = Math.min(Math.max(Number(process.env.WHATSAPP_SEND_DELAY_MS || 8000), 5000), 30_000)
 const headless = process.env.WHATSAPP_HEADLESS !== 'false'
 
 if (!token) throw new Error('WHATSAPP_BRIDGE_TOKEN is required.')
@@ -87,19 +88,19 @@ const isTransientWhatsAppError = (error) => /detached frame|execution context wa
   error instanceof Error ? error.message : String(error),
 )
 
-const sendMessageWithRetry = async (chatId, content, options) => {
-  let lastError
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await client.sendMessage(chatId, content, options)
-    } catch (error) {
-      lastError = error
-      if (attempt === 2 || !isTransientWhatsAppError(error)) throw error
-      console.warn(`WhatsApp Web se recargó; reintentando envío (${attempt}/2)...`)
-      await wait(2_000)
+const sendMessageSafely = async (chatId, content, options) => {
+  try {
+    return await client.sendMessage(chatId, content, options)
+  } catch (error) {
+    if (isTransientWhatsAppError(error)) {
+      ready = false
+      throw new Error(
+        'WhatsApp Web se recargó durante el envío. El lote fue detenido para proteger la sesión.'
+      )
     }
+
+    throw error
   }
-  throw lastError
 }
 
 const mediaFromUrl = async (mediaUrl, filename) => {
@@ -138,10 +139,11 @@ const server = http.createServer(async (req, res) => {
         continue
       }
       try {
-        const sent = await sendMessageWithRetry(`${phone}@c.us`, media || message, media ? { caption: message } : undefined)
+        const sent = await sendMessageSafely(`${phone}@c.us`, media || message, media ? { caption: message } : undefined)
         const providerMessageId = typeof sent?.id?._serialized === 'string' ? sent.id._serialized : null
         results.push({ id: recipient.id, status: 'sent', provider_message_id: providerMessageId })
         console.info(`WhatsApp enviado a ${phone}.`)
+        await wait(sendDelayMs)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`No se pudo registrar el envio a ${phone}: ${message}`)

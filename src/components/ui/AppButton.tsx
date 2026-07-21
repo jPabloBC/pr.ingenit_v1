@@ -9,7 +9,7 @@ const StandardButton = styled(Button)(({ theme }) => ({
   paddingInline: theme.spacing(2),
   borderRadius: 8,
   fontSize: '0.95rem',
-  fontWeight: 500,
+  fontWeight: 400,
   lineHeight: 1.2,
   boxShadow: 'none',
   '&.MuiButton-sizeSmall': {

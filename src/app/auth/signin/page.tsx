@@ -7,15 +7,16 @@ import {
   Container,
   Box,
   Paper,
-  TextField,
-  Button,
   Typography,
-  Alert,
   CircularProgress
 } from '@mui/material'
 import Image from 'next/image'
 import { colors } from '../../../theme/theme'
 import { Eye, EyeOff } from 'lucide-react'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { AppTextField } from '@/components/ui/FormControls'
+import { AppIconButton } from '@/components/ui/InteractiveControls'
 
 export default function SignIn() {
   const { update } = useSession()
@@ -54,7 +55,7 @@ export default function SignIn() {
           }
         })()
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   }, [router])
@@ -236,20 +237,9 @@ export default function SignIn() {
 
             <Box component="form" onSubmit={handleSubmit} sx={{ mt: .5 }}>
               {error && (
-                <Alert 
-                  severity="error" 
-                  sx={{ 
-                    mb: 1.5,
-                    backgroundColor: `${colors.gold7}50`,
-                    color: colors.gold1,
-                    borderLeft: `4px solid ${colors.gold2}`,
-                    '& .MuiAlert-icon': {
-                      color: colors.gold2
-                    }
-                  }}
-                >
+                <AppAlert severity="error" sx={{ mb: 1.5 }}>
                   {error}
-                </Alert>
+                </AppAlert>
               )}
 
               <Typography
@@ -266,42 +256,23 @@ export default function SignIn() {
                 Acceso al sistema
               </Typography>
               
-              <TextField
+              <AppTextField
                 margin="none"
                 required
-                fullWidth
                 id="email"
-                label="Correo Electrónico"
+                label="Correo electrónico"
                 name="email"
                 autoComplete="email"
                 autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading || redirecting}
-                sx={{
-                  mb: 2.5,
-                  '& .MuiOutlinedInput-root': {
-                    height: 48,
-                    borderRadius: 2,
-                    '&:hover fieldset': {
-                      borderColor: colors.blue6,
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: colors.blue6,
-                    },
-                  },
-                  '& .MuiInputLabel-root.Mui-focused': {
-                    color: colors.blue6,
-                  },
-                }}
-                size="small"
-                InputLabelProps={{ sx: { fontSize: { xs: '0.86rem', sm: '1rem' } } }}
+                sx={{ mb: 2 }}
               />
               
-              <TextField
+              <AppTextField
                 margin="none"
                 required
-                fullWidth
                 name="password"
                 label="Contraseña"
                 type={showPassword ? 'text' : 'password'}
@@ -311,7 +282,7 @@ export default function SignIn() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading || redirecting}
                 sx={{
-                  mb: 2.5,
+                  mb: 2,
                   '& input::-ms-reveal, & input::-ms-clear': {
                     display: 'none',
                   },
@@ -322,34 +293,22 @@ export default function SignIn() {
                     position: 'absolute',
                     right: 0,
                   },
-                  '& .MuiOutlinedInput-root': {
-                    height: 48,
-                    borderRadius: 2,
-                    '&:hover fieldset': {
-                      borderColor: colors.blue6,
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: colors.blue6,
-                    },
-                  },
-                  '& .MuiInputLabel-root.Mui-focused': {
-                    color: colors.blue6,
-                  },
                 }}
-                size="small"
-                InputLabelProps={{ sx: { fontSize: { xs: '0.86rem', sm: '1rem' } } }}
                 InputProps={{
                   endAdornment: (
-                    <Button
+                    <AppIconButton
+                      type="button"
+                      size="small"
+                      aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                       onClick={() => setShowPassword((prev) => !prev)}
-                      sx={{ minWidth: 0, p: 0, ml: 1 }}
+                      sx={{ ml: 1, color: colors.gray8 }}
                     >
                       {showPassword ? (
-                        <EyeOff size={22} color={colors.gray8} />
+                        <EyeOff size={20} />
                       ) : (
-                        <Eye size={22} color={colors.gray8} />
+                        <Eye size={20} />
                       )}
-                    </Button>
+                    </AppIconButton>
                   ),
                 }}
               />
@@ -362,7 +321,7 @@ export default function SignIn() {
                     <Typography variant="body2" color="success.main" sx={{ mb: 1 }}>{resetMessage}</Typography>
                   ) : null}
 
-                  <Button
+                  <AppButton
                     onClick={async () => {
                       setResetError('')
                       setResetMessage('')
@@ -397,7 +356,7 @@ export default function SignIn() {
                               try { window.location.reload() } catch { router.refresh() }
                             }, 3000)
                           }
-                        } catch (err) {
+                        } catch {
                           setResetError('Error de red')
                         } finally {
                           setResetLoading(false)
@@ -405,41 +364,25 @@ export default function SignIn() {
                     }}
                     variant="text"
                     disabled={resetLoading}
-                    sx={{
-                      textTransform: 'none',
-                      color: colors.blue6,
-                      fontWeight: 400,
-                      fontSize: '0.95rem',
-                      p: 0,
-                      minWidth: 0,
-                      '&:hover': { textDecoration: 'underline', backgroundColor: 'transparent', boxShadow: 'none' }
-                    }}
+                    sx={{ color: colors.blue6, minHeight: 32, px: 0.5, '&:hover': { textDecoration: 'underline', backgroundColor: 'transparent' } }}
                   >
                     {resetLoading ? 'Enviando...' : '¿Olvidaste tu contraseña? Restablecer contraseña'}
-                  </Button>
+                  </AppButton>
                 </Box>
               )}
               
-              <Button
+              <AppButton
                 type="submit"
                 fullWidth
                 variant="contained"
+                size="large"
                 disabled={loading || redirecting}
                 sx={{ 
                   minHeight: 46,
-                  py: 0,
-                  fontSize: { xs: '0.95rem', sm: '1.05rem', md: '1.08rem' },
-                  fontWeight: 600,
                   '@media (max-height: 760px), (max-width: 1366px)': {
                     minHeight: 44,
-                    py: 0,
-                    fontSize: { md: '0.98rem' },
                   },
-                  borderRadius: 2,
-                  textTransform: 'none',
-                  background: `linear-gradient(135deg, ${colors.blue6} 0%, ${colors.blue8} 100%)`,
                   '&:hover': {
-                    background: `linear-gradient(135deg, ${colors.blue4} 0%, ${colors.blue6} 100%)`,
                     transform: 'translateY(-1px)',
                     boxShadow: `0 8px 20px ${colors.blue6}30`
                   },
@@ -455,9 +398,9 @@ export default function SignIn() {
                     {redirecting ? 'Ingresando...' : 'Iniciando sesión...'}
                   </Box>
                 ) : (
-                  'Iniciar Sesión'
+                  'Iniciar sesión'
                 )}
-              </Button>
+              </AppButton>
             </Box>
           </Paper>
         </Box>

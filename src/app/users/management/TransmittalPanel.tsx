@@ -27,6 +27,8 @@ type DocumentEntry = {
 const formatDate = (date: string) => date ? date.split('-').reverse().join('-') : ''
 const formatShortDate = (date: string) => date ? `${date.slice(8, 10)}-${date.slice(5, 7)}-${date.slice(2, 4)}` : ''
 const formatHeaderDate = (date: string) => date ? new Intl.DateTimeFormat('en-US', { day: '2-digit', month: 'short' }).format(new Date(`${date}T12:00:00`)).replace(' ', '-') : ''
+const buildPrintFileName = (registerNumber: string, reportDate: string) =>
+  `${registerNumber}.- Transmital entrega de Reportes ${formatDate(reportDate)}`
 const parseYmdToDate = (value: string) => {
   const [year, month, day] = String(value || '').split('-').map(Number)
   return year && month && day ? new Date(year, month - 1, day) : null
@@ -149,12 +151,15 @@ export default function TransmittalPanel() {
     }])
   }
 
-  const printTransmittal = () => {
+  const printTransmittal = (issuedRegisterNo: string) => {
     const body = document.body
+    const originalTitle = document.title
     const cleanup = () => {
       body.classList.remove('transmittal-printing')
+      document.title = originalTitle
       window.removeEventListener('afterprint', cleanup)
     }
+    document.title = buildPrintFileName(issuedRegisterNo, date)
     body.classList.add('transmittal-printing')
     window.addEventListener('afterprint', cleanup, { once: true })
     window.print()
@@ -167,8 +172,9 @@ export default function TransmittalPanel() {
       const response = await fetch('/api/transmittal-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reportDate: date }) })
       const data = await response.json().catch(() => ({}))
       if (response.ok && Number.isFinite(Number(data?.registerNumber))) {
-        setRegisterNo(String(data.registerNumber))
-        window.setTimeout(printTransmittal, 50)
+        const issuedRegisterNo = String(data.registerNumber)
+        setRegisterNo(issuedRegisterNo)
+        window.setTimeout(() => printTransmittal(issuedRegisterNo), 50)
         return
       }
     } catch {}
@@ -205,7 +211,7 @@ export default function TransmittalPanel() {
       <Box sx={{ display: 'grid', gridTemplateColumns: '1.05fr 1.35fr .42fr .52fr', borderBottom: '1px solid #111' }}>
         <Box sx={{ minHeight: 78, p: 1, borderRight: '1px solid #111', display: 'grid', placeItems: 'center' }}>{logoUrl ? <Box component="img" src={logoUrl} alt={companyName} sx={{ maxWidth: '58%', maxHeight: 52, objectFit: 'contain' }} /> : <Typography sx={{ fontWeight: 700, color: '#06306b', fontSize: 12 }}>{companyName}</Typography>}</Box>
         <Box className="transmittal-document-title" sx={{ minWidth: 0, p: 1.25, borderRight: '1px solid #111', display: 'grid', placeItems: 'center', textAlign: 'center', whiteSpace: 'nowrap', fontWeight: 700, color: '#06306b' }}>REGISTRO DE ENTREGA DE DOCUMENTOS</Box>
-        <Box sx={{ p: 1.25, borderRight: '1px solid #111', display: 'grid', placeItems: 'center', textAlign: 'center', fontWeight: 700, fontSize: 12 }}>{formatHeaderDate(date)}</Box>
+        <Box sx={{ p: 1.25, borderRight: '1px solid #111', display: 'grid', placeItems: 'center', textAlign: 'center', fontWeight: 700, fontSize: 12, color: '#06306b' }}>{formatHeaderDate(date)}</Box>
         <Box sx={{ display: 'grid', gridTemplateRows: '1fr auto' }}><Box sx={{ borderBottom: '1px solid #111' }} /><Box sx={{ display: 'grid', gridTemplateColumns: '1.15fr .85fr', bgcolor: '#c9c8f7', color: '#06306b', fontWeight: 700 }}><Box sx={{ p: .55, bgcolor: '#fff', borderRight: '1px solid #111', whiteSpace: 'nowrap', fontSize: 12 }}>N° REG:</Box><Box sx={{ p: .55, textAlign: 'center' }}>{displayedRegisterNo}</Box></Box></Box>
       </Box>
       <Box sx={{ display: 'grid', gridTemplateColumns: '.5fr 2.45fr .8fr .7fr 1.15fr .85fr', borderBottom: '1px solid #111', color: '#06306b', fontWeight: 700, fontSize: 11, '& > *': { minWidth: 0, borderRight: '1px solid #111', whiteSpace: 'nowrap' }, '& > :last-child': { borderRight: 0 } }}>

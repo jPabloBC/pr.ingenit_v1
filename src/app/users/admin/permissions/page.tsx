@@ -3,9 +3,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import {
   Box,
-  Button,
-  Checkbox,
-  Chip,
   CircularProgress,
   Divider,
   FormControlLabel,
@@ -16,15 +13,18 @@ import {
   Paper,
   Stack,
   Container,
-  TextField,
   Typography,
   Snackbar,
-  Alert,
-  Tab,
-  Tabs,
 } from '@mui/material'
+import { FactCheckOutlined, ManageAccountsOutlined } from '@mui/icons-material'
 import { colors } from '@/theme/theme'
 import UserHeader from '@/components/layout/UserHeader'
+import { MANAGEMENT_TAB_DEFINITIONS } from '@/lib/managementPermissions'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { AppSearchField } from '@/components/ui/FormControls'
+import { AppCheckbox, AppChip } from '@/components/ui/InteractiveControls'
+import { AppTabs } from '@/components/ui/AppTabs'
 
 type User = { id: string; name?: string; email?: string; role?: string }
 type Candidate = {
@@ -52,7 +52,10 @@ const RESOURCES: ResourceOption[] = [
   { key: 'daily-report', label: 'Reporte diario' },
   { key: 'program', label: 'Programa' },
   { key: 'admin-permissions', label: 'Administración' },
-  { key: 'management', label: 'Gestión y Datos' },
+  { key: 'management', label: 'Gestión y Datos', children: MANAGEMENT_TAB_DEFINITIONS.map((tab) => ({
+    key: tab.permissionKey,
+    label: tab.label,
+  })) },
   { key: 'communications', label: 'Comunicaciones', children: [
     { key: 'communications.send', label: 'Envíos' },
     { key: 'communications.forms', label: 'Formulario' },
@@ -68,7 +71,7 @@ const HIDDEN_RESOURCE_KEYS = new Set<string>(['epp', 'payroll'])
 
 export default function Page() {
   const { data: session } = useSession()
-  const actorRole = String((session?.user as any)?.role || '').trim().toLowerCase()
+  const actorRole = String(session?.user?.role || '').trim().toLowerCase()
   const visibleResources = useMemo(() => {
     const activeResources = RESOURCES.filter((r) => !HIDDEN_RESOURCE_KEYS.has(r.key))
     if (actorRole === 'dev') return activeResources
@@ -132,7 +135,10 @@ export default function Page() {
       .then(r => r.json())
       .then(data => {
         const p: Record<string, boolean> = {}
-        ;(data.permissions || []).forEach((pp: any) => { p[pp.resource_key] = !!pp.can_view })
+        ;(data.permissions || []).forEach((permission: { resource_key?: string; can_view?: boolean }) => {
+          const key = String(permission.resource_key || '').trim()
+          if (key) p[key] = Boolean(permission.can_view)
+        })
         visibleResources.forEach(r => {
           if (!(r.key in p)) p[r.key] = false
           r.children?.forEach((child) => {
@@ -199,9 +205,9 @@ export default function Page() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Error saving')
       setToast({ open: true, message: 'Permisos guardados correctamente', severity: 'success' })
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e)
-      setToast({ open: true, message: e?.message || 'Error al guardar permisos', severity: 'error' })
+      setToast({ open: true, message: e instanceof Error ? e.message : 'Error al guardar permisos', severity: 'error' })
     } finally {
       setSaving(false)
     }
@@ -221,9 +227,9 @@ export default function Page() {
       await loadUsers()
       if (json?.user?.id) setSelected(String(json.user.id))
       setToast({ open: true, message: 'Colaborador convertido a usuario', severity: 'success' })
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e)
-      setToast({ open: true, message: e?.message || 'Error al convertir colaborador', severity: 'error' })
+      setToast({ open: true, message: e instanceof Error ? e.message : 'Error al convertir colaborador', severity: 'error' })
     } finally {
       setConvertingId(null)
     }
@@ -234,52 +240,57 @@ export default function Page() {
     : Boolean(permissions[resource.key])).length
 
   return (
-    <Box sx={{ display: 'flex' }}>
-      <Box sx={{ flex: 1 }}>
+    <Box sx={{ display: 'flex', width: '100%', minHeight: '100vh', bgcolor: colors.managementWhiteSoft }}>
+      <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
         <UserHeader title="Administración" />
-        <Box component="main">
-          <Container
-            maxWidth={false}
-            disableGutters
-            sx={{ py: 3, width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 } }}
-          >
-            <Tabs
+        <Container
+          component="main"
+          maxWidth={false}
+          disableGutters
+          sx={{ width: '100%', maxWidth: '100%', px: 0, pt: 0, pb: 2 }}
+        >
+          <Stack spacing={0}>
+            <AppTabs
+              ariaLabel="Secciones de Administración"
               value={activeTab}
-              onChange={(_event, value) => setActiveTab(value)}
-              sx={{ mb: 2, borderBottom: '1px solid #e5e7eb' }}
-            >
-              <Tab value="users" label="Usuarios y permisos" />
-              <Tab value="audit" label="Auditoría" />
-            </Tabs>
+              onChange={(value) => setActiveTab(value as typeof activeTab)}
+              minItemWidth={160}
+              items={[
+                { value: 'users', label: 'Usuarios y permisos', icon: <ManageAccountsOutlined /> },
+                { value: 'audit', label: 'Auditoría', icon: <FactCheckOutlined /> },
+              ]}
+            />
+
+            <Box sx={{ minWidth: 0, px: { xs: 1, sm: 1.5, md: 2 }, pt: 2 }}>
 
             {activeTab === 'users' && (
             <Stack spacing={2}>
               <Box>
-                <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue6 }}>
+                <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue3 }}>
                   Gestión de permisos
                 </Typography>
-                <Typography variant="body2" sx={{ color: colors.gray4 }}>
+                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   Asigna accesos por módulo y, cuando corresponda, por pestaña.
                 </Typography>
               </Box>
 
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '40% 60%' }, gap: 2 }}>
-                <Paper sx={{ p: 2, borderRadius: 1.5, height: 'fit-content' }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(300px, 36%) minmax(0, 1fr)' }, gap: 2, alignItems: 'start' }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderColor: colors.managementBorder, borderRadius: 1.5 }}>
                   <Stack spacing={1.5}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600, color: colors.gray2 }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700, color: colors.blue3 }}>
                       Usuarios
                     </Typography>
-                    <TextField
-                      size="small"
-                      placeholder="Buscar user por nombre o email"
+                    <AppSearchField
+                      label="Buscar usuario"
+                      placeholder="Nombre o correo electrónico"
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                     />
                     <Divider />
-                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                      <Chip size="small" color="default" label={`Total: ${summary.total_workers}`} />
-                      <Chip size="small" color="success" label={`Con acceso: ${summary.with_access}`} />
-                      <Chip size="small" color="warning" label={`Sin acceso: ${summary.without_access}`} />
+                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                      <AppChip size="small" variant="outlined" label={`Total: ${summary.total_workers}`} />
+                      <AppChip size="small" color="success" variant="outlined" label={`Con acceso: ${summary.with_access}`} />
+                      <AppChip size="small" color="warning" variant="outlined" label={`Sin acceso: ${summary.without_access}`} />
                     </Stack>
                     {loadingUsers && (
                       <Stack alignItems="center" sx={{ py: 2 }}>
@@ -298,7 +309,7 @@ export default function Page() {
                       )
                     )}
                     {!loadingUsers && filteredUsers.length > 0 && (
-                      <List dense sx={{ maxHeight: 420, overflow: 'auto' }}>
+                      <List dense disablePadding sx={{ maxHeight: 420, overflow: 'auto', border: `1px solid ${colors.managementBorder}`, borderRadius: 1, '& .MuiListItem-root:not(:last-child)': { borderBottom: `1px solid ${colors.managementBorder}` } }}>
                         {filteredUsers.map(u => {
                           const isActive = u.id === selected
                           return (
@@ -307,16 +318,17 @@ export default function Page() {
                                 selected={isActive}
                                 onClick={() => setSelected(u.id)}
                                 sx={{
-                                  borderRadius: 1,
-                                  mb: 0.5,
-                                  '&.Mui-selected': { backgroundColor: colors.gray9 }
+                                  minHeight: 56,
+                                  borderRadius: 0,
+                                  '&.Mui-selected': { backgroundColor: colors.blue50, color: colors.blue3 },
+                                  '&.Mui-selected:hover': { backgroundColor: colors.blue100 },
                                 }}
                               >
                                 <ListItemText
                                   primary={u.name ? u.name.toUpperCase() : u.email}
                                   secondary={u.email && u.name ? u.email : undefined}
                                 />
-                                {u.role ? <Chip size="small" label={u.role} color="default" /> : null}
+                                {u.role ? <AppChip size="small" label={u.role} variant="outlined" /> : null}
                               </ListItemButton>
                             </ListItem>
                           )
@@ -329,24 +341,24 @@ export default function Page() {
                         <Typography variant="subtitle2" sx={{ color: colors.gray2 }}>
                           Colaboradores convertibles
                         </Typography>
-                        <List dense sx={{ maxHeight: 220, overflow: 'auto' }}>
+                        <List dense disablePadding sx={{ maxHeight: 220, overflow: 'auto', border: `1px solid ${colors.managementBorder}`, borderRadius: 1, '& .MuiListItem-root:not(:last-child)': { borderBottom: `1px solid ${colors.managementBorder}` } }}>
                           {filteredCandidates.map((c) => {
                             const label = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email || 'Sin nombre'
                             return (
                               <ListItem key={c.collaborator_id} disablePadding>
-                                <ListItemButton sx={{ borderRadius: 1, mb: 0.5 }}>
+                                <ListItemButton sx={{ minHeight: 56 }}>
                                   <ListItemText
                                     primary={label.toUpperCase()}
                                     secondary={c.email || 'Sin email'}
                                   />
-                                  <Button
+                                  <AppButton
                                     size="small"
                                     variant="outlined"
                                     onClick={() => handleConvertCandidate(c)}
                                     disabled={convertingId === c.collaborator_id}
                                   >
                                     {convertingId === c.collaborator_id ? 'Convirtiendo...' : 'Convertir a user'}
-                                  </Button>
+                                  </AppButton>
                                 </ListItemButton>
                               </ListItem>
                             )
@@ -357,10 +369,10 @@ export default function Page() {
                   </Stack>
                 </Paper>
 
-                <Paper sx={{ p: 2, borderRadius: 1.5 }}>
+                <Paper variant="outlined" sx={{ p: { xs: 1.5, md: 2 }, borderColor: colors.managementBorder, borderRadius: 1.5 }}>
                   <Stack spacing={2}>
                     <Box>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 600, color: colors.gray2 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 700, color: colors.blue3 }}>
                         Permisos
                       </Typography>
                       {!selectedUser && (
@@ -373,7 +385,7 @@ export default function Page() {
                           <Typography variant="body2" sx={{ color: colors.gray4 }}>
                             {selectedUser.name ? selectedUser.name.toUpperCase() : selectedUser.email}
                           </Typography>
-                          {selectedUser.role ? <Chip size="small" label={selectedUser.role} color="default" /> : null}
+                          {selectedUser.role ? <AppChip size="small" label={selectedUser.role} variant="outlined" /> : null}
                         </Stack>
                       )}
                     </Box>
@@ -395,19 +407,30 @@ export default function Page() {
                           </Stack>
                         )}
                         {!loadingPerms && (
-                          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1 }}>
+                          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 1 }}>
                             {visibleResources.map((resource) => {
                               const childValues = resource.children?.map((child) => Boolean(permissions[child.key])) || []
                               const allChildren = childValues.length > 0 && childValues.every(Boolean)
                               const someChildren = childValues.some(Boolean)
-                              return <Paper key={resource.key} variant="outlined" sx={{ p: 1.25, borderRadius: 1 }}>
+                              const enabled = resource.children?.length ? someChildren : Boolean(permissions[resource.key])
+                              return <Paper
+                                key={resource.key}
+                                variant="outlined"
+                                sx={{
+                                  p: 1.25,
+                                  borderRadius: 1,
+                                  borderColor: enabled ? colors.blue600 : colors.managementBorder,
+                                  bgcolor: enabled ? colors.blue50 : colors.white,
+                                  transition: 'border-color 180ms ease, background-color 180ms ease',
+                                }}
+                              >
                                 <Stack spacing={resource.children?.length ? 0.75 : 0}>
                                   <Stack direction="row" alignItems="center" spacing={1}>
-                                    <Checkbox checked={resource.children?.length ? allChildren : Boolean(permissions[resource.key])} indeterminate={Boolean(resource.children?.length && someChildren && !allChildren)} onChange={() => handleToggle(resource.key)} />
-                                    <Typography>{resource.label}</Typography>
+                                    <AppCheckbox checked={resource.children?.length ? allChildren : Boolean(permissions[resource.key])} indeterminate={Boolean(resource.children?.length && someChildren && !allChildren)} onChange={() => handleToggle(resource.key)} />
+                                    <Typography sx={{ fontWeight: enabled ? 600 : 400, color: enabled ? colors.blue3 : 'text.primary' }}>{resource.label}</Typography>
                                   </Stack>
                                   {resource.children?.length ? <Stack sx={{ pl: 4.5 }}>
-                                    {resource.children.map((child) => <FormControlLabel key={child.key} control={<Checkbox size="small" checked={Boolean(permissions[child.key])} onChange={() => handleToggle(child.key)} />} label={child.label} />)}
+                                    {resource.children.map((child) => <FormControlLabel key={child.key} control={<AppCheckbox size="small" checked={Boolean(permissions[child.key])} onChange={() => handleToggle(child.key)} />} label={child.label} />)}
                                   </Stack> : null}
                                 </Stack>
                               </Paper>
@@ -419,9 +442,9 @@ export default function Page() {
                           <Typography variant="body2" sx={{ color: colors.gray4 }}>
                             {enabledCount} permisos activos
                           </Typography>
-                          <Button variant="contained" onClick={handleSave} disabled={saving || loadingPerms}>
+                          <AppButton variant="contained" onClick={handleSave} disabled={saving || loadingPerms}>
                             {saving ? 'Guardando...' : 'Guardar cambios'}
-                          </Button>
+                          </AppButton>
                         </Stack>
                       </>
                     )}
@@ -432,30 +455,31 @@ export default function Page() {
             )}
 
             {activeTab === 'audit' && (
-              <Paper sx={{ p: 3, borderRadius: 1.5 }}>
-                <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue6, mb: 1 }}>
+              <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 }, borderRadius: 1.5, borderColor: colors.managementBorder }}>
+                <Typography variant="h5" sx={{ fontWeight: 700, color: colors.blue3, mb: 1 }}>
                   Auditoría
                 </Typography>
-                <Typography variant="body2" sx={{ color: colors.gray4 }}>
+                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   La trazabilidad de acciones estará disponible próximamente.
                 </Typography>
               </Paper>
             )}
-          </Container>
-        </Box>
+            </Box>
+          </Stack>
+        </Container>
         <Snackbar
           open={toast.open}
           autoHideDuration={3500}
           onClose={() => setToast(prev => ({ ...prev, open: false }))}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
         >
-          <Alert
+          <AppAlert
             onClose={() => setToast(prev => ({ ...prev, open: false }))}
             severity={toast.severity}
             sx={{ width: '100%' }}
           >
             {toast.message}
-          </Alert>
+          </AppAlert>
         </Snackbar>
       </Box>
     </Box>

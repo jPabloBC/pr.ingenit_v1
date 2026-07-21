@@ -24,6 +24,7 @@ import {
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { colors } from '../../theme/theme';
 import { useSession, signOut } from 'next-auth/react';
+import { hasManagementModulePermission } from '@/lib/managementPermissions';
 
 const drawerWidth = 220;
 const collapsedDrawerWidth = 56;
@@ -64,8 +65,14 @@ const menuItemGroupsUsers = [
 ];
 
 const asideLabelCollator = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
-const sortedMenuItemGroupsUsers = menuItemGroupsUsers.map((group) =>
-  [...group].sort((left, right) => asideLabelCollator.compare(left.text, right.text)),
+const sortedMenuItemGroupsUsers = menuItemGroupsUsers.map((group, groupIndex) =>
+  [...group].sort((left, right) => {
+    if (groupIndex === 0) {
+      if (left.resourceKey === 'dashboard') return -1
+      if (right.resourceKey === 'dashboard') return 1
+    }
+    return asideLabelCollator.compare(left.text, right.text)
+  }),
 );
 
 const Aside: React.FC = () => {
@@ -330,6 +337,7 @@ const Aside: React.FC = () => {
             permissions.includes('*') ||
             permissions.includes(item.resourceKey) ||
             (item.resourceKey === 'communications' && (permissions.includes('communications.send') || permissions.includes('communications.forms'))) ||
+            (item.resourceKey === 'management' && hasManagementModulePermission(permissions)) ||
             (!!legacyKey && permissions.includes(legacyKey))
           ));
           if (!hasPermission) return null;
@@ -488,8 +496,8 @@ const Aside: React.FC = () => {
             component="div"
             sx={{
               fontSize: '0.74rem',
-              color: '#8aa2c6',
-              fontWeight: 700,
+              color: colors.blue9,
+              fontWeight: 400,
               letterSpacing: 0.2,
               opacity: 0.95,
             }}

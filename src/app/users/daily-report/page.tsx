@@ -14,12 +14,10 @@ import {
   DialogTitle,
   FormControl,
   InputLabel,
-  IconButton,
   MenuItem,
   Paper,
   Popover,
   Select,
-  Snackbar,
   Stack,
   TextField,
   Tooltip,
@@ -33,6 +31,8 @@ import UserHeader from "../../../components/layout/UserHeader"
 import { colors } from "../../../theme/theme"
 import { AppWeekNavigator } from "@/components/ui/AppWeekNavigator"
 import { AppFloatingActionButton } from "@/components/ui/AppFloatingActionButton"
+import { AppIconButton } from "@/components/ui/InteractiveControls"
+import { useAppSnackbar } from "@/components/ui/AppSnackbarProvider"
 import {
   getCurrentWorkdayMetadata,
   resolveCalculationVersion,
@@ -1333,6 +1333,7 @@ const REPORT_TEMPLATE_OPTIONS: Array<{ value: ReportTemplateKey; label: string; 
   { value: "daily_v1", label: "Versión 1", disabled: true },
   { value: "daily_v2", label: "Versión 2" }
 ]
+
 const V2_LAYOUT_MIN_WIDTH = 2100
 const CONTRACT_TITLE_FIXED = "Contratos de Construcción GPRO 2026_2027"
 const CONTRACT_NUMBER_FIXED = "4644009834"
@@ -2179,6 +2180,7 @@ function DetailPersonnelEquipmentV2({
   usePersistedSnapshotValues = true,
   preferPersistedDynamicColumns = false,
   preferPersistedSnapshotData = false,
+  externalDataRefreshToken = 0,
   readOnly = false
 }: {
   form: DailyForm
@@ -2294,6 +2296,7 @@ function DetailPersonnelEquipmentV2({
   usePersistedSnapshotValues?: boolean
   preferPersistedDynamicColumns?: boolean
   preferPersistedSnapshotData?: boolean
+  externalDataRefreshToken?: number
   readOnly?: boolean
 }) {
   const [managementEquipmentRows, setManagementEquipmentRows] = useState<ManagementEquipmentSnapshotRow[]>([])
@@ -2599,7 +2602,7 @@ function DetailPersonnelEquipmentV2({
     return () => {
       mounted = false
     }
-  }, [form.report_date, (form as any)?.equipment_snapshot_date, strictSnapshotView])
+  }, [form.report_date, (form as any)?.equipment_snapshot_date, strictSnapshotView, externalDataRefreshToken])
 
   const headVertical: React.CSSProperties = {
     ...laborHeaderCellSx,
@@ -6432,6 +6435,7 @@ function WorkforceTemplateSectionDynamic({
 
 export default function DailyReportPage() {
   const { data: session, status } = useSession()
+  const { notify } = useAppSnackbar()
   const router = useRouter()
   const role = String((session?.user as any)?.role || "").toLowerCase()
   const currentUserId = String((session?.user as any)?.id || "")
@@ -6444,6 +6448,8 @@ export default function DailyReportPage() {
   const canAccess = canMutateDailyReport || isViewerRole
 
   const [loading, setLoading] = useState(true)
+  const [refreshingRecords, setRefreshingRecords] = useState(false)
+  const [externalDataRefreshToken, setExternalDataRefreshToken] = useState(0)
   const [saving, setSaving] = useState(false)
   const [bootstrapping, setBootstrapping] = useState(false)
   const [records, setRecords] = useState<DailyReportRecord[]>([])
@@ -6480,7 +6486,6 @@ export default function DailyReportPage() {
   const activePersonWorkdayHours = resolvePersonWorkdayHours(form)
   const activeMachineWorkdayHours = resolveMachineWorkdayHours(form)
   const activeHalfDayHours = resolveHalfDayHours(form)
-  const [toast, setToast] = useState<{ open: boolean; msg: string; sev: "success" | "error" | "info" }>({ open: false, msg: "", sev: "info" })
   const sessionCompanyName = String((session?.user as any)?.companyName || "").trim()
   const lastBootstrappedDateRef = useRef<string>("")
   const [dailyActivityEvidenceByLineKey, setDailyActivityEvidenceByLineKey] = useState<Record<string, EvidenceFileLite[]>>({})
@@ -6536,7 +6541,7 @@ export default function DailyReportPage() {
   )
 
   const showToast = (msg: string, sev: "success" | "error" | "info" = "info") => {
-    setToast({ open: true, msg, sev })
+    notify(msg, { severity: sev })
   }
   const toFrontFormat = (front: "CANALETAS" | "PISCINAS") =>
     front === "PISCINAS" ? "ANT-GPRO-FOR-PISCINAS" : "ANT-GPRO-FOR-CANALETAS"
@@ -6622,8 +6627,47 @@ export default function DailyReportPage() {
     }
   }
 
-  const loadFieldReportDates = async () => {
-    const json = await fetchJsonCached("/api/field-reports?dates=1", { cache: "no-store" })
+  const refreshRecords = async () => {
+    if (refreshingRecords) return
+    setRefreshingRecords(true)
+    try {
+      const activeDate = formOpen ? String(form.report_date || "").slice(0, 10) : ""
+
+      dailyReportClientFetchCache.clear()
+      fieldReportsByDateCacheRef.current = {}
+      collaboratorsLoadPromiseRef.current = {}
+
+      const refreshTasks: Array<Promise<unknown>> = [
+        loadRecords(true),
+        loadCollaborators(true, activeDate || undefined),
+        loadFieldReportDates(true),
+        loadReportFrontNames(true),
+      ]
+
+      if (activeDate) {
+        refreshTasks.push(
+          fetchFieldReportsForDate(activeDate, true).then(setFieldReportsForDate),
+          fetchDailyStatusForDate(activeDate).then(setDailyStatusRows),
+        )
+      }
+
+      const results = await Promise.allSettled(refreshTasks)
+      setExternalDataRefreshToken((current) => current + 1)
+      const failedSources = results.filter((result) => result.status === "rejected")
+      if (failedSources.length > 0) {
+        showToast(`Actualización parcial: ${failedSources.length} fuente${failedSources.length === 1 ? "" : "s"} no respondió.`, "error")
+      } else {
+        showToast("Lista y datos vinculados actualizados", "success")
+      }
+    } catch (err: any) {
+      showToast(err?.message || "No se pudieron actualizar los datos", "error")
+    } finally {
+      setRefreshingRecords(false)
+    }
+  }
+
+  const loadFieldReportDates = async (force = false) => {
+    const json = await fetchJsonCached("/api/field-reports?dates=1", { cache: "no-store" }, DAILY_REPORT_INITIAL_CACHE_TTL_MS, force)
     const rows: string[] = Array.isArray((json as any)?.dates) ? (json as any).dates : []
     const dates = Array.from(new Set<string>(
       rows
@@ -6633,8 +6677,8 @@ export default function DailyReportPage() {
     setFieldReportDates(dates)
   }
 
-  const loadReportFrontNames = async () => {
-    const json = await fetchJsonCached("/api/report-fronts", { cache: "no-store" }).catch(() => null)
+  const loadReportFrontNames = async (force = false) => {
+    const json = await fetchJsonCached("/api/report-fronts", { cache: "no-store" }, DAILY_REPORT_INITIAL_CACHE_TTL_MS, force).catch(() => null)
     if (!json) return
     const fronts = Array.isArray((json as any)?.fronts) ? (json as any).fronts : []
     const names = fronts
@@ -6648,6 +6692,29 @@ export default function DailyReportPage() {
       typesByName[normalizeDynamicFrontKey(name)] = String(front?.type || "").trim().toLowerCase()
     })
     setReportFrontTypesByName(typesByName)
+  }
+
+  const fetchFieldReportsForDate = async (day: string, force = false) => {
+    const cleanDay = String(day || "").slice(0, 10)
+    if (!cleanDay) return []
+    const cached = fieldReportsByDateCacheRef.current[cleanDay]
+    if (!force && cached) return cached
+
+    const res = await fetch(`/api/field-reports?date=${encodeURIComponent(cleanDay)}&summary=1&include_calc=1&limit=50`, { cache: "no-store" })
+    const json = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(String((json as any)?.error || "No se pudieron cargar los reportes de terreno."))
+    const rows = Array.isArray(json) ? json : []
+    fieldReportsByDateCacheRef.current[cleanDay] = rows
+    return rows
+  }
+
+  const fetchDailyStatusForDate = async (day: string) => {
+    const cleanDay = String(day || "").slice(0, 10)
+    if (!cleanDay) return []
+    const res = await fetch(`/api/collaborators/daily-status?date=${encodeURIComponent(cleanDay)}`, { cache: "no-store" })
+    const json = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(String((json as any)?.error || "No se pudo cargar la asistencia."))
+    return Array.isArray(json?.rows) ? json.rows : []
   }
 
   const loadCollaborators = async (force = false, asOfDate?: string) => {
@@ -6750,19 +6817,7 @@ export default function DailyReportPage() {
     ;(async () => {
       try {
         const day = String(form.report_date).slice(0, 10)
-        const cached = fieldReportsByDateCacheRef.current[day]
-        if (cached) {
-          if (!cancelled) setFieldReportsForDate(cached)
-          return
-        }
-        const res = await fetch(`/api/field-reports?date=${encodeURIComponent(day)}&summary=1&include_calc=1&limit=50`)
-        const json = await res.json()
-        if (!res.ok) {
-          if (!cancelled) setFieldReportsForDate([])
-          return
-        }
-        const rows = Array.isArray(json) ? json : []
-        fieldReportsByDateCacheRef.current[day] = rows
+        const rows = await fetchFieldReportsForDate(day)
         if (!cancelled) setFieldReportsForDate(rows)
       } catch {
         if (!cancelled) setFieldReportsForDate([])
@@ -6837,13 +6892,7 @@ export default function DailyReportPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const res = await fetch(`/api/collaborators/daily-status?date=${encodeURIComponent(form.report_date)}`)
-        const json = await res.json()
-        if (!res.ok) {
-          if (!cancelled) setDailyStatusRows([])
-          return
-        }
-        const rows = Array.isArray(json?.rows) ? json.rows : []
+        const rows = await fetchDailyStatusForDate(form.report_date)
         if (!cancelled) setDailyStatusRows(rows)
       } catch {
         if (!cancelled) setDailyStatusRows([])
@@ -12988,9 +13037,9 @@ export default function DailyReportPage() {
     recordId: string,
     templateOverride?: "daily_v1" | "daily_v2",
     exportTarget: "daily" | "combined" = "daily"
-  ) => {
-    if (!canExportDailyReport) return
-    if (!recordId || exporting) return
+  ): Promise<boolean> => {
+    if (!canExportDailyReport) return false
+    if (!recordId || exporting) return false
     setActiveActionRecordId(recordId)
     setExporting(true)
     try {
@@ -13400,8 +13449,10 @@ export default function DailyReportPage() {
       a.remove()
       URL.revokeObjectURL(url)
       showToast("Excel exportado correctamente", "success")
+      return true
     } catch (err: any) {
       showToast(err?.message || "Error exportando Excel", "error")
+      return false
     } finally {
       setExporting(false)
       setActiveActionRecordId(null)
@@ -13421,7 +13472,8 @@ export default function DailyReportPage() {
       showToast("No hay reporte abierto para exportar", "error")
       return
     }
-    await handleExportExcel(String(viewRecord.id), "daily_v2", "combined")
+    const exported = await handleExportExcel(String(viewRecord.id), "daily_v2", "combined")
+    if (exported) closeViewDialog()
   }
 
   const openView = async (recordSummary: DailyReportRecord) => {
@@ -13597,8 +13649,8 @@ export default function DailyReportPage() {
   if (!canAccess) return null
 
   return (
-    <Box sx={{ display: "flex" }}>
-      <Box sx={{ flex: 1 }}>
+    <Box sx={{ display: "flex", width: "100%", minHeight: "100vh", bgcolor: colors.managementPageBg }}>
+      <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
         <UserHeader title="Reporte diario" />
         <Stack
           direction="row"
@@ -13607,30 +13659,30 @@ export default function DailyReportPage() {
             position: "fixed",
             top: { xs: 64, sm: 70 },
             right: { xs: 14, sm: 22 },
-            zIndex: 1200
+            zIndex: 1150
           }}
         >
-          <Tooltip title="Actualizar lista">
-            <IconButton
-              color="primary"
-              onClick={() => void loadRecords(true)}
-              sx={{
-                width: 52,
-                height: 52,
-                borderRadius: "50%",
-                bgcolor: colors.blue6,
-                color: colors.white,
-                boxShadow: "0 8px 22px rgba(29, 78, 216, 0.35)",
-                border: `1px solid ${colors.blue4}`,
-                "&:hover": { bgcolor: colors.blue4 }
-              }}
-            >
-              <RefreshCw size={20} />
-            </IconButton>
-          </Tooltip>
-          {canMutateDailyReport ? <AppFloatingActionButton ariaLabel="Nuevo reporte diario" tooltip="Nuevo reporte diario" onClick={openNew} /> : null}
+          <AppFloatingActionButton
+            placement="inline"
+            ariaLabel="Actualizar datos del reporte diario"
+            tooltip={refreshingRecords ? "Actualizando datos..." : "Actualizar datos"}
+            icon={<RefreshCw className="app-floating-action-icon" size={22} />}
+            sx={refreshingRecords
+              ? {
+                  "& .app-floating-action-icon": {
+                    animation: "daily-report-refresh-spin 900ms linear infinite"
+                  },
+                  "@keyframes daily-report-refresh-spin": {
+                    from: { transform: "rotate(0deg)" },
+                    to: { transform: "rotate(360deg)" }
+                  }
+                }
+              : undefined}
+            onClick={() => void refreshRecords()}
+          />
+          {canMutateDailyReport ? <AppFloatingActionButton placement="inline" ariaLabel="Nuevo reporte diario" tooltip="Nuevo reporte diario" onClick={openNew} /> : null}
         </Stack>
-        <Box component="main" sx={{ py: { xs: 3.5, sm: 4 }, px: { xs: 1, sm: 1.5, md: 2 } }}>
+        <Box component="main" sx={{ minHeight: "calc(100vh - 64px)", py: { xs: 3.5, sm: 4 }, px: { xs: 1, sm: 1.5, md: 2 } }}>
           <AppWeekNavigator
             periodLabel={dailyReportWeekLabel}
             value={dailyReportWeekRange?.start || ""}
@@ -13651,7 +13703,16 @@ export default function DailyReportPage() {
             }}
             sx={{ mb: { xs: 1.5, sm: 2 } }}
           />
-          <Box sx={{ overflowX: "auto" }}>
+          <Paper
+            variant="outlined"
+            sx={{
+              overflow: "hidden",
+              borderColor: colors.managementBorder,
+              borderRadius: 1.5,
+              bgcolor: colors.white,
+            }}
+          >
+            <Box sx={{ overflowX: "auto" }}>
                 <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 900, border: `1px solid ${colors.blue13}` }}>
                   <colgroup>
                     <col style={{ width: "1%" }} />
@@ -13732,13 +13793,13 @@ export default function DailyReportPage() {
                           <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                             <Tooltip title="Ver">
                               <span>
-                                <IconButton
-	                                  size="small"
-	                                  color="primary"
-	                                  onClick={() => openView(r)}
-	                                >
+                                <AppIconButton
+                                  size="small"
+                                  color="primary"
+                                  onClick={() => openView(r)}
+                                >
                                   <Eye size={16} />
-                                </IconButton>
+                                </AppIconButton>
                               </span>
                             </Tooltip>
                           </Stack>
@@ -13758,7 +13819,7 @@ export default function DailyReportPage() {
                             <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                               <Tooltip title="Editar fecha">
                                 <span>
-                                  <IconButton
+                                  <AppIconButton
                                     size="small"
                                     color="primary"
                                     disabled={saving || exporting || activeActionRecordId === String(r.id || "")}
@@ -13768,34 +13829,34 @@ export default function DailyReportPage() {
                                     }}
                                   >
                                     <Pencil size={16} />
-                                  </IconButton>
+                                  </AppIconButton>
                                 </span>
                               </Tooltip>
                               {isAdminRole ? (
                                 <Tooltip title="Historial fecha">
                                   <span>
-                                    <IconButton
+                                    <AppIconButton
                                       size="small"
                                       color="primary"
                                       disabled={saving || exporting || activeActionRecordId === String(r.id || "")}
                                       onClick={() => openHistoryByDate(r)}
                                     >
                                       <History size={16} />
-                                    </IconButton>
+                                    </AppIconButton>
                                   </span>
                                 </Tooltip>
                               ) : null}
                               {canDeleteDateReports ? (
                                 <Tooltip title="Eliminar fecha">
                                   <span>
-                                    <IconButton
+                                    <AppIconButton
                                       size="small"
                                       color="error"
                                       disabled={saving || exporting || activeActionRecordId === String(r.id || "")}
                                       onClick={() => handleDeleteReportsByDate(r)}
                                     >
                                       <Trash2 size={16} />
-                                    </IconButton>
+                                    </AppIconButton>
                                   </span>
                                 </Tooltip>
                               ) : null}
@@ -13811,7 +13872,8 @@ export default function DailyReportPage() {
                     ) : null}
                   </tbody>
                 </table>
-          </Box>
+            </Box>
+          </Paper>
         </Box>
       </Box>
 
@@ -14187,6 +14249,7 @@ export default function DailyReportPage() {
                       usePersistedSnapshotValues={Boolean(isViewingHistoryVersion || viewOpen || isEditSnapshotMode || (!editingId && indirectHoursSettingsMatchSaved))}
                       preferPersistedDynamicColumns={isEditSnapshotMode}
                       preferPersistedSnapshotData={isEditSnapshotMode}
+                      externalDataRefreshToken={externalDataRefreshToken}
                     />
                     <SummaryInformationToDateV2
                       form={form}
@@ -14865,6 +14928,7 @@ export default function DailyReportPage() {
                         getFrontCounterpartInfo={getFrontCounterpartInfo}
                         prevencionistaFrontDistribution={prevencionistaFrontDistribution}
                         usePersistedSnapshotValues={Boolean(editingId) || isViewingHistoryVersion || viewOpen || indirectHoursSettingsMatchSaved}
+                        externalDataRefreshToken={externalDataRefreshToken}
                         readOnly
                       />
                       <SummaryInformationToDateV2
@@ -15115,16 +15179,6 @@ export default function DailyReportPage() {
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={toast.open}
-        autoHideDuration={3500}
-        onClose={() => setToast((p) => ({ ...p, open: false }))}
-        anchorOrigin={{ vertical: "top", horizontal: "right" }}
-      >
-        <Alert severity={toast.sev} onClose={() => setToast((p) => ({ ...p, open: false }))}>
-          {toast.msg}
-        </Alert>
-      </Snackbar>
     </Box>
   )
 }

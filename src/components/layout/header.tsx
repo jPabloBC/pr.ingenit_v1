@@ -1,9 +1,10 @@
 'use client'
 
-import { AppBar, Toolbar, Box, Typography, Button, Container } from '@mui/material'
+import { AppBar, Toolbar, Box, Typography, Container } from '@mui/material'
 import Image from 'next/image'
 import { colors } from '../../theme/theme'
 import Link from 'next/link'
+import { AppButton } from '@/components/ui/AppButton'
 
 interface HeaderProps {
   showNavigation?: boolean
@@ -65,7 +66,7 @@ export default function Header({ showNavigation = false }: HeaderProps) {
           {/* Navegación (opcional) */}
           {showNavigation && (
             <Box display="flex" alignItems="center" gap={2}>
-              <Button 
+              <AppButton
                 color="inherit" 
                 sx={{ 
                   color: colors.white,
@@ -76,8 +77,8 @@ export default function Header({ showNavigation = false }: HeaderProps) {
                 }}
               >
                 Inicio
-              </Button>
-              <Button 
+              </AppButton>
+              <AppButton
                 color="inherit" 
                 sx={{ 
                   color: colors.white,
@@ -88,8 +89,8 @@ export default function Header({ showNavigation = false }: HeaderProps) {
                 }}
               >
                 Servicios
-              </Button>
-              <Button 
+              </AppButton>
+              <AppButton
                 color="inherit" 
                 sx={{ 
                   color: colors.white,
@@ -100,7 +101,7 @@ export default function Header({ showNavigation = false }: HeaderProps) {
                 }}
               >
                 Contacto
-              </Button>
+              </AppButton>
             </Box>
           )}
 

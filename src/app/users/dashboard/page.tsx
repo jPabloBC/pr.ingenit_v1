@@ -11,8 +11,7 @@ import {
   CardContent,
   Chip,
   CircularProgress,
-  Container,
-  Button
+  Container
 } from '@mui/material'
 import {
   People,
@@ -39,6 +38,7 @@ import {
   YAxis
 } from 'recharts'
 import UserHeader from '../../../components/layout/UserHeader';
+import { AppButton } from '../../../components/ui/AppButton'
 import { colors } from '../../../theme/theme'
 
 const DASHBOARD_DATA_VERSION = 'status-cards-v2'
@@ -428,7 +428,7 @@ export default function Dashboard() {
 
   const summaryCards = [
     { label: 'Último reporte', value: `${formatNumber(totalDailyHh)} HH`, detail: `${formatNumber(totalDirectHh)} directas · ${formatNumber(totalIndirectHh)} indirectas`, color: '#075ecb' },
-    { label: 'Acumulado', value: `${formatNumber(totalAccumHh)} HH`, detail: `${latestHhByFront.length} frentes activos`, color: '#052e5a' },
+    { label: 'Acumulado', value: `${formatNumber(totalAccumHh)} HH`, detail: `${latestHhByFront.length} frentes activos`, color: colors.blue3 },
     { label: 'Crecimiento', value: `${formatDecimal(growthPct)}%`, detail: 'vs acumulado anterior', color: growthPct >= 0 ? '#2e7d32' : '#d32f2f' }
   ]
 
@@ -443,10 +443,10 @@ export default function Dashboard() {
           >
             <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'flex-end' }, justifyContent: 'space-between', gap: 2, mb: 2.5, flexDirection: { xs: 'column', md: 'row' } }}>
               <Box>
-                <Typography variant="h4" sx={{ color: '#052e5a', fontWeight: 900, lineHeight: 1.05 }}>
+                <Typography variant="h4" sx={{ color: colors.blue3, fontWeight: 600, lineHeight: 1.05 }}>
                   {companyDisplayName || 'Empresa'}
                 </Typography>
-                <Typography sx={{ mt: 0.55, color: '#64748b', fontSize: '0.92rem', fontWeight: 600 }}>
+                <Typography sx={{ mt: 0.55, color: colors.slate500, fontSize: '0.92rem', fontWeight: 400 }}>
                   Indicadores operacionales actualizados con los datos disponibles del sistema.
                 </Typography>
               </Box>
@@ -463,8 +463,8 @@ export default function Dashboard() {
                   key={stat.title}
                   elevation={0}
                   sx={{
-                    bgcolor: '#ffffff',
-                    border: '1px solid #e4ebf5',
+                    bgcolor: colors.white,
+                    border: `1px solid ${colors.managementBorderMuted}`,
                     borderRadius: 2,
                     boxShadow: `0 14px 30px ${stat.color}14`,
                     minHeight: 128,
@@ -474,10 +474,10 @@ export default function Dashboard() {
                   <CardContent sx={{ p: { xs: 1.4, md: 1.6 }, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
                       <Box>
-                        <Typography sx={{ fontSize: { xs: '1.45rem', md: '1.65rem' }, lineHeight: 1, fontWeight: 900, color: '#052e5a' }}>
+                        <Typography sx={{ fontSize: { xs: '1.45rem', md: '1.65rem' }, lineHeight: 1, fontWeight: 600, color: colors.blue3 }}>
                           {formatNumber(stat.value)}
                         </Typography>
-                        <Typography sx={{ mt: 0.45, color: '#475569', fontSize: '0.78rem', lineHeight: 1.15, fontWeight: 800 }}>
+                        <Typography sx={{ mt: 0.45, color: colors.slate600, fontSize: '0.78rem', lineHeight: 1.15, fontWeight: 500 }}>
                           {stat.title}
                         </Typography>
                       </Box>
@@ -499,14 +499,14 @@ export default function Dashboard() {
                     </Box>
                     <Box sx={{ mt: 1.3 }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, mb: 0.55 }}>
-                        <Typography sx={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 700 }} noWrap>
+                        <Typography sx={{ color: colors.slate500, fontSize: '0.7rem', fontWeight: 400 }} noWrap>
                           {stat.helper}
                         </Typography>
-                        <Typography sx={{ color: stat.color, fontSize: '0.7rem', fontWeight: 900 }}>
+                        <Typography sx={{ color: stat.color, fontSize: '0.7rem', fontWeight: 600 }}>
                           {formatDecimal(clampPercent(stat.progress))}%
                         </Typography>
                       </Box>
-                      <Box sx={{ height: 5, borderRadius: 999, bgcolor: '#edf2f8', overflow: 'hidden' }}>
+                      <Box sx={{ height: 5, borderRadius: 999, bgcolor: colors.slate100, overflow: 'hidden' }}>
                         <Box sx={{ width: `${clampPercent(stat.progress)}%`, height: '100%', borderRadius: 999, bgcolor: stat.color }} />
                       </Box>
                     </Box>
@@ -525,7 +525,7 @@ export default function Dashboard() {
                 elevation={0}
                 sx={{
                   p: { xs: 1.6, sm: 2.2 },
-                  border: '1px solid #e3ebf7',
+                  border: `1px solid ${colors.managementBorderMuted}`,
                   borderRadius: 2,
                   boxShadow: '0 14px 34px rgba(15, 50, 90, 0.08)',
                   minHeight: 382,
@@ -533,14 +533,14 @@ export default function Dashboard() {
               >
                 <Box display="flex" alignItems="center" justifyContent="space-between" gap={1.5} flexWrap="wrap" mb={1.8}>
                   <Box display="flex" alignItems="center" gap={1}>
-                    <Box sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: '#eaf3ff', color: colors.blue6, display: 'grid', placeItems: 'center' }}>
+                    <Box sx={{ width: 36, height: 36, borderRadius: '50%', bgcolor: colors.blue50, color: colors.blue6, display: 'grid', placeItems: 'center' }}>
                       <QueryStats />
                     </Box>
                     <Box>
-                      <Typography variant="h6" sx={{ fontWeight: 900, color: '#052e5a', lineHeight: 1.1 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 500, color: colors.blue3, lineHeight: 1.1 }}>
                         Control HH
                       </Typography>
-                      <Typography sx={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>
+                      <Typography sx={{ color: colors.slate500, fontSize: '0.78rem', fontWeight: 400 }}>
                         Último reporte, acumulado y tendencia reciente
                       </Typography>
                     </Box>
@@ -551,21 +551,21 @@ export default function Dashboard() {
                       { key: 'accum', label: 'Acumulado' },
                       { key: 'growth', label: 'Crecimiento' }
                     ].map((item) => (
-                      <Button
+                      <AppButton
                         key={item.key}
                         size="small"
                         variant={opsView === item.key ? 'contained' : 'outlined'}
                         onClick={() => setOpsView(item.key as typeof opsView)}
-                        sx={{ textTransform: 'none', borderRadius: 1.5, fontWeight: 800, px: 1.4 }}
+                        sx={{ borderRadius: 1.5, px: 1.4 }}
                       >
                         {item.label}
-                      </Button>
+                      </AppButton>
                     ))}
                   </Box>
                 </Box>
 
                 {hhHistory.length === 0 ? (
-                  <Box sx={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #cbd7e6', borderRadius: 2, bgcolor: '#f8fbff' }}>
+                  <Box sx={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px dashed ${colors.managementBorderSoft}`, borderRadius: 2, bgcolor: colors.managementPanelBgSoft }}>
                     <Typography variant="body2" color="text.secondary">
                       Sin historial HH disponible
                     </Typography>
@@ -574,17 +574,17 @@ export default function Dashboard() {
                   <>
                     <Box display="grid" gridTemplateColumns={{ xs: '1fr', sm: 'repeat(3, 1fr)' }} gap={1.1} mb={1.8}>
                       {summaryCards.map((item) => (
-                        <Box key={item.label} sx={{ p: 1.25, border: '1px solid #d9e6f7', borderRadius: 1.5, bgcolor: '#f8fbff' }}>
-                          <Typography sx={{ fontSize: '0.74rem', color: '#64748b', fontWeight: 800 }}>{item.label}</Typography>
-                          <Typography sx={{ mt: 0.25, fontSize: '1.35rem', color: item.color, fontWeight: 950, lineHeight: 1.05 }}>{item.value}</Typography>
-                          <Typography sx={{ mt: 0.35, fontSize: '0.72rem', color: '#64748b', fontWeight: 700 }}>{item.detail}</Typography>
+                        <Box key={item.label} sx={{ p: 1.25, border: `1px solid ${colors.managementBorder}`, borderRadius: 1.5, bgcolor: colors.managementPanelBgSoft }}>
+                          <Typography sx={{ fontSize: '0.74rem', color: colors.slate500, fontWeight: 400 }}>{item.label}</Typography>
+                          <Typography sx={{ mt: 0.25, fontSize: '1.35rem', color: item.color, fontWeight: 600, lineHeight: 1.05 }}>{item.value}</Typography>
+                          <Typography sx={{ mt: 0.35, fontSize: '0.72rem', color: colors.slate500, fontWeight: 400 }}>{item.detail}</Typography>
                         </Box>
                       ))}
                     </Box>
 
                     <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: '1.45fr 0.9fr' }} gap={1.6}>
-                      <Box sx={{ p: 1.4, borderRadius: 2, border: '1px solid #e3ebf7', bgcolor: '#ffffff' }}>
-                        <Typography sx={{ color: '#052e5a', fontSize: '0.82rem', fontWeight: 900, mb: 1 }}>
+                      <Box sx={{ p: 1.4, borderRadius: 2, border: `1px solid ${colors.managementBorderMuted}`, bgcolor: colors.white }}>
+                        <Typography sx={{ color: colors.blue3, fontSize: '0.82rem', fontWeight: 500, mb: 1 }}>
                           {frontMetricLabel}
                         </Typography>
                         <Box sx={{ height: 188 }}>
@@ -616,9 +616,9 @@ export default function Dashboard() {
                         </Box>
                       </Box>
 
-                      <Box sx={{ p: 1.4, borderRadius: 2, border: '1px solid #e3ebf7', bgcolor: '#f8fbff' }}>
+                      <Box sx={{ p: 1.4, borderRadius: 2, border: `1px solid ${colors.managementBorderMuted}`, bgcolor: colors.managementPanelBgSoft }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
-                          <Typography sx={{ color: '#052e5a', fontSize: '0.82rem', fontWeight: 900 }}>
+                          <Typography sx={{ color: colors.blue3, fontSize: '0.82rem', fontWeight: 500 }}>
                             Tendencia reciente
                           </Typography>
                           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
@@ -627,19 +627,19 @@ export default function Dashboard() {
                               { key: 'direct', label: 'Directas' },
                               { key: 'indirect', label: 'Indirectas' },
                             ].map((item) => (
-                              <Button
+                              <AppButton
                                 key={item.key}
                                 size="small"
                                 variant={trendMetric === item.key ? 'contained' : 'outlined'}
                                 onClick={() => setTrendMetric(item.key as typeof trendMetric)}
-                                sx={{ minWidth: 0, px: 0.85, py: 0.25, borderRadius: 1.25, fontSize: '0.68rem', fontWeight: 900, textTransform: 'none' }}
+                                sx={{ minWidth: 0, minHeight: 28, px: 0.85, py: 0.25, borderRadius: 1.25, fontSize: '0.68rem' }}
                               >
                                 {item.label}
-                              </Button>
+                              </AppButton>
                             ))}
                           </Box>
                         </Box>
-                        <Box sx={{ mt: 1, height: 132, borderRadius: 1.5, bgcolor: '#ffffff', border: '1px solid #e4ebf5', overflow: 'hidden', p: 1 }}>
+                        <Box sx={{ mt: 1, height: 132, borderRadius: 1.5, bgcolor: colors.white, border: `1px solid ${colors.managementBorderMuted}`, overflow: 'hidden', p: 1 }}>
                           {hhTrendChartData.length > 1 ? (
                             <ResponsiveContainer width="100%" height="100%">
                               <AreaChart data={hhTrendChartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
@@ -665,12 +665,12 @@ export default function Dashboard() {
                             </ResponsiveContainer>
                           ) : (
                             <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <Typography sx={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>Sin tendencia suficiente</Typography>
+                              <Typography sx={{ color: colors.slate500, fontSize: '0.78rem', fontWeight: 400 }}>Sin tendencia suficiente</Typography>
                             </Box>
                           )}
                         </Box>
                         <Box sx={{ mt: 1.1 }}>
-                          <Box sx={{ height: 92, borderRadius: 1.5, bgcolor: '#ffffff', border: '1px solid #e4ebf5', p: 0.75 }}>
+                          <Box sx={{ height: 92, borderRadius: 1.5, bgcolor: colors.white, border: `1px solid ${colors.managementBorderMuted}`, p: 0.75 }}>
                             <ResponsiveContainer width="100%" height="100%">
                               <BarChart
                                 data={hhCompositionData}
@@ -720,16 +720,16 @@ export default function Dashboard() {
                 elevation={0}
                 sx={{
                   p: { xs: 1.8, sm: 2.2 },
-                  border: '1px solid #e3ebf7',
+                  border: `1px solid ${colors.managementBorderMuted}`,
                   borderRadius: 2,
                   boxShadow: '0 14px 34px rgba(15, 50, 90, 0.08)',
                   minHeight: 382,
                 }}
               >
-                <Typography variant="h6" sx={{ color: '#052e5a', fontWeight: 900, mb: 0.5 }}>
+                <Typography variant="h6" sx={{ color: colors.blue3, fontWeight: 500, mb: 0.5 }}>
                   {departmentTitle}
                 </Typography>
-                <Typography sx={{ color: '#64748b', fontSize: '0.8rem', fontWeight: 700, mb: 2 }}>
+                <Typography sx={{ color: colors.slate500, fontSize: '0.8rem', fontWeight: 400, mb: 2 }}>
                   {departmentSubtitle}
                 </Typography>
                 {departmentChartRows.length > 0 ? (
@@ -756,9 +756,9 @@ export default function Dashboard() {
                         </BarChart>
                       </ResponsiveContainer>
                     </Box>
-                    <Box sx={{ mt: 1.2, p: 1.2, borderRadius: 1.5, bgcolor: '#f8fbff', border: '1px solid #e0e9f6', display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography sx={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 800 }}>Total visible</Typography>
-                      <Typography sx={{ color: '#052e5a', fontSize: '0.9rem', fontWeight: 950 }}>{formatNumber(departmentChartTotal)}</Typography>
+                    <Box sx={{ mt: 1.2, p: 1.2, borderRadius: 1.5, bgcolor: colors.managementPanelBgSoft, border: `1px solid ${colors.managementBorderMuted}`, display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography sx={{ color: colors.slate500, fontSize: '0.78rem', fontWeight: 400 }}>Total visible</Typography>
+                      <Typography sx={{ color: colors.blue3, fontSize: '0.9rem', fontWeight: 600 }}>{formatNumber(departmentChartTotal)}</Typography>
                     </Box>
                   </Box>
                 ) : fieldReportChartData.length > 0 ? (
@@ -786,14 +786,14 @@ export default function Dashboard() {
                         </BarChart>
                       </ResponsiveContainer>
                     </Box>
-                    <Box sx={{ mt: 1.2, p: 1.2, borderRadius: 1.5, bgcolor: '#f8fbff', border: '1px solid #e0e9f6', display: 'flex', justifyContent: 'space-between' }}>
+                    <Box sx={{ mt: 1.2, p: 1.2, borderRadius: 1.5, bgcolor: colors.managementPanelBgSoft, border: `1px solid ${colors.managementBorderMuted}`, display: 'flex', justifyContent: 'space-between' }}>
                       <Box sx={{ minWidth: 0 }}>
-                        <Typography sx={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 800 }}>Última fecha</Typography>
-                        <Typography sx={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700 }}>
+                        <Typography sx={{ color: colors.slate500, fontSize: '0.78rem', fontWeight: 400 }}>Última fecha</Typography>
+                        <Typography sx={{ color: colors.slate500, fontSize: '0.72rem', fontWeight: 400 }}>
                           {formatDateLabel(latestFieldReportSummary?.date || '') || '-'} · {formatNumber(Number(latestFieldReportSummary?.frontCount || 0))} frentes
                         </Typography>
                       </Box>
-                      <Typography sx={{ color: '#052e5a', fontSize: '0.9rem', fontWeight: 950 }}>{formatNumber(fieldReportTotalVisible)} reportes</Typography>
+                      <Typography sx={{ color: colors.blue3, fontSize: '0.9rem', fontWeight: 600 }}>{formatNumber(fieldReportTotalVisible)} reportes</Typography>
                     </Box>
                   </Box>
                 ) : null}
@@ -810,14 +810,14 @@ export default function Dashboard() {
                 elevation={0}
                 sx={{
                   p: { xs: 1.8, sm: 2.2 },
-                  border: '1px solid #e3ebf7',
+                  border: `1px solid ${colors.managementBorderMuted}`,
                   borderRadius: 2,
                   boxShadow: '0 14px 34px rgba(15, 50, 90, 0.08)',
                 }}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.6 }}>
                   <WarningAmber sx={{ color: '#d99a00' }} />
-                  <Typography variant="h6" sx={{ color: '#052e5a', fontWeight: 900 }}>
+                  <Typography variant="h6" sx={{ color: colors.blue3, fontWeight: 500 }}>
                     Alertas Recientes
                   </Typography>
                 </Box>
@@ -833,26 +833,26 @@ export default function Dashboard() {
                           gap: 1,
                           p: 1.25,
                           borderRadius: 1.5,
-                          border: '1px solid #e5edf7',
-                          bgcolor: alert.priority === 'high' ? '#fff5f5' : '#f8fbff',
+                          border: `1px solid ${colors.managementBorderMuted}`,
+                          bgcolor: alert.priority === 'high' ? colors.rose50 : colors.managementPanelBgSoft,
                         }}
                       >
                         <Box sx={{ minWidth: 0 }}>
-                          <Typography sx={{ color: '#0f172a', fontWeight: 850 }} noWrap title={alert.title}>{alert.title}</Typography>
-                          <Typography sx={{ color: '#64748b', fontSize: '0.82rem' }} noWrap title={alert.message}>{alert.message}</Typography>
+                          <Typography sx={{ color: colors.slate900, fontWeight: 500 }} noWrap title={alert.title}>{alert.title}</Typography>
+                          <Typography sx={{ color: colors.slate500, fontSize: '0.82rem' }} noWrap title={alert.message}>{alert.message}</Typography>
                         </Box>
                         <Chip
                           label={alert.priority === 'high' ? 'Urgente' : alert.priority === 'medium' ? 'Pendiente' : 'Info'}
                           color={alert.type === 'warning' ? 'error' : alert.type === 'info' ? 'info' : 'warning'}
                           size="small"
-                          sx={{ fontWeight: 800 }}
+                          sx={{ fontWeight: 500 }}
                         />
                       </Box>
                     ))
                   ) : (
-                    <Box sx={{ p: 2.2, borderRadius: 2, border: '1px dashed #cbd7e6', bgcolor: '#f8fbff', textAlign: 'center' }}>
-                      <Typography sx={{ color: '#0f172a', fontWeight: 900 }}>Sin alertas</Typography>
-                      <Typography sx={{ mt: 0.35, color: '#64748b', fontSize: '0.86rem' }}>No hay alertas pendientes.</Typography>
+                    <Box sx={{ p: 2.2, borderRadius: 2, border: `1px dashed ${colors.managementBorderSoft}`, bgcolor: colors.managementPanelBgSoft, textAlign: 'center' }}>
+                      <Typography sx={{ color: colors.slate900, fontWeight: 500 }}>Sin alertas</Typography>
+                      <Typography sx={{ mt: 0.35, color: colors.slate500, fontSize: '0.86rem' }}>No hay alertas pendientes.</Typography>
                     </Box>
                   )}
                 </Box>
@@ -862,17 +862,17 @@ export default function Dashboard() {
                 elevation={0}
                 sx={{
                   p: { xs: 1.8, sm: 2.2 },
-                  border: '1px solid #e3ebf7',
+                  border: `1px solid ${colors.managementBorderMuted}`,
                   borderRadius: 2,
                   boxShadow: '0 14px 34px rgba(15, 50, 90, 0.08)',
                 }}
               >
-                <Typography variant="h6" sx={{ color: '#052e5a', fontWeight: 900, mb: 1.8 }}>
+                <Typography variant="h6" sx={{ color: colors.blue3, fontWeight: 500, mb: 1.8 }}>
                   Resumen del Mes
                 </Typography>
                 <Box display="grid" gridTemplateColumns={{ xs: 'repeat(2, minmax(0, 1fr))', sm: 'repeat(4, minmax(0, 1fr))' }} gap={1.4}>
                   {monthlyCards.map((card) => (
-                    <Box key={card.label} sx={{ p: 1.25, borderRadius: 2, border: '1px solid #e5edf7', bgcolor: '#f8fbff', textAlign: 'center' }}>
+                    <Box key={card.label} sx={{ p: 1.25, borderRadius: 2, border: `1px solid ${colors.managementBorderMuted}`, bgcolor: colors.managementPanelBgSoft, textAlign: 'center' }}>
                       <Box
                         sx={{
                           width: 82,
@@ -894,13 +894,13 @@ export default function Dashboard() {
                             <RadialBar dataKey="value" background cornerRadius={8} />
                           </RadialBarChart>
                         </ResponsiveContainer>
-                        <Box sx={{ position: 'absolute', inset: 10, borderRadius: '50%', bgcolor: '#ffffff', display: 'grid', placeItems: 'center', boxShadow: 'inset 0 0 0 1px #e5edf7' }}>
-                          <Typography sx={{ color: card.color, fontWeight: 950, fontSize: '0.98rem' }}>
+                        <Box sx={{ position: 'absolute', inset: 10, borderRadius: '50%', bgcolor: colors.white, display: 'grid', placeItems: 'center', boxShadow: `inset 0 0 0 1px ${colors.managementBorderMuted}` }}>
+                          <Typography sx={{ color: card.color, fontWeight: 600, fontSize: '0.98rem' }}>
                             {card.suffix === '%' ? formatDecimal(card.value) : formatNumber(card.value)}{card.suffix}
                           </Typography>
                         </Box>
                       </Box>
-                      <Typography sx={{ mt: 1, color: '#475569', fontSize: '0.76rem', fontWeight: 800, lineHeight: 1.2 }}>
+                      <Typography sx={{ mt: 1, color: colors.slate600, fontSize: '0.76rem', fontWeight: 500, lineHeight: 1.2 }}>
                         {card.label}
                       </Typography>
                     </Box>
