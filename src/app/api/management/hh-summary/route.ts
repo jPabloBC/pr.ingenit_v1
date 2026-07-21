@@ -254,8 +254,11 @@ const inferSpecialtyFromPosition = (position: any) => {
 const getReportSpecialty = (report: any) =>
   normalizeLabel(report?.specialty || report?.especialidad || report?.discipline || 'SIN ESPECIALIDAD')
 
+const normalizeManagementFrontLabel = (value: any) =>
+  normalizeLabel(value).replace(/^CUADRILLA\s+\d+\s+/, '').trim()
+
 const normalizeDailyReportFrontForManagement = (value: any) => {
-  const front = normalizeLabel(value)
+  const front = normalizeManagementFrontLabel(value)
   if (front.includes('NOC') || front.includes('USO DE RECURSOS') || front.includes('EJECUCION')) return front || 'SIN FRENTE'
   if (front.includes('CANALETAS')) return 'CONTRATO BASE CANALETAS'
   if (front.includes('PISCINAS')) return 'CONTRATO BASE PISCINAS'
@@ -610,8 +613,7 @@ const isBaseFrontLabel = (front: string) =>
   front.includes('CONTRATO BASE PISCINAS')
 
 const getFrontLabelFromCrewName = (report: any) => {
-  const crew = normalizeLabel(report?.crew_name || '')
-  const front = crew.replace(/^CUADRILLA\s+\d+\s+/, '').trim()
+  const front = normalizeManagementFrontLabel(report?.crew_name || '')
   if (!front || isBaseFrontLabel(front)) return ''
   return front.includes('NOC') || front.includes('USO DE RECURSOS') || front.includes('EJECUCION')
     ? front
@@ -1129,7 +1131,7 @@ const buildDailyReportWeeklySummary = (dailyReports: any[]) => {
   let totalHh = 0
 
   const upsertFront = (frontRaw: any, values: { directHh?: number; indirectHh?: number }, reportId: string) => {
-    const frontLabel = normalizeLabel(frontRaw) || 'SIN FRENTE'
+    const frontLabel = normalizeDailyReportFrontForManagement(frontRaw) || 'SIN FRENTE'
     const frontKey = getDailyReportFrontGroupKey(frontLabel)
     const current = byFront.get(frontKey) || {
       front: frontLabel,
