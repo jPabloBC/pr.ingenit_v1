@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getToken } from 'next-auth/jwt'
+import { hasManagementModulePermission } from '@/lib/managementPermissions'
 
 const RESOURCE_MAP: Record<string, string> = {
   '/users/dashboard': 'dashboard',
@@ -33,6 +34,7 @@ function matchResource(pathname: string) {
 function hasPermission(perms: string[], resource: string) {
   if (perms.includes('*') || perms.includes(resource)) return true
   if (resource === 'communications' && (perms.includes('communications.send') || perms.includes('communications.forms'))) return true
+  if (resource === 'management' && hasManagementModulePermission(perms)) return true
   const aliases = RESOURCE_ALIASES[resource] || []
   return aliases.some((k) => perms.includes(k))
 }

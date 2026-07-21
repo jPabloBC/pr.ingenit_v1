@@ -1,26 +1,25 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  Alert,
   Box,
-  Button,
-  Chip,
   CircularProgress,
   Container,
-  IconButton,
   MenuItem,
   Paper,
-  Select,
   Snackbar,
   Stack,
-  TextField,
   Typography
 } from '@mui/material'
-import { Image as ImageIcon, RefreshCw, Star, Trash2, Upload } from 'lucide-react'
+import { Image as ImageIcon, RefreshCw, Star, Trash2 } from 'lucide-react'
 import { useSession } from 'next-auth/react'
 import UserHeader from '../../../components/layout/UserHeader'
 import { colors } from '../../../theme/theme'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { FileDropzone } from '@/components/ui/FileDropzone'
+import { AppSelect, AppTextField } from '@/components/ui/FormControls'
+import { AppChip, AppIconButton } from '@/components/ui/InteractiveControls'
 
 type CompanyAsset = {
   id: string
@@ -96,9 +95,8 @@ export default function SettingsPage() {
   const [transmittalNextRegisterNumber, setTransmittalNextRegisterNumber] = useState('1')
   const [savingTransmittalSettings, setSavingTransmittalSettings] = useState(false)
   const [snackbar, setSnackbar] = useState<SnackbarState>({ open: false, message: '', severity: 'info' })
-  const fileInputsRef = useRef<Record<string, HTMLInputElement | null>>({})
 
-  const role = String((session?.user as any)?.role || '').toLowerCase()
+  const role = String(session?.user?.role || '').toLowerCase()
   const canManage = role === 'admin' || role === 'dev'
 
   const showSnackbar = (message: string, severity: SnackbarState['severity'] = 'info') => {
@@ -247,62 +245,62 @@ export default function SettingsPage() {
   }
 
   return (
-    <>
+    <Box sx={{ minHeight: '100vh', bgcolor: colors.managementWhiteSoft }}>
       <UserHeader title="Ajustes" />
       <Container
         maxWidth={false}
         disableGutters
-        sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}
+        sx={{ width: '100%', maxWidth: '100% !important', px: { xs: 1, sm: 1.5, md: 2 }, py: 2 }}
       >
-        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 }, mb: 3 }}>
+        <Paper variant="outlined" sx={{ borderColor: colors.managementBorder, borderRadius: 1.5, p: { xs: 1.5, md: 2 }, mb: 2 }}>
           <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ xs: 'flex-start', sm: 'center' }} justifyContent="space-between" gap={2}>
             <Box>
-              <Typography variant="h5" sx={{ color: colors.blue1, fontWeight: 800, mb: 0.75 }}>
+              <Typography variant="h5" sx={{ color: colors.blue3, fontWeight: 700, mb: 0.5 }}>
                 Ajustes
               </Typography>
-              <Typography sx={{ color: colors.blue7 }}>
+              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 Configuraciones de empresa y plataforma.
               </Typography>
             </Box>
-            <Button
+            <AppButton
               variant="outlined"
               startIcon={loading ? <CircularProgress size={16} /> : <RefreshCw size={16} />}
               onClick={() => void loadAssets()}
               disabled={loading}
             >
               Actualizar
-            </Button>
+            </AppButton>
           </Stack>
         </Paper>
 
-        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 }, mb: 3 }}>
+        <Paper variant="outlined" sx={{ borderColor: colors.managementBorder, borderRadius: 1.5, p: { xs: 1.5, md: 2 }, mb: 2 }}>
           <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
             <Box>
-              <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 800 }}>Transmittal</Typography>
-              <Typography sx={{ color: colors.blue7, fontSize: 14 }}>Datos fijos que se imprimen en el registro de entrega de documentos.</Typography>
+              <Typography variant="h6" sx={{ color: colors.blue3, fontWeight: 700 }}>Transmittal</Typography>
+              <Typography variant="body2" sx={{ color: 'text.secondary' }}>Datos fijos que se imprimen en el registro de entrega de documentos.</Typography>
             </Box>
-            {!canManage ? <Chip label="Solo lectura" size="small" /> : null}
+            {!canManage ? <AppChip label="Solo lectura" size="small" variant="outlined" /> : null}
           </Stack>
-          <Stack direction={{ xs: 'column', md: 'row' }} gap={1.5} alignItems={{ xs: 'stretch', md: 'center' }}>
-            <TextField label="Proyecto" value={transmittalProjectName} onChange={(event) => setTransmittalProjectName(event.target.value)} fullWidth disabled={!canManage} />
-            <TextField label="N° contrato" value={transmittalContractNumber} onChange={(event) => setTransmittalContractNumber(event.target.value)} fullWidth disabled={!canManage} />
-            <TextField label="Próximo N° registro" type="number" value={transmittalNextRegisterNumber} onChange={(event) => setTransmittalNextRegisterNumber(event.target.value)} inputProps={{ min: 1 }} sx={{ minWidth: { md: 180 } }} disabled={!canManage} />
-            {canManage ? <Button variant="contained" onClick={() => void saveTransmittalSettings()} disabled={savingTransmittalSettings} sx={{ minWidth: 120 }}>{savingTransmittalSettings ? 'Guardando...' : 'Guardar'}</Button> : null}
-          </Stack>
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) minmax(0, 1fr) minmax(170px, 0.45fr) auto' }, gap: 1.5, alignItems: 'center' }}>
+            <AppTextField label="Proyecto" value={transmittalProjectName} onChange={(event) => setTransmittalProjectName(event.target.value)} disabled={!canManage} />
+            <AppTextField label="N° contrato" value={transmittalContractNumber} onChange={(event) => setTransmittalContractNumber(event.target.value)} disabled={!canManage} />
+            <AppTextField label="Próximo N° registro" type="number" value={transmittalNextRegisterNumber} onChange={(event) => setTransmittalNextRegisterNumber(event.target.value)} inputProps={{ min: 1 }} disabled={!canManage} />
+            {canManage ? <AppButton variant="contained" onClick={() => void saveTransmittalSettings()} disabled={savingTransmittalSettings} sx={{ minWidth: 120 }}>{savingTransmittalSettings ? 'Guardando...' : 'Guardar'}</AppButton> : null}
+          </Box>
         </Paper>
 
-        <Paper elevation={0} sx={{ border: '1px solid #e5e7eb', borderRadius: 2, p: { xs: 2, md: 3 } }}>
+        <Paper variant="outlined" sx={{ borderColor: colors.managementBorder, borderRadius: 1.5, p: { xs: 1.5, md: 2 } }}>
           <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
             <Box>
-              <Typography variant="h6" sx={{ color: colors.blue1, fontWeight: 800 }}>
+              <Typography variant="h6" sx={{ color: colors.blue3, fontWeight: 700 }}>
                 Imágenes corporativas
               </Typography>
-              <Typography sx={{ color: colors.blue7, fontSize: 14 }}>
+              <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                 Assets disponibles para reportes, asistencia y presentaciones.
               </Typography>
             </Box>
             {!canManage ? (
-              <Chip label="Solo lectura" size="small" />
+              <AppChip label="Solo lectura" size="small" variant="outlined" />
             ) : null}
           </Stack>
 
@@ -320,78 +318,76 @@ export default function SettingsPage() {
                 const isUploading = uploadingKey === uploadKey
 
                 return (
-                  <Box key={assetType.value} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, p: 2 }}>
+                  <Box key={assetType.value} sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1.5, p: { xs: 1.25, md: 1.5 }, bgcolor: colors.white }}>
                     <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} sx={{ mb: 2 }}>
                       <Stack direction="row" alignItems="center" gap={1.25}>
-                        <Box sx={{ width: 34, height: 34, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: '#eef2f7', color: colors.blue4 }}>
+                        <Box sx={{ width: 40, height: 40, borderRadius: 1, display: 'grid', placeItems: 'center', bgcolor: colors.managementTableHead, color: colors.blue4 }}>
                           <ImageIcon size={18} />
                         </Box>
                         <Box>
-                          <Typography sx={{ fontWeight: 800, color: colors.blue1 }}>
+                          <Typography sx={{ fontWeight: 700, color: colors.blue3 }}>
                             {assetType.label}
                           </Typography>
-                          <Typography sx={{ color: colors.blue7, fontSize: 13 }}>
+                          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                             {list.length} archivo{list.length === 1 ? '' : 's'}
                           </Typography>
                         </Box>
                       </Stack>
 
-                      {assetType.value === 'transmittal_logo' && canManage ? (
-                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ mb: 1.5 }}>
-                          <Select size="small" displayEmpty value={transmittalReuseAssetId} onChange={(event) => setTransmittalReuseAssetId(String(event.target.value))} sx={{ minWidth: 280 }}>
-                            <MenuItem value="">Reutilizar imagen ya subida</MenuItem>
-                            {assets.filter((asset) => asset.asset_type !== 'transmittal_logo').map((asset) => <MenuItem key={asset.id} value={asset.id}>{asset.name} ({asset.asset_type})</MenuItem>)}
-                          </Select>
-                          <Button variant="outlined" disabled={!transmittalReuseAssetId} onClick={async () => { await patchAsset(transmittalReuseAssetId, 'assign_transmittal'); setTransmittalReuseAssetId('') }}>Usar en Transmittal</Button>
-                        </Stack>
-                      ) : null}
-
                       {canManage ? (
-                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ width: { xs: '100%', sm: 'auto' } }}>
-                          <Select
-                            size="small"
+                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={1} sx={{ width: { xs: '100%', md: 'auto' }, minWidth: 0 }}>
+                          {assetType.value === 'transmittal_logo' ? (
+                            <>
+                              <AppSelect
+                                label="Reutilizar imagen"
+                                value={transmittalReuseAssetId}
+                                onChange={(event) => setTransmittalReuseAssetId(String(event.target.value))}
+                                sx={{ minWidth: { sm: 280 } }}
+                              >
+                                <MenuItem value="">Seleccionar imagen ya subida</MenuItem>
+                                {assets.filter((asset) => asset.asset_type !== 'transmittal_logo').map((asset) => <MenuItem key={asset.id} value={asset.id}>{asset.name} ({asset.asset_type})</MenuItem>)}
+                              </AppSelect>
+                              <AppButton variant="outlined" disabled={!transmittalReuseAssetId} onClick={async () => { await patchAsset(transmittalReuseAssetId, 'assign_transmittal'); setTransmittalReuseAssetId('') }}>Usar en Transmittal</AppButton>
+                            </>
+                          ) : null}
+                          <AppSelect
+                            label="Uso"
                             value={usageContext}
                             onChange={(event) => {
                               setSelectedContextByType((prev) => ({ ...prev, [assetType.value]: String(event.target.value) }))
                             }}
-                            sx={{ minWidth: 170 }}
+                            sx={{ minWidth: { sm: 170 } }}
                           >
                             {USAGE_CONTEXTS.map((context) => (
                               <MenuItem key={context.value} value={context.value}>{context.label}</MenuItem>
                             ))}
-                          </Select>
-                          <input
-                            ref={(node) => { fileInputsRef.current[assetType.value] = node }}
-                            type="file"
-                            accept="image/*"
-                            hidden
-                            onChange={(event) => {
-                              const file = event.target.files?.[0] || null
-                              event.target.value = ''
-                              void handleFileChange(assetType.value, file)
-                            }}
-                          />
-                          <Button
-                            variant="contained"
-                            startIcon={isUploading ? <CircularProgress size={16} color="inherit" /> : <Upload size={16} />}
-                            onClick={() => fileInputsRef.current[assetType.value]?.click()}
-                            disabled={Boolean(uploadingKey)}
-                          >
-                            Subir
-                          </Button>
+                          </AppSelect>
                         </Stack>
                       ) : null}
                     </Stack>
 
+                    {canManage ? (
+                      <Box sx={{ mb: 2 }}>
+                        <FileDropzone
+                          accept="image/*"
+                          file={null}
+                          disabled={Boolean(uploadingKey)}
+                          label={isUploading ? 'Subiendo imagen...' : `Arrastra y suelta una imagen para ${assetType.label}`}
+                          helperText={`Destino: ${USAGE_CONTEXTS.find((context) => context.value === usageContext)?.label || usageContext}`}
+                          onFileChange={(file) => { if (file) void handleFileChange(assetType.value, file) }}
+                        />
+                      </Box>
+                    ) : null}
+
                     {list.length === 0 ? (
-                      <Box sx={{ border: '1px dashed #cbd5e1', borderRadius: 1, p: 2, color: colors.blue7, fontSize: 14 }}>
+                      <Box sx={{ border: `1px dashed ${colors.managementBorderStrong}`, borderRadius: 1, p: 2, color: 'text.secondary', fontSize: 14, textAlign: 'center' }}>
                         Sin imágenes registradas.
                       </Box>
                     ) : (
                       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0, 1fr))', xl: 'repeat(3, minmax(0, 1fr))' }, gap: 1.5 }}>
                         {list.map((asset) => (
-                          <Box key={asset.id} sx={{ border: '1px solid #e5e7eb', borderRadius: 1, overflow: 'hidden', bgcolor: '#fff' }}>
-                            <Box sx={{ height: 118, bgcolor: '#f8fafc', display: 'grid', placeItems: 'center', borderBottom: '1px solid #e5e7eb' }}>
+                          <Box key={asset.id} sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1, overflow: 'hidden', bgcolor: colors.white }}>
+                            <Box sx={{ height: 118, bgcolor: colors.managementPanelBgSoft, display: 'grid', placeItems: 'center', borderBottom: `1px solid ${colors.managementBorder}` }}>
                               <Box
                                 component="img"
                                 src={`/api/company-assets/file?key=${encodeURIComponent(asset.r2_key)}`}
@@ -402,38 +398,39 @@ export default function SettingsPage() {
                             <Box sx={{ p: 1.5 }}>
                               <Stack direction="row" alignItems="flex-start" justifyContent="space-between" gap={1}>
                                 <Box sx={{ minWidth: 0 }}>
-                                  <Typography sx={{ fontWeight: 700, color: colors.blue1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  <Typography sx={{ fontWeight: 700, color: colors.blue3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                     {asset.name}
                                   </Typography>
-                                  <Typography sx={{ color: colors.blue7, fontSize: 12 }}>
+                                  <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
                                     {asset.usage_context || 'general'} · {formatBytes(asset.file_size_bytes)}
                                   </Typography>
                                   {asset.width_px && asset.height_px ? (
-                                    <Typography sx={{ color: colors.blue7, fontSize: 12 }}>
+                                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
                                       {asset.width_px} x {asset.height_px}px
                                     </Typography>
                                   ) : null}
                                 </Box>
-                                {asset.is_default ? <Chip label="Default" color="primary" size="small" /> : null}
+                                {asset.is_default ? <AppChip label="Predeterminado" color="primary" size="small" /> : null}
                               </Stack>
 
                               {canManage ? (
                                 <Stack direction="row" justifyContent="flex-end" gap={0.5} sx={{ mt: 1 }}>
-                                  <IconButton
+                                  <AppIconButton
                                     size="small"
                                     title="Marcar predeterminada"
                                     disabled={Boolean(asset.is_default)}
                                     onClick={() => void patchAsset(asset.id, 'set_default')}
                                   >
                                     <Star size={17} />
-                                  </IconButton>
-                                  <IconButton
+                                  </AppIconButton>
+                                  <AppIconButton
                                     size="small"
                                     title="Desactivar"
                                     onClick={() => void patchAsset(asset.id, 'deactivate')}
+                                    sx={{ color: 'error.main' }}
                                   >
                                     <Trash2 size={16} />
-                                  </IconButton>
+                                  </AppIconButton>
                                 </Stack>
                               ) : null}
                             </Box>
@@ -455,10 +452,10 @@ export default function SettingsPage() {
         onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert severity={snackbar.severity} onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}>
+        <AppAlert severity={snackbar.severity} onClose={() => setSnackbar((prev) => ({ ...prev, open: false }))}>
           {snackbar.message}
-        </Alert>
+        </AppAlert>
       </Snackbar>
-    </>
+    </Box>
   )
 }

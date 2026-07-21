@@ -46,13 +46,19 @@ const attachmentDownload = async (key: string) => {
   return Buffer.from(await response.arrayBuffer())
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const { actor, allowed, canSend, canManageForms } = await getCommunicationsActor()
     if (!actor?.companyId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-    const currentAttendanceDate = todayYmd()
+    const requestedAttendanceDate = clean(
+      req.nextUrl.searchParams.get('attendance_date')
+    )
+
+    const currentAttendanceDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedAttendanceDate)
+      ? requestedAttendanceDate
+      : todayYmd()
     const [collaboratorsResult, campaignsResult, attendanceResult] = await Promise.all([
       (canSend || canManageForms) ? supabaseAdmin
         .from('pr_collaborators')
@@ -220,7 +226,7 @@ export async function POST(req: NextRequest) {
           .update({ status: 'failed', error_message: 'El destinatario no tiene un teléfono válido.', updated_at: new Date().toISOString() })
           .in('id', invalidPhoneDeliveries.map((delivery: any) => delivery.id))
       }
-      const whatsappMessage = `*${title}*\n\n${message}`
+      const whatsappMessage = `*${title}*\n${message}`
       const attachmentUrl = attachment?.key && campaign.attachment_access_token
         ? `${req.nextUrl.origin}/api/communications/files/${campaign.attachment_access_token}`
         : null

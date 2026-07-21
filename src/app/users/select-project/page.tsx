@@ -5,9 +5,7 @@ import Image from 'next/image'
 import { signOut, useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import {
-  Alert,
   Box,
-  Button,
   Card,
   CardActionArea,
   CardContent,
@@ -17,6 +15,9 @@ import {
   Typography,
 } from '@mui/material'
 import { Logout } from '@mui/icons-material'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { colors } from '@/theme/theme'
 
 type SessionProject = {
   id: string
@@ -56,7 +57,7 @@ export default function SelectProjectPage() {
 
   useEffect(() => {
     if (status !== 'authenticated') return
-    const activeProjectId = String((session?.user as any)?.projectId || '').trim()
+    const activeProjectId = String(session?.user?.projectId || '').trim()
     if (activeProjectId) {
       try {
         if (typeof window !== 'undefined') {
@@ -179,14 +180,13 @@ export default function SelectProjectPage() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background:
-            'radial-gradient(circle at 15% 15%, #e8f1ff 0, #f3f7ff 34%, #ffffff 70%)',
+          background: `radial-gradient(circle at 15% 15%, ${colors.blue50} 0, ${colors.managementPanelBgSoft} 34%, ${colors.white} 70%)`,
           px: 2,
         }}
       >
         <Box sx={{ textAlign: 'center' }}>
           <CircularProgress />
-          <Typography variant="h6" sx={{ mt: 2, fontWeight: 700, color: '#063466' }}>
+          <Typography variant="h6" sx={{ mt: 2, fontWeight: 500, color: colors.blue3 }}>
             Ingresando al proyecto
           </Typography>
           <Typography variant="body2" sx={{ mt: 0.5, color: 'text.secondary' }}>
@@ -201,16 +201,15 @@ export default function SelectProjectPage() {
     <Box
       sx={{
         minHeight: '100vh',
-        background:
-          'radial-gradient(circle at 15% 15%, #e8f1ff 0, #f3f7ff 34%, #ffffff 70%)',
+        background: `radial-gradient(circle at 15% 15%, ${colors.blue50} 0, ${colors.managementPanelBgSoft} 34%, ${colors.white} 70%)`,
       }}
     >
       <Box
         component="header"
         sx={{
-          borderBottom: '1px solid #d7e4f8',
-          background: 'linear-gradient(90deg, #012c57 0%, #093b70 48%, #0c4a86 100%)',
-          color: '#fff',
+          borderBottom: `1px solid ${colors.managementBorderStrong}`,
+          background: `linear-gradient(90deg, ${colors.blue1} 0%, ${colors.blue3} 48%, ${colors.blue5} 100%)`,
+          color: colors.white,
           px: { xs: 1.5, sm: 2, md: 3 },
           py: { xs: 0.8, sm: 1, md: 1.25 },
         }}
@@ -240,15 +239,15 @@ export default function SelectProjectPage() {
                 />
               </Box>
             </Stack>
-            <Button
+            <AppButton
+              size="small"
               variant="outlined"
               startIcon={<Logout />}
               onClick={() => signOut({ callbackUrl: '/auth/signin' })}
               disabled={enteringProject}
               sx={{
                 borderColor: 'rgba(255,255,255,0.45)',
-                color: '#fff',
-                textTransform: 'none',
+                color: colors.white,
                 minWidth: 'auto',
                 px: { xs: 1, sm: 1.5 },
                 py: { xs: 0.45, sm: 0.6 },
@@ -258,13 +257,13 @@ export default function SelectProjectPage() {
                   '& svg': { fontSize: { xs: '1rem', sm: '1.1rem' } },
                 },
                 '&:hover': {
-                  borderColor: '#fff',
+                  borderColor: colors.white,
                   backgroundColor: 'rgba(255,255,255,0.08)',
                 },
               }}
             >
               Cerrar sesión
-            </Button>
+            </AppButton>
           </Stack>
         </Container>
       </Box>
@@ -275,8 +274,8 @@ export default function SelectProjectPage() {
             mb: { xs: 2, sm: 2.5, md: 3 },
             p: { xs: 1.4, sm: 1.8, md: 2.1 },
             borderRadius: 3,
-            border: '1px solid #d5e4fa',
-            background: 'linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(247,250,255,0.96) 100%)',
+            border: `1px solid ${colors.managementBorder}`,
+            background: `linear-gradient(180deg, ${colors.white} 0%, ${colors.managementPanelBgSoft} 100%)`,
             boxShadow: '0 8px 24px rgba(6,52,102,0.06)',
           }}
         >
@@ -312,8 +311,8 @@ export default function SelectProjectPage() {
                 ) : (
                   <Typography
                     sx={{
-                      color: '#0c4a86',
-                      fontWeight: 800,
+                      color: colors.blue5,
+                      fontWeight: 600,
                       fontSize: { xs: '1.15rem', sm: '1.45rem', md: '1.75rem' },
                       lineHeight: 1,
                       textAlign: 'center',
@@ -332,8 +331,8 @@ export default function SelectProjectPage() {
                   px: { xs: 1, sm: 1.2 },
                   py: { xs: 0.65, sm: 0.75 },
                   borderRadius: 2,
-                  color: '#d9ecff',
-                  background: 'linear-gradient(135deg, #052e5a 0%, #0b4b86 58%, #0f6bc1 100%)',
+                  color: colors.blue15,
+                  background: `linear-gradient(135deg, ${colors.blue3} 0%, ${colors.blue5} 58%, ${colors.blue6} 100%)`,
                   border: '1px solid rgba(168,210,255,0.55)',
                   boxShadow: '0 10px 22px rgba(6,52,102,0.16)',
                   flexShrink: 0,
@@ -341,10 +340,10 @@ export default function SelectProjectPage() {
               >
                 <Typography
                   sx={{
-                    fontWeight: 900,
+                    fontWeight: 600,
                     fontSize: { xs: '2rem', sm: '2.35rem' },
                     lineHeight: 1,
-                    color: 'rgba(217,236,255,0.58)',
+                    color: colors.blue14,
                   }}
                 >
                   {projects.length}
@@ -366,8 +365,8 @@ export default function SelectProjectPage() {
               <Typography
                 variant="caption"
                 sx={{
-                  color: '#99a4af',
-                  fontWeight: 700,
+                  color: colors.slate500,
+                  fontWeight: 400,
                   letterSpacing: 0.2,
                 }}
               >
@@ -375,8 +374,8 @@ export default function SelectProjectPage() {
               </Typography>
               <Typography
                 sx={{
-                  color: '#052e5a',
-                  fontWeight: 800,
+                  color: colors.blue3,
+                  fontWeight: 600,
                   fontSize: { xs: '1rem', sm: '1.08rem' },
                   lineHeight: 1.15,
                   mb: { xs: 1.2, sm: 1.4 },
@@ -389,21 +388,21 @@ export default function SelectProjectPage() {
         </Box>
 
         {error ? (
-          <Alert severity="error" sx={{ mb: 2 }}>
+          <AppAlert severity="error" sx={{ mb: 2 }}>
             {error}
-          </Alert>
+          </AppAlert>
         ) : null}
 
         {projects.length === 0 ? (
-          <Alert severity="warning">
+          <AppAlert severity="warning">
             No tienes proyectos asignados por ahora. Solicita acceso a un administrador.
-          </Alert>
+          </AppAlert>
         ) : (
           <>
             <Typography
               variant="h4"
-              fontWeight={600}
-              color="#d0d9e2"
+              fontWeight={500}
+              color={colors.blue3}
               sx={{ fontSize: 'clamp(1.35rem, 1.1rem + 1.2vw, 2rem)', lineHeight: 1.1, mb: 1.6 }}
             >
               Selecciona un proyecto
@@ -420,8 +419,8 @@ export default function SelectProjectPage() {
                   sx={{
                     borderColor: 'rgba(129, 181, 255, 0.38)',
                     borderRadius: 2.5,
-                    background: 'linear-gradient(135deg, #052e5a 0%, #0b4b86 52%, #0f6bc1 100%)',
-                    color: '#d9ecff',
+                    background: `linear-gradient(135deg, ${colors.blue3} 0%, ${colors.blue5} 52%, ${colors.blue6} 100%)`,
+                    color: colors.blue15,
                     position: 'relative',
                     overflow: 'hidden',
                     transition: 'border-color 180ms ease, background-color 180ms ease',
@@ -434,8 +433,8 @@ export default function SelectProjectPage() {
                       pointerEvents: 'none',
                     },
                     '&:hover': {
-                      borderColor: '#003c80',
-                      background: 'linear-gradient(135deg, #001a33 0%, #001e40 52%, #003c80 100%)',
+                      borderColor: colors.blue4,
+                      background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue2} 52%, ${colors.blue4} 100%)`,
                     },
                     '@keyframes projectCardIn': {
                       '0%': { opacity: 0, transform: 'translateY(10px) scale(0.985)' },
@@ -460,8 +459,8 @@ export default function SelectProjectPage() {
                     <CardContent sx={{ py: { xs: 1.8, sm: 2.1, md: 2.4 }, px: { xs: 1.8, sm: 2.2 } }}>
                       <Typography
                         variant="h6"
-                        fontWeight={700}
-                        color="#d9ecff"
+                        fontWeight={500}
+                        color={colors.blue15}
                         sx={{
                           display: 'flex',
                           alignItems: 'center',

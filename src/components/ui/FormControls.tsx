@@ -1,7 +1,7 @@
 'use client'
 
-import type { SelectProps, TextFieldProps } from '@mui/material'
-import { InputAdornment, Select, TextField } from '@mui/material'
+import type { SelectProps, StackProps, TextFieldProps } from '@mui/material'
+import { InputAdornment, Select, Stack, TextField } from '@mui/material'
 import { SearchOutlined } from '@mui/icons-material'
 import { styled } from '@mui/material/styles'
 
@@ -89,4 +89,8 @@ export function AppSearchField(props: TextFieldProps) {
 
 export function AppSelectControl(props: SelectProps) {
   return <StandardSelect size="small" {...props} />
+}
+
+export function AppFormStack({ spacing = 1.75, ...props }: StackProps) {
+  return <Stack spacing={spacing} {...props} />
 }

@@ -9,10 +9,11 @@ import {
   ShieldOutlined,
   TaskAlt,
 } from '@mui/icons-material'
-import { Box, Button, Card, CardContent, Container, Stack, Tooltip, Typography } from '@mui/material'
+import { Box, Card, CardContent, Container, Stack, Tooltip, Typography } from '@mui/material'
 import Header from '../components/layout/header'
 import Footer from '../components/layout/footer'
 import { colors } from '../theme/theme'
+import { AppButton } from '@/components/ui/AppButton'
 
 const platformAreas = [
   { label: 'Asistencia', icon: TaskAlt },
@@ -217,7 +218,7 @@ export default function Home() {
                   ))}
                 </Stack>
 
-                <Button
+                <AppButton
                   variant="contained"
                   size="large"
                   fullWidth
@@ -228,8 +229,6 @@ export default function Home() {
                     color: colors.white,
                     py: 1.35,
                     borderRadius: 1.5,
-                    fontWeight: 700,
-                    textTransform: 'none',
                     boxShadow: `0 10px 20px ${colors.blue6}33`,
                     '&:hover': {
                       bgcolor: colors.blue4,
@@ -237,8 +236,8 @@ export default function Home() {
                     },
                   }}
                 >
-                  Ingresar al Sistema
-                </Button>
+                  Ingresar al sistema
+                </AppButton>
               </CardContent>
             </Card>
           </Box>

@@ -14,6 +14,8 @@ import {
   List,
   ListItem,
   ListItemText,
+  LinearProgress,
+  MenuItem,
   Paper,
   Stack,
   Tooltip,
@@ -21,13 +23,14 @@ import {
 } from '@mui/material'
 import { Close, ContentCopyOutlined, EmailOutlined, ManageAccountsOutlined, SendOutlined, ShareOutlined, WhatsApp } from '@mui/icons-material'
 import { CircleArrowLeft, CircleArrowRight, MailX, MessageCircleOff } from 'lucide-react'
+import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import UserHeader from '@/components/layout/UserHeader'
 import ConditionalFormsPanel from '@/components/communications/ConditionalFormsPanel'
 import { useAppSnackbar } from '@/components/ui/AppSnackbarProvider'
 import { AppTabs } from '@/components/ui/AppTabs'
 import { AppButton } from '@/components/ui/AppButton'
 import { FileDropzone } from '@/components/ui/FileDropzone'
-import { AppSearchField, AppTextField } from '@/components/ui/FormControls'
+import { AppSearchField, AppSelect, AppTextField } from '@/components/ui/FormControls'
 import { AppCheckbox, AppIconButton, AppToggleButton } from '@/components/ui/InteractiveControls'
 import { colors } from '@/theme/theme'
 
@@ -37,6 +40,27 @@ type Delivery = { id: string; channel: string; recipient_name: string; recipient
 
 const MAX_CAMPAIGN_RECIPIENTS = 300
 const formatDateTime = (value: string) => new Date(value).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' })
+
+const ymdToLocalDate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return null
+
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3])
+  )
+}
+
+const localDateToYmd = (value: Date | null) => {
+  if (!value || Number.isNaN(value.getTime())) return ''
+
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
 const formatPosition = (value: string) => value
   .trim()
   .toLocaleLowerCase('es-CL')
@@ -57,6 +81,7 @@ export default function CommunicationsPage() {
   const [collaborators, setCollaborators] = useState<Collaborator[]>([])
   const [positions, setPositions] = useState<string[]>([])
   const [positionSearch, setPositionSearch] = useState('')
+  const [attendanceStatuses, setAttendanceStatuses] = useState<string[]>([])
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [selectedPositions, setSelectedPositions] = useState<string[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -66,6 +91,7 @@ export default function CommunicationsPage() {
   const [attachment, setAttachment] = useState<File | null>(null)
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [sendElapsedSeconds, setSendElapsedSeconds] = useState(0)
   const [canSend, setCanSend] = useState(false)
   const [canManageForms, setCanManageForms] = useState(false)
   const [attendanceDate, setAttendanceDate] = useState('')
@@ -82,10 +108,14 @@ export default function CommunicationsPage() {
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedAttendanceDate?: string) => {
     setLoading(true)
     try {
-      const response = await fetch('/api/communications', { cache: 'no-store' })
+      const attendanceQuery = requestedAttendanceDate
+        ? `?attendance_date=${encodeURIComponent(requestedAttendanceDate)}`
+        : ''
+
+      const response = await fetch(`/api/communications${attendanceQuery}`, { cache: 'no-store' })
       const data = await response.json()
       if (!response.ok) throw new Error(data?.error || 'No fue posible cargar Comunicaciones.')
       setCollaborators(Array.isArray(data.collaborators) ? data.collaborators : [])
@@ -116,21 +146,107 @@ export default function CommunicationsPage() {
 
   useEffect(() => { void load() }, [load])
 
-  const filteredCollaborators = useMemo(() => collaborators.filter((person) => selectedPositions.includes(person.position)), [collaborators, selectedPositions])
-  const selectedCollaborators = useMemo(() => filteredCollaborators.filter((person) => selectedIds.includes(person.id)), [filteredCollaborators, selectedIds])
+  useEffect(() => {
+    if (!sending) return
+
+    const startedAt = Date.now()
+    setSendElapsedSeconds(0)
+
+    const interval = window.setInterval(() => {
+      setSendElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+
+    return () => window.clearInterval(interval)
+  }, [sending])
+
+  const attendanceStatusOptions = useMemo(
+    () => Array.from(
+      new Set(
+        collaborators
+          .map((person) => person.attendanceStatus)
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'es-CL')),
+    [collaborators]
+  )
+
+  const eligibleCollaborators = useMemo(
+    () => attendanceStatuses.length === 0
+      ? collaborators
+      : collaborators.filter((person) =>
+          attendanceStatuses.includes(person.attendanceStatus)
+        ),
+    [collaborators, attendanceStatuses]
+  )
+
+  const selectedCollaborators = useMemo(
+    () => collaborators.filter((person) => selectedIds.includes(person.id)),
+    [collaborators, selectedIds]
+  )
+
   const contactSummary = useMemo(() => ({
     email: selectedCollaborators.filter((person) => Boolean(person.email)).length,
     whatsapp: selectedCollaborators.filter((person) => Boolean(person.phone)).length,
   }), [selectedCollaborators])
+
   const searchTerm = useMemo(() => normalizeSearch(positionSearch), [positionSearch])
-  const matchesCollaboratorSearch = useCallback((person: Collaborator) => !searchTerm || [person.name, person.position, person.email, person.phone].some((value) => normalizeSearch(value).includes(searchTerm)), [searchTerm])
-  const matchingPositions = useMemo(() => positions.filter((position) => !searchTerm || normalizeSearch(position).includes(searchTerm) || collaborators.some((person) => person.position === position && matchesCollaboratorSearch(person))), [positions, collaborators, searchTerm, matchesCollaboratorSearch])
-  const matchingCollaborators = useMemo(() => filteredCollaborators.filter(matchesCollaboratorSearch), [filteredCollaborators, matchesCollaboratorSearch])
+
+  const matchesCollaboratorSearch = useCallback(
+    (person: Collaborator) =>
+      !searchTerm ||
+      [person.name, person.position, person.email, person.phone]
+        .some((value) => normalizeSearch(value).includes(searchTerm)),
+    [searchTerm]
+  )
+
+  const eligibleCollaboratorIds = useMemo(
+    () => new Set(eligibleCollaborators.map((person) => person.id)),
+    [eligibleCollaborators]
+  )
+
+  const visibleCollaborators = useMemo(
+    () => collaborators.filter(
+      (person) =>
+        eligibleCollaboratorIds.has(person.id) ||
+        selectedIds.includes(person.id)
+    ),
+    [collaborators, eligibleCollaboratorIds, selectedIds]
+  )
+
+  const filteredCollaborators = useMemo(
+    () => visibleCollaborators.filter((person) => selectedPositions.includes(person.position)),
+    [visibleCollaborators, selectedPositions]
+  )
+
+  const matchingPositions = useMemo(() => positions.filter((position) => {
+    const peopleInPosition = visibleCollaborators.filter((person) => person.position === position)
+
+    return peopleInPosition.length > 0 && (
+      !searchTerm ||
+      normalizeSearch(position).includes(searchTerm) ||
+      peopleInPosition.some(matchesCollaboratorSearch)
+    )
+  }), [positions, visibleCollaborators, searchTerm, matchesCollaboratorSearch])
+
+  const matchingCollaborators = useMemo(
+    () => filteredCollaborators.filter(matchesCollaboratorSearch),
+    [filteredCollaborators, matchesCollaboratorSearch]
+  )
 
   const addPosition = (position: string) => {
     if (selectedPositions.includes(position)) return
+
+    const positionMatchesSearch = Boolean(searchTerm) && normalizeSearch(position).includes(searchTerm)
+    const collaboratorsToAdd = eligibleCollaborators.filter(
+      (person) =>
+        person.position === position &&
+        (!searchTerm || positionMatchesSearch || matchesCollaboratorSearch(person))
+    )
+
     setSelectedPositions((current) => [...current, position])
-    setSelectedIds((current) => Array.from(new Set([...current, ...collaborators.filter((person) => person.position === position).map((person) => person.id)])))
+    setSelectedIds((current) =>
+      Array.from(new Set([...current, ...collaboratorsToAdd.map((person) => person.id)]))
+    )
   }
 
   const removePosition = (position: string) => {
@@ -188,6 +304,7 @@ export default function CommunicationsPage() {
     if (selectedIds.length > MAX_CAMPAIGN_RECIPIENTS) return showToast({ type: 'info', text: `Selecciona un máximo de ${MAX_CAMPAIGN_RECIPIENTS} destinatarios por campaña.` })
     if (!title.trim() || !message.trim()) return showToast({ type: 'info', text: 'Completa el asunto y el mensaje.' })
     if (!channels.length) return showToast({ type: 'info', text: 'Selecciona al menos un canal.' })
+    setSendElapsedSeconds(0)
     setSending(true)
     try {
       const uploadedAttachment = await uploadAttachment()
@@ -291,7 +408,68 @@ export default function CommunicationsPage() {
                     <Typography sx={{ fontWeight: 800, color: colors.blue3 }}>Destinatarios</Typography>
                     <Typography variant="caption" color="text.secondary">Selecciona uno o más cargos y luego las personas a quienes se preparará el envío.</Typography>
                   </Box>
-                  <AppSearchField value={positionSearch} onChange={(event) => setPositionSearch(event.target.value)} label="Buscar destinatario" placeholder="Cargo, nombre, correo o teléfono" InputProps={{ endAdornment: positionSearch ? <Tooltip title="Limpiar búsqueda"><AppIconButton size="small" aria-label="Limpiar búsqueda" onClick={() => setPositionSearch('')} edge="end" sx={{ mr: -1, color: colors.gray7, '&:hover': { color: colors.white, bgcolor: colors.gray7 } }}><Close fontSize="small" /></AppIconButton></Tooltip> : undefined }} sx={{ width: { xs: '100%', sm: 320 } }} />
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.75} sx={{ width: { xs: '100%', sm: 'auto' } }}>
+                    <DatePicker
+                      label="Fecha de asistencia"
+                      value={ymdToLocalDate(attendanceDate)}
+                      format="dd/MM/yyyy"
+                      onChange={(value) => {
+                        const nextDate = localDateToYmd(value)
+
+                        if (!nextDate || nextDate === attendanceDate) return
+
+                        setAttendanceDate(nextDate)
+                        setAttendanceStatuses([])
+                        void load(nextDate)
+                      }}
+                      disabled={!canSend || loading || sending}
+                      slotProps={{
+                        textField: {
+                          size: 'small',
+                          sx: { width: { xs: '100%', sm: 180 } },
+                        },
+                      }}
+                    />
+
+                    <AppSelect
+                      label="Estado de asistencia"
+                      InputLabelProps={{ shrink: true }}
+                      value={attendanceStatuses}
+                      SelectProps={{
+                        multiple: true,
+                        displayEmpty: true,
+                        renderValue: (value) => {
+                          const selected = Array.isArray(value) ? value.map(String) : []
+                          return selected.length
+                            ? selected.join(', ')
+                            : 'Todos los estados'
+                        },
+                      }}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setAttendanceStatuses(
+                          Array.isArray(value)
+                            ? value.map(String)
+                            : String(value).split(',').filter(Boolean)
+                        )
+                      }}
+                      disabled={!canSend}
+                      sx={{ minWidth: { xs: '100%', sm: 250 } }}
+                    >
+                      {attendanceStatusOptions.map((status) => (
+                        <MenuItem key={status} value={status}>
+                          <AppCheckbox
+                            checked={attendanceStatuses.includes(status)}
+                            size="small"
+                          />
+                          <Typography variant="body2">
+                            {status.toLocaleUpperCase('es-CL')}
+                          </Typography>
+                        </MenuItem>
+                      ))}
+                    </AppSelect>
+                    <AppSearchField value={positionSearch} onChange={(event) => setPositionSearch(event.target.value)} label="Buscar destinatario" placeholder="Cargo, nombre, correo o teléfono" InputProps={{ endAdornment: positionSearch ? <Tooltip title="Limpiar búsqueda"><AppIconButton size="small" aria-label="Limpiar búsqueda" onClick={() => setPositionSearch('')} edge="end" sx={{ mr: -1, color: colors.gray7, '&:hover': { color: colors.white, bgcolor: colors.gray7 } }}><Close fontSize="small" /></AppIconButton></Tooltip> : undefined }} sx={{ width: { xs: '100%', sm: 320 } }} />
+                  </Stack>
                 </Box>
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 1.25 }}>
                   <Box sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1, overflow: 'hidden' }}>
@@ -314,7 +492,7 @@ export default function CommunicationsPage() {
                     const isSelected = selectedIds.includes(person.id)
                     const contactTriggerSx = { display: 'inline-flex', alignItems: 'center', gap: 0.25, color: colors.gray4, fontSize: '0.75rem', fontWeight: 400, lineHeight: 1.66, cursor: 'default' }
                     const contactTooltip = (label: string, value: string, icon: ReactNode) => <Tooltip arrow placement="top" title={<Box sx={{ p: 0.25, minWidth: 190 }}><Typography variant="caption" sx={{ display: 'block', color: 'inherit', fontWeight: 800 }}>{label}</Typography><Stack direction="row" alignItems="center" spacing={0.25}><Typography variant="caption" sx={{ flex: 1, overflowWrap: 'anywhere' }}>{value}</Typography><AppIconButton size="small" aria-label={`Copiar ${label.toLocaleLowerCase('es-CL')}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void copyContact(value, label) }} sx={{ color: 'inherit' }}><ContentCopyOutlined fontSize="inherit" /></AppIconButton></Stack></Box>}><Box component="span" onClick={(event) => event.stopPropagation()} sx={contactTriggerSx}>{icon}{label}</Box></Tooltip>
-                    return <FormControlLabel key={person.id} sx={{ m: 0, px: 0.75, py: 0.25, border: `1px solid ${isSelected ? colors.blue600 : colors.managementBorder}`, borderRadius: 1, bgcolor: isSelected ? colors.blue50 : 'transparent', alignItems: 'center' }} control={<AppCheckbox checked={isSelected} onChange={() => toggleRecipient(person.id)} disabled={!canSend} size="small" />} label={<Box sx={{ py: 0.25 }}><Typography variant="body2" sx={{ fontWeight: 800, lineHeight: 1.2 }}>{person.name.toLocaleUpperCase('es-CL')}</Typography><Stack direction="row" spacing={0.5} divider={<Typography variant="caption" color="text.secondary">·</Typography>} sx={{ mt: 0.25, flexWrap: 'wrap', alignItems: 'center' }}><Box component="span" sx={contactTriggerSx}><ManageAccountsOutlined sx={{ fontSize: 12 }} />{formatPosition(person.position)}</Box>{person.email && contactTooltip('Correo', person.email, <EmailOutlined sx={{ fontSize: 12 }} />)}{person.phone && contactTooltip('WhatsApp', person.phone, <WhatsApp sx={{ fontSize: 12 }} />)}</Stack></Box>} />
+                    return <FormControlLabel key={person.id} sx={{ m: 0, px: 0.75, py: 0.25, border: `1px solid ${isSelected ? colors.blue600 : colors.managementBorder}`, borderRadius: 1, bgcolor: isSelected ? colors.blue50 : 'transparent', alignItems: 'center' }} control={<AppCheckbox checked={isSelected} onChange={() => toggleRecipient(person.id)} disabled={!canSend} size="small" />} label={<Box sx={{ py: 0.25 }}><Typography variant="body2" sx={{ fontWeight: 800, lineHeight: 1.2 }}>{person.name.toLocaleUpperCase('es-CL')}</Typography><Stack direction="row" spacing={0.5} divider={<Typography variant="caption" color="text.secondary">·</Typography>} sx={{ mt: 0.25, flexWrap: 'wrap', alignItems: 'center' }}><Box component="span" sx={contactTriggerSx}><ManageAccountsOutlined sx={{ fontSize: 12 }} />{formatPosition(person.position)}</Box><Typography component="span" variant="caption" sx={{ color: colors.gray4, fontWeight: 700 }}>{person.attendanceStatus}</Typography>{person.email && contactTooltip('Correo', person.email, <EmailOutlined sx={{ fontSize: 12 }} />)}{person.phone && contactTooltip('WhatsApp', person.phone, <WhatsApp sx={{ fontSize: 12 }} />)}</Stack></Box>} />
                   })}
                   {matchingCollaborators.length === 0 && <Typography variant="body2" color="text.secondary" sx={{ px: 0.75, py: 1 }}>No hay destinatarios que coincidan con la búsqueda.</Typography>}
                 </Box>}
@@ -333,8 +511,44 @@ export default function CommunicationsPage() {
                 <AppTextField value={title} onChange={(event) => setTitle(event.target.value)} disabled={!canSend} label="Asunto" />
                 <AppTextField value={message} onChange={(event) => setMessage(event.target.value)} disabled={!canSend} label="Mensaje" placeholder="Escribe el mensaje" multiline minRows={5} />
                 <FileDropzone file={attachment} accept="application/pdf,.pdf" disabled={!canSend} maxSizeBytes={10 * 1024 * 1024} label="Arrastra y suelta el PDF aquí" helperText="PDF · máximo 10 MB" onFileChange={setAttachment} />
+                {sending && (
+                  <Paper
+                    variant="outlined"
+                    aria-live="polite"
+                    sx={{
+                      p: 1.5,
+                      borderColor: colors.blue600,
+                      bgcolor: colors.blue50,
+                    }}
+                  >
+                    <Stack spacing={1}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+                        <Box>
+                          <Typography sx={{ fontWeight: 800, color: colors.blue3 }}>
+                            Envío masivo en curso
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {selectedIds.length} destinatarios ·
+                            {channels.includes('email') ? ' Correo' : ''}
+                            {channels.includes('email') && channels.includes('whatsapp') ? ' + ' : ''}
+                            {channels.includes('whatsapp') ? 'WhatsApp' : ''}
+                            {' · '}{sendElapsedSeconds} s
+                          </Typography>
+                        </Box>
+                        <CircularProgress size={24} />
+                      </Box>
+
+                      <LinearProgress />
+
+                      <Typography variant="caption" color="text.secondary">
+                        La campaña se está procesando por lotes. No cierres ni recargues esta página.
+                      </Typography>
+                    </Stack>
+                  </Paper>
+                )}
+
                 <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <AppButton variant="contained" size="large" startIcon={<SendOutlined />} onClick={() => void send()} disabled={!canSend || sending}>{sending ? 'Enviando...' : 'Crear y enviar'}</AppButton>
+                  <AppButton variant="contained" size="large" startIcon={<SendOutlined />} onClick={() => void send()} disabled={!canSend || sending || channels.length === 0}>{sending ? 'Procesando envío...' : 'Crear y enviar'}</AppButton>
                 </Box>
               </Stack>
             </Paper>

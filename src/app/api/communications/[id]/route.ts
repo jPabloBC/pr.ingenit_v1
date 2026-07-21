@@ -32,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const whatsappDeliveries = (deliveries || []).map((delivery: any) => {
       if (delivery.channel !== 'whatsapp') return delivery
       const phone = phoneDigits(delivery.recipient_phone)
-      const text = [`*${campaign.title}*`, campaign.message, attachmentUrl ? `PDF: ${attachmentUrl}` : ''].filter(Boolean).join('\n\n')
+      const text = [`*${campaign.title}*\n${campaign.message}`, attachmentUrl ? `PDF: ${attachmentUrl}` : ''].filter(Boolean).join('\n\n')
       return { ...delivery, whatsapp_url: phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}` : null, attachment_url: attachmentUrl }
     })
     return NextResponse.json({ campaign: { ...campaign, attachment_url: attachmentUrl }, deliveries: whatsappDeliveries })

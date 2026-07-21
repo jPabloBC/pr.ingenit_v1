@@ -127,7 +127,7 @@ const baseTheme = createTheme({
     },
     button: {
       fontFamily: 'var(--font-archivo, "Archivo", Arial, sans-serif)',
-      fontWeight: 500,
+      fontWeight: 400,
       fontSize: '0.95rem',
       lineHeight: 1.3,
       textTransform: 'none' as const,
@@ -139,7 +139,7 @@ const baseTheme = createTheme({
         root: {
           borderRadius: 8,
           textTransform: 'none',
-          fontWeight: 500,
+          fontWeight: 400,
           boxShadow: 'none',
           '&:hover': {
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',

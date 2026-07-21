@@ -7,7 +7,6 @@ import {
   Box,
   Paper,
   Typography,
-  Button,
   Table,
   TableBody,
   TableCell,
@@ -15,25 +14,17 @@ import {
   TableHead,
   TableRow,
   TableSortLabel,
-  IconButton,
-  Chip,
   CircularProgress,
   Container,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  TextField,
-  Checkbox,
-  FormControlLabel,
   FormControl,
   InputLabel,
-  Select,
   Card,
   CardContent,
   Autocomplete,
-  Alert,
-  Backdrop,
   LinearProgress,
   Menu,
   MenuItem,
@@ -46,7 +37,6 @@ import {
   Add,
   Edit,
   Upload,
-  Search,
   FilterList,
   Person,
   Business,
@@ -68,9 +58,15 @@ import { IndustryType } from '../../../types'
 import CountryPhoneInput from '../../../components/CountryPhoneInput'
 import UserHeader from '../../../components/layout/UserHeader'
 import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton'
+import { AppAlert } from '@/components/ui/AppAlert'
+import { AppButton } from '@/components/ui/AppButton'
+import { AppSearchField, AppSelect, AppSelectControl, AppTextField } from '@/components/ui/FormControls'
+import { AppChip, AppIconButton } from '@/components/ui/InteractiveControls'
+import { FileDropzone } from '@/components/ui/FileDropzone'
+import { AppLoadingOverlay } from '@/components/ui/AppLoadingOverlay'
 import { COLLABORATOR_PROFILE_IMPORT_FIELDS } from '../../../lib/collaboratorProfileImport'
 import { AttendanceView } from '../../../components/attendance/AttendanceView'
-import { normalizeText, normalizeUppercaseDisplayText } from '../../../lib/normalize'
+import { normalizeUppercaseDisplayText } from '../../../lib/normalize'
 import { notifyAttendanceDataUpdated } from '../../../lib/attendanceDataRefresh'
 
 interface Collaborator {
@@ -1639,11 +1635,6 @@ export default function CollaboratorsPage() {
     if (showAttendanceForUser && action !== 'attendance_daily' && action !== 'new_collaborators') return
     setPendingImportPrimaryAction(action)
     selectImportPrimaryAction(action)
-    setImportInstructionsOpen(false)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-      fileInputRef.current.click()
-    }
   }
 
   const parseCSV = (text: string) => {
@@ -1958,13 +1949,7 @@ export default function CollaboratorsPage() {
     return map
   }
 
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const input = e.target
-    const f = e.target.files && e.target.files[0]
-    if (!f) return
-    // Allow selecting the same file again without refreshing the page.
-    input.value = ''
-
+  const processImportFile = async (f: File) => {
     const applyRowsToImport = (rows: string[][], sourceSheet?: string, headerCell = 'A1') => {
       if (!rows || rows.length === 0) {
         alert('Archivo/hoja vacía o inválida')
@@ -2041,6 +2026,14 @@ export default function CollaboratorsPage() {
       setImportParsingMessage('')
       setImportParsingProgress(0)
     }
+  }
+
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target
+    const file = input.files?.[0]
+    // Allow selecting the same file again without refreshing the page.
+    input.value = ''
+    if (file) void processImportFile(file)
   }
 
   function normalizeText(s: string) {
@@ -2695,6 +2688,9 @@ export default function CollaboratorsPage() {
         : 'Importación en proceso. Esto puede tardar algunos minutos según el tamaño del archivo.'
     })
     try {
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
+      })
       if (COLLABORATORS_DEBUG) console.log('Execute import: importHeaders=', importHeaders)
       if (COLLABORATORS_DEBUG) console.log('Execute import: importRows count=', importRows.length)
       const mapped = importRows.map(r => {
@@ -2846,6 +2842,7 @@ export default function CollaboratorsPage() {
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
+        let lastProgressUiUpdate = 0
 
         while (true) {
           const { value, done } = await reader.read()
@@ -2865,8 +2862,15 @@ export default function CollaboratorsPage() {
             }
 
             if (event.type === 'progress') {
-              if (typeof event.percent === 'number') setImportProgress(Math.max(0, Math.min(100, Math.round(event.percent))))
-              if (event.message) setImportStatusMessage(String(event.message))
+              const now = performance.now()
+              const eventProgress = typeof event.percent === 'number'
+                ? Math.max(0, Math.min(100, Math.round(event.percent)))
+                : null
+              if (now - lastProgressUiUpdate >= 120 || (eventProgress !== null && eventProgress >= 98)) {
+                if (eventProgress !== null) setImportProgress(eventProgress)
+                if (event.message) setImportStatusMessage(String(event.message))
+                lastProgressUiUpdate = now
+              }
               continue
             }
             if (event.type === 'error') {
@@ -3287,19 +3291,19 @@ export default function CollaboratorsPage() {
           }}
         >
           {importNotice && (
-            <Alert
+            <AppAlert
               severity={importNotice.severity}
               onClose={() => setImportNotice(null)}
               sx={{ mb: 2, whiteSpace: 'pre-line' }}
             >
               {importNotice.message}
-            </Alert>
+            </AppAlert>
           )}
 
           {/* Estadísticas rápidas */}
           {!showAttendanceForUser && (
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }, gap: 2, mb: 2.5 }}>
-            <Card>
+            <Card variant="outlined" sx={{ borderColor: colors.gray1, borderRadius: 2, boxShadow: 'none' }}>
               <CardContent>
                 <Box display="flex" alignItems="center">
                   <Person sx={{ color: colors.blue6, mr: 2 }} />
@@ -3314,7 +3318,7 @@ export default function CollaboratorsPage() {
                 </Box>
               </CardContent>
             </Card>
-            <Card>
+            <Card variant="outlined" sx={{ borderColor: colors.gray1, borderRadius: 2, boxShadow: 'none' }}>
               <CardContent>
                 <Box display="flex" alignItems="center">
                   <Person sx={{ color: colors.gold3, mr: 2 }} />
@@ -3329,7 +3333,7 @@ export default function CollaboratorsPage() {
                 </Box>
               </CardContent>
             </Card>
-            <Card>
+            <Card variant="outlined" sx={{ borderColor: colors.gray1, borderRadius: 2, boxShadow: 'none' }}>
               <CardContent>
                 <Box display="flex" alignItems="center">
                   <Person sx={{ color: colors.gray6, mr: 2 }} />
@@ -3344,7 +3348,7 @@ export default function CollaboratorsPage() {
                 </Box>
               </CardContent>
             </Card>
-            <Card>
+            <Card variant="outlined" sx={{ borderColor: colors.gray1, borderRadius: 2, boxShadow: 'none' }}>
               <CardContent>
                 <Box display="flex" alignItems="center">
                   <Business sx={{ color: colors.blue6, mr: 2 }} />
@@ -3364,26 +3368,39 @@ export default function CollaboratorsPage() {
 
           {/* Barra de herramientas */}
           {!showAttendanceForUser && (
-          <Paper sx={{ p: 1.75, mb: 2.5 }}>
-            <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
-              <Box display="flex" alignItems="center" gap={2}>
-                <TextField
-                  size="small"
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 1.75,
+              mb: 2.5,
+              borderColor: colors.gray1,
+              borderRadius: 2,
+              boxShadow: 'none',
+              overflow: 'visible',
+              '& .collaborators-toolbar-control': { minHeight: 44 },
+            }}
+          >
+            <Box display="flex" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1.5}>
+              <Box
+                display="flex"
+                alignItems="center"
+                flexWrap="wrap"
+                gap={1}
+                sx={{ flex: '1 1 680px', minWidth: 0 }}
+              >
+                <AppSearchField
+                  className="collaborators-toolbar-control"
                   placeholder="Buscar por nombre, correo, RUT, especialidad o tipo..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  InputProps={{
-                    startAdornment: <Search sx={{ mr: 1, color: colors.gray6 }} />
-                  }}
-                  sx={{ minWidth: 250 }}
+                  sx={{ flex: '1 1 320px', minWidth: { xs: '100%', sm: 280 } }}
                 />
-                <TextField
-                  select
-                  size="small"
+                <AppSelect
+                  className="collaborators-toolbar-control"
                   label="Tipo trabajador"
                   value={workerTypeFilter}
                   onChange={(e) => setWorkerTypeFilter(e.target.value)}
-                  sx={{ minWidth: 220 }}
+                  sx={{ flex: '0 1 220px', minWidth: { xs: '100%', sm: 210 } }}
                 >
                   <MenuItem value="all">TODOS</MenuItem>
                   {workerTypeOptions.map((workerType) => (
@@ -3391,27 +3408,34 @@ export default function CollaboratorsPage() {
                       {upperText(workerType, 'SIN ESPECIFICAR')}
                     </MenuItem>
                   ))}
-                </TextField>
-                <TextField
-                  size="small"
+                </AppSelect>
+                <AppTextField
+                  className="collaborators-toolbar-control"
                   type="date"
                   label="Fecha estado diario"
                   value={dailyStatusDate}
                   onChange={(e) => setDailyStatusDate(e.target.value)}
                   InputLabelProps={{ shrink: true }}
-                  sx={{ minWidth: 190 }}
+                  sx={{ flex: '0 1 190px', minWidth: { xs: '100%', sm: 190 } }}
                 />
                 <Tooltip title="Filtrar vigencia">
-                  <IconButton
+                  <AppIconButton
+                    className="collaborators-toolbar-control"
                     color={activeStatusFilter === 'all' ? 'default' : 'primary'}
                     onClick={(event) => setActiveStatusFilterAnchor(event.currentTarget)}
                     aria-label="Filtrar vigencia"
                     aria-controls={activeStatusFilterAnchor ? 'active-status-filter-menu' : undefined}
                     aria-haspopup="true"
                     aria-expanded={activeStatusFilterAnchor ? 'true' : undefined}
+                    sx={{
+                      width: 44,
+                      height: 44,
+                      border: `1px solid ${activeStatusFilter === 'all' ? colors.gray3 : colors.blue6}`,
+                      color: activeStatusFilter === 'all' ? colors.gray6 : colors.blue6,
+                    }}
                   >
                     <FilterList />
-                  </IconButton>
+                  </AppIconButton>
                 </Tooltip>
                 <Menu
                   id="active-status-filter-menu"
@@ -3448,36 +3472,33 @@ export default function CollaboratorsPage() {
                   </MenuItem>
                 </Menu>
               </Box>
-              <Box display="flex" gap={1}>
-                <Button
+              <Box display="flex" alignItems="center" flexWrap="wrap" gap={1}>
+                <AppButton
+                  className="collaborators-toolbar-control"
                   variant={viewMode === 'cards' ? 'contained' : 'outlined'}
                   startIcon={<ViewModule />}
                   onClick={() => setViewMode('cards')}
-                  sx={{ textTransform: 'none' }}
                 >
                   Tarjetas
-                </Button>
-                <Button
+                </AppButton>
+                <AppButton
+                  className="collaborators-toolbar-control"
                   variant={viewMode === 'table' ? 'contained' : 'outlined'}
                   startIcon={<ViewList />}
                   onClick={() => setViewMode('table')}
-                  sx={{ textTransform: 'none' }}
                 >
                   Tabla
-                </Button>
+                </AppButton>
                 <Tooltip title="Cargar colaboradores" arrow>
-                  <Button
-                    variant="outlined"
+                  <AppIconButton
+                    className="collaborators-toolbar-control"
                     onClick={handleUploadFile}
                     aria-label="Cargar colaboradores"
                     sx={{
-                      minWidth: 44,
                       width: 44,
-                      height: 36,
-                      p: 0,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      height: 44,
+                      border: `1px solid ${colors.blue6}`,
+                      color: colors.blue6,
                       transition: 'background-color 160ms ease, border-color 160ms ease, color 160ms ease',
                       '&:hover': {
                         bgcolor: '#eef6ff',
@@ -3487,7 +3508,7 @@ export default function CollaboratorsPage() {
                     }}
                   >
                     <Upload fontSize="small" />
-                  </Button>
+                  </AppIconButton>
                 </Tooltip>
               </Box>
             </Box>
@@ -3520,7 +3541,7 @@ export default function CollaboratorsPage() {
                     {importActionOptions.map((option) => {
                       const selected = pendingImportPrimaryAction === option.key
                       return (
-                        <Button
+                        <AppButton
                           key={option.key}
                           variant="outlined"
                           disabled={importParsing || importing}
@@ -3568,15 +3589,31 @@ export default function CollaboratorsPage() {
                               {option.detail}
                             </Typography>
                           </Box>
-                        </Button>
+                        </AppButton>
                       )
                     })}
                   </Box>
+                  {pendingImportPrimaryAction && (
+                    <Box sx={{ mt: 2 }}>
+                      <FileDropzone
+                        file={null}
+                        accept=".csv,.xlsx,.xls"
+                        disabled={importParsing || importing}
+                        label="Arrastra y suelta el archivo Excel aquí"
+                        helperText="CSV, XLSX o XLS"
+                        onFileChange={(file) => {
+                          if (!file) return
+                          setImportInstructionsOpen(false)
+                          void processImportFile(file)
+                        }}
+                      />
+                    </Box>
+                  )}
                 </DialogContent>
                 <DialogActions sx={{ px: 2.5, pb: 2.25, pt: 0.5, gap: 1 }}>
-                  <Button onClick={() => setImportInstructionsOpen(false)} disabled={importParsing || importing}>
+                  <AppButton onClick={() => setImportInstructionsOpen(false)} disabled={importParsing || importing}>
                     Cancelar
-                  </Button>
+                  </AppButton>
                 </DialogActions>
               </Dialog>
 
@@ -3602,7 +3639,7 @@ export default function CollaboratorsPage() {
                     </Typography>
                     <Tooltip title={importConfigurationVisible ? 'Ocultar configuración' : 'Mostrar configuración'}>
                       <span>
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           onClick={toggleImportConfiguration}
                           disabled={!canToggleImportConfiguration}
@@ -3614,7 +3651,7 @@ export default function CollaboratorsPage() {
                           }}
                         >
                           {importConfigurationVisible ? <VisibilityOff fontSize="small" /> : <Visibility fontSize="small" />}
-                        </IconButton>
+                        </AppIconButton>
                       </span>
                     </Tooltip>
                   </Box>
@@ -3689,7 +3726,7 @@ export default function CollaboratorsPage() {
                     <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap', alignItems: 'center' }}>
                       {importCandidateDates.length === 0 && excelIncludesToday && todayAlreadyImported && (
                         <>
-                        <Button
+                        <AppButton
                           size="small"
                           variant="contained"
                           disabled={importParsing || importing}
@@ -3701,8 +3738,8 @@ export default function CollaboratorsPage() {
                           }}
                         >
                           Actualizar fecha actual
-                        </Button>
-                        <Button
+                        </AppButton>
+                        <AppButton
                           size="small"
                           variant="outlined"
                           disabled={importParsing || importing}
@@ -3715,13 +3752,13 @@ export default function CollaboratorsPage() {
                           }}
                         >
                           Elegir fecha o rango
-                        </Button>
+                        </AppButton>
                         </>
                       )}
                       {showImportAttendancePreview && importPrimaryAction !== 'attendance_daily' && (
-                        <Button size="small" variant="text" onClick={() => setShowImportAttendancePreview(false)}>
+                        <AppButton size="small" variant="text" onClick={() => setShowImportAttendancePreview(false)}>
                           Ocultar vista previa
-                        </Button>
+                        </AppButton>
                       )}
                     </Box>
                   </Paper>
@@ -3767,7 +3804,7 @@ export default function CollaboratorsPage() {
                       {importSheetNames.length > 1 && (
                         <FormControl className="import-origin-control" size="small" sx={{ minWidth: 180, width: { xs: '100%', sm: 260, md: 230 } }}>
                           <InputLabel>Hoja del Excel</InputLabel>
-                          <Select
+                          <AppSelectControl
                             value={selectedImportSheet}
                             disabled={importParsing || importing}
                             label="Hoja del Excel"
@@ -3791,10 +3828,10 @@ export default function CollaboratorsPage() {
                             {importSheetNames.map((sheetName) => (
                               <MenuItem key={sheetName} value={sheetName}>{sheetName}</MenuItem>
                             ))}
-                          </Select>
+                          </AppSelectControl>
                         </FormControl>
                       )}
-                      <TextField
+                      <AppTextField
                         className="import-origin-control"
                         key={`header-start-cell-${importHeaderStartCell}`}
                         size="small"
@@ -3820,7 +3857,7 @@ export default function CollaboratorsPage() {
                         disabled={importParsing || importing || importHeaderApplying}
                       />
                       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', ml: { xs: 0, md: 'auto' }, width: { xs: '100%', md: 'auto' }, justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
-                        <Button
+                        <AppButton
                           className="import-origin-action"
                           size="small"
                           variant="outlined"
@@ -3872,10 +3909,10 @@ export default function CollaboratorsPage() {
                           }}
                         >
                           {importHeaderApplying ? 'Aplicando...' : 'Aplicar celda'}
-                        </Button>
+                        </AppButton>
                         {importPrimaryAction !== 'attendance_daily' && importPrimaryAction !== 'attendance_fix' && (
                           <>
-                            <Button
+                            <AppButton
                               className="import-origin-action"
                               size="small"
                               variant="outlined"
@@ -3883,8 +3920,8 @@ export default function CollaboratorsPage() {
                               onClick={() => setMapping(autoMatchHeader(importHeaders || []))}
                             >
                               Auto-mapear
-                            </Button>
-                            <Button
+                            </AppButton>
+                            <AppButton
                               className="import-origin-action"
                               size="small"
                               variant="outlined"
@@ -3893,7 +3930,7 @@ export default function CollaboratorsPage() {
                               onClick={resetMappingForHeaders}
                             >
                               Limpiar mapeo
-                            </Button>
+                            </AppButton>
                           </>
                         )}
                       </Box>
@@ -3926,7 +3963,7 @@ export default function CollaboratorsPage() {
                             )}
                           </Typography>
                           {detectedHeaderSuggestion.cell !== importHeaderStartCell && (
-                            <Button
+                            <AppButton
                               className="import-origin-action"
                               size="small"
                               variant="outlined"
@@ -3966,7 +4003,7 @@ export default function CollaboratorsPage() {
                               }}
                             >
                               Usar sugerencia
-                            </Button>
+                            </AppButton>
                           )}
                         </Box>
                       )}
@@ -3989,7 +4026,7 @@ export default function CollaboratorsPage() {
                           ['range', 'attendance_overwrite', 'Rango de fechas'],
                           ['multi', 'attendance_specific_dates', 'Fechas específicas'],
                         ].map(([correctionMode, mode, label]) => (
-                          <Button
+                          <AppButton
                             key={mode}
                             size="small"
                             variant={attendanceCorrectionMode === correctionMode ? 'contained' : 'outlined'}
@@ -4016,12 +4053,12 @@ export default function CollaboratorsPage() {
                             }}
                           >
                             {label}
-                          </Button>
+                          </AppButton>
                         ))}
                       </Box>
                     )}
                     {importPrimaryAction === 'new_collaborators' ? (
-                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                      <AppAlert severity="info" sx={{ mb: 1.5 }}>
                         {newCollaboratorImportPreview.canPreview
                           ? newCollaboratorImportPreview.created > 0
                             ? `Se crearán ${newCollaboratorImportPreview.created} trabajador${newCollaboratorImportPreview.created === 1 ? '' : 'es'} nuevo${newCollaboratorImportPreview.created === 1 ? '' : 's'}${excelIncludesToday ? ` y se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}` : '. El Excel no contiene asistencia de hoy'} según el Documento.`
@@ -4029,24 +4066,24 @@ export default function CollaboratorsPage() {
                               ? `No se encontraron trabajadores nuevos. Se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'} según el Documento.`
                               : `No se encontraron trabajadores nuevos. El Excel no contiene asistencia de hoy para actualizar a los ${newCollaboratorImportPreview.existing} existente${newCollaboratorImportPreview.existing === 1 ? '' : 's'}.`
                           : `Se crearán trabajadores no existentes según el Documento${excelIncludesToday ? ` y se actualizará la asistencia del ${formatIsoDateToDisplay(todayIsoDate)} para los existentes` : ''}.`}
-                      </Alert>
+                      </AppAlert>
                     ) : isAttendanceOperation ? null : importOperation === 'full_overwrite_all' ? (
-                      <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      <AppAlert severity="warning" sx={{ mb: 1.5 }}>
                         Se reescribirán datos y asistencia usando el mapeo del archivo.
-                      </Alert>
+                      </AppAlert>
                     ) : importOperation === 'profile_specific_columns' ? (
-                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                      <AppAlert severity="info" sx={{ mb: 1.5 }}>
                         Selecciona las columnas de ficha que necesitas actualizar.
-                      </Alert>
+                      </AppAlert>
                     ) : (
-                      <Alert severity="info" sx={{ mb: 1.5 }}>
+                      <AppAlert severity="info" sx={{ mb: 1.5 }}>
                         Se actualizarán solo las columnas de datos que mapeaste.
-                      </Alert>
+                      </AppAlert>
                     )}
                     {isAttendanceOperation ? (
                         <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: importPrimaryAction === 'attendance_fix' ? 'minmax(240px, 360px)' : '1fr 1fr' }, gap: 1.5, ...(importPrimaryAction === 'attendance_fix' ? { flex: '0 1 360px', minWidth: { xs: '100%', md: 240 }, ml: { md: 'auto' } } : {}) }}>
                           {importPrimaryAction !== 'attendance_fix' && (
-                          <TextField
+                          <AppTextField
                             select
                             size="small"
                             label="Primera columna de fecha (opcional)"
@@ -4060,10 +4097,10 @@ export default function CollaboratorsPage() {
                                 {`#${col.idx + 1} — ${col.header}${col.parsedDate ? ` (${formatIsoDateToDisplay(col.parsedDate)})` : ''}`}
                               </MenuItem>
                             ))}
-                          </TextField>
+                          </AppTextField>
                           )}
                           {((importPrimaryAction === 'attendance_fix' && attendanceCorrectionMode === 'single') || (importPrimaryAction !== 'attendance_fix' && (importOperation === 'attendance_specific_date' || importOperation === 'attendance_specific_date_then_new'))) && (
-                            <TextField
+                            <AppTextField
                               size="small"
                               label="Fecha a actualizar"
                               value={attendanceStartDate ? formatIsoDateToDisplay(attendanceStartDate) : ''}
@@ -4090,7 +4127,7 @@ export default function CollaboratorsPage() {
                             />
                           )}
                           {importOperation === 'attendance_overwrite' && (importPrimaryAction !== 'attendance_fix' || attendanceCorrectionMode === 'range') && (
-                            <TextField
+                            <AppTextField
                               size="small"
                               label="Rango a actualizar"
                               value={
@@ -4124,7 +4161,7 @@ export default function CollaboratorsPage() {
                             />
                           )}
                           {importOperation === 'attendance_specific_dates' && (importPrimaryAction !== 'attendance_fix' || attendanceCorrectionMode === 'multi') && (
-                            <TextField
+                            <AppTextField
                               size="small"
                               label="Fechas a actualizar"
                               value={
@@ -4160,7 +4197,7 @@ export default function CollaboratorsPage() {
                           {importPrimaryAction !== 'attendance_fix' && (
                           <FormControl size="small" sx={{ gridColumn: { xs: '1 / -1', md: '1 / -1' } }}>
                             <InputLabel>{importOperation === 'attendance_specific_workers' ? 'Trabajadores a actualizar (requerido)' : 'Trabajadores a actualizar (opcional)'}</InputLabel>
-                            <Select
+                            <AppSelectControl
                               multiple
                               label={importOperation === 'attendance_specific_workers' ? 'Trabajadores a actualizar (requerido)' : 'Trabajadores a actualizar (opcional)'}
                               value={attendanceTargetDocuments}
@@ -4175,7 +4212,7 @@ export default function CollaboratorsPage() {
                               {attendanceDocumentOptions.map((doc) => (
                                 <MenuItem key={`attendance-doc-${doc}`} value={doc}>{formatDocumentForDisplay(doc)}</MenuItem>
                               ))}
-                            </Select>
+                            </AppSelectControl>
                           </FormControl>
                           )}
                           <Popover
@@ -4255,12 +4292,12 @@ export default function CollaboratorsPage() {
                               />
                               {attendanceCalendarMode === 'multi' && (
                                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, px: 1, pb: 1 }}>
-                                  <Button size="small" onClick={() => setAttendanceSelectedDates([])}>
+                                  <AppButton size="small" onClick={() => setAttendanceSelectedDates([])}>
                                     Limpiar
-                                  </Button>
-                                  <Button size="small" variant="contained" onClick={() => setAttendanceCalendarAnchorEl(null)}>
+                                  </AppButton>
+                                  <AppButton size="small" variant="contained" onClick={() => setAttendanceCalendarAnchorEl(null)}>
                                     Listo
-                                  </Button>
+                                  </AppButton>
                                 </Box>
                               )}
                             </Box>
@@ -4270,7 +4307,7 @@ export default function CollaboratorsPage() {
                   </Box>
                   )}
                   {importValidationMessages.length > 0 && (
-                    <Alert severity={duplicateMappedFields.length > 0 && importValidationMessages.length === 1 ? 'warning' : 'error'} sx={{ mb: 2 }}>
+                    <AppAlert severity={duplicateMappedFields.length > 0 && importValidationMessages.length === 1 ? 'warning' : 'error'} sx={{ mb: 2 }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
                         Revisa el mapeo antes de importar
                       </Typography>
@@ -4281,7 +4318,7 @@ export default function CollaboratorsPage() {
                           </Typography>
                         ))}
                       </Box>
-                    </Alert>
+                    </AppAlert>
                   )}
 
                   {shouldShowFullImportMapper ? (
@@ -4435,7 +4472,7 @@ export default function CollaboratorsPage() {
                                 </Box>
                               )}
                               renderInput={(params) => (
-                                <TextField
+                                <AppTextField
                                   {...params}
                                   label="Mapear a"
                                   placeholder="Buscar campo"
@@ -4466,7 +4503,7 @@ export default function CollaboratorsPage() {
                               }}
                             >
                               <InputLabel>Mapear a</InputLabel>
-                              <Select
+                              <AppSelectControl
                                 value={isAttendanceColumn ? '' : selected}
                                 label="Mapear a"
                                 disabled={isAttendanceColumn || isLockedProfileDocument}
@@ -4558,11 +4595,11 @@ export default function CollaboratorsPage() {
                                     </MenuItem>
                                   )
                                 })}
-                              </Select>
+                              </AppSelectControl>
                             </FormControl>
                             )}
                             {importOperation === 'profile_specific_columns' && !isAttendanceColumn && !isLockedProfileDocument && (
-                              <Button
+                              <AppButton
                                 size="small"
                                 variant={isIgnored ? 'contained' : 'outlined'}
                                 onClick={() => {
@@ -4576,7 +4613,7 @@ export default function CollaboratorsPage() {
                                 sx={{ minHeight: 36, whiteSpace: 'nowrap' }}
                               >
                                 {isIgnored ? 'Mapear' : 'No mapear'}
-                              </Button>
+                              </AppButton>
                             )}
                             </Box>
 
@@ -4639,7 +4676,7 @@ export default function CollaboratorsPage() {
                         <Typography variant="caption" color="text.secondary">Columnas del Excel que no serán importadas:</Typography>
                         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
                           {excelIgnoredHeaders.length > 0 ? excelIgnoredHeaders.map(h => (
-                            <Chip key={h} label={h} size="small" color="warning" />
+                            <AppChip key={h} label={h} size="small" color="warning" />
                           )) : (
                             <Typography variant="caption" color="text.secondary">Ninguna</Typography>
                           )}
@@ -4651,9 +4688,9 @@ export default function CollaboratorsPage() {
 
                   {!importConfigurationCollapsed && (showImportAdvancedOptions || showImportMappingEditor) && (
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-                      <Button size="small" variant="text" onClick={() => setShowImportPreviewTables((prev) => !prev)}>
+                      <AppButton size="small" variant="text" onClick={() => setShowImportPreviewTables((prev) => !prev)}>
                         {showImportPreviewTables ? 'Ocultar vistas técnicas' : 'Mostrar vistas técnicas'}
-                      </Button>
+                      </AppButton>
                     </Box>
                   )}
 
@@ -4716,9 +4753,9 @@ export default function CollaboratorsPage() {
                     Vista previa mapeada
                   </Typography>
                   {mappedPreview.headers.length === 0 ? (
-                    <Alert severity="info" sx={{ mb: 1 }}>
+                    <AppAlert severity="info" sx={{ mb: 1 }}>
                       Aun no hay columnas mapeadas para mostrar el resultado de importacion.
-                    </Alert>
+                    </AppAlert>
                   ) : (
                     <Box sx={{ width: '100%', overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                       <Table size="small" sx={{ tableLayout: 'auto', width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
@@ -4781,13 +4818,13 @@ export default function CollaboratorsPage() {
                         Vista previa asistencia
                       </Typography>
                       {attendancePreview.dates.length === 0 ? (
-                        <Alert severity="info" sx={{ mb: 1 }}>
+                        <AppAlert severity="info" sx={{ mb: 1 }}>
                           No hay columnas de fecha detectadas para generar la vista previa de asistencia.
-                        </Alert>
+                        </AppAlert>
                       ) : attendancePreview.rows.length === 0 ? (
-                        <Alert severity="info" sx={{ mb: 1 }}>
+                        <AppAlert severity="info" sx={{ mb: 1 }}>
                           No hay filas con documento/asistencia para mostrar.
-                        </Alert>
+                        </AppAlert>
                       ) : (
                         <Box sx={{ width: '100%', overflowX: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                           <Table size="small" sx={{ tableLayout: 'auto', width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
@@ -4855,8 +4892,8 @@ export default function CollaboratorsPage() {
 
                 </DialogContent>
                 <DialogActions>
-                  <Button onClick={requestCloseImportDialog} disabled={importing || importParsing}>Cancelar</Button>
-                  <Button
+                  <AppButton onClick={requestCloseImportDialog} disabled={importing || importParsing}>Cancelar</AppButton>
+                  <AppButton
                     variant="contained"
                     color="primary"
                     onClick={async () => {
@@ -4954,40 +4991,18 @@ export default function CollaboratorsPage() {
                     disabled={importing || importParsing || !canExecuteImportByMode || (importPrimaryAction !== 'new_collaborators' && isAttendanceOperation && !needsImportMappingReview && importCandidateDates.length === 0)}
                   >
                     Ejecutar
-                  </Button>
+                  </AppButton>
                 </DialogActions>
               </Dialog>
 
-          <Backdrop
+          <AppLoadingOverlay
             open={importing}
-            sx={{
-              color: '#fff',
-              zIndex: (theme) => theme.zIndex.modal + 10,
-              backgroundColor: 'rgba(8, 23, 40, 0.68)'
-            }}
-          >
-            <Box sx={{ textAlign: 'center', px: 3 }}>
-              <CircularProgress color="inherit" />
-              <Typography variant="h6" sx={{ mt: 2, fontWeight: 700 }}>
-                Importación en proceso
-              </Typography>
-              <Box sx={{ mt: 1.5, width: { xs: 260, sm: 360 } }}>
-                <LinearProgress
-                  variant="determinate"
-                  value={Math.max(0, Math.min(100, importProgress))}
-                  sx={{ height: 8, borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.25)' }}
-                />
-                <Typography variant="caption" sx={{ display: 'block', mt: 0.75, opacity: 0.92 }}>
-                  {Math.max(0, Math.min(100, Math.round(importProgress)))}%
-                </Typography>
-              </Box>
-              <Typography variant="body2" sx={{ mt: 0.5 }}>
-                {importStatusMessage || (importOperation === 'profile_specific_columns'
-                  ? 'Actualizando datos de colaboradores. No cierres esta ventana.'
-                  : 'Escribiendo colaboradores y asistencia. No cierres esta ventana.')}
-              </Typography>
-            </Box>
-          </Backdrop>
+            title="Importación en proceso"
+            progress={importProgress}
+            message={importStatusMessage || (importOperation === 'profile_specific_columns'
+              ? 'Actualizando datos de colaboradores. No cierres esta ventana.'
+              : 'Escribiendo colaboradores y asistencia. No cierres esta ventana.')}
+          />
 
           {/* Vista principal */}
           {showAttendanceForUser ? (
@@ -5008,7 +5023,7 @@ export default function CollaboratorsPage() {
                 renderImportAction={() => (
                   <Tooltip title="Cargar colaboradores" arrow>
                     <span className="attendance-action attendance-compact-action">
-                      <IconButton
+                      <AppIconButton
                         onClick={handleUploadFile}
                         aria-label="Cargar colaboradores"
                         sx={{
@@ -5026,7 +5041,7 @@ export default function CollaboratorsPage() {
                         }}
                       >
                         <Upload fontSize="small" />
-                      </IconButton>
+                      </AppIconButton>
                     </span>
                   </Tooltip>
                 )}
@@ -5047,9 +5062,9 @@ export default function CollaboratorsPage() {
               }}
             >
             {filteredCollaborators.map((collaborator) => (
-              <Paper 
+              <Paper
                 key={collaborator.id} 
-                elevation={2}
+                variant="outlined"
                 sx={{ 
                   minWidth: 0,
                   p: { xs: 1.5, md: 1.25, xl: 1.5 },
@@ -5058,6 +5073,7 @@ export default function CollaboratorsPage() {
                   flexDirection: 'column',
                   borderRadius: 2,
                   border: `1px solid ${colors.gray1}`,
+                  boxShadow: 'none',
                   '&:hover': {
                     borderColor: colors.blue6,
                     boxShadow: `0 4px 12px ${colors.blue15}`
@@ -5096,7 +5112,7 @@ export default function CollaboratorsPage() {
                       {formatDocumentForDisplay(collaborator.document)}
                     </Typography>
                   </Box>
-                  <Chip 
+                  <AppChip
                     label={collaborator.is_active ? 'Vigente' : 'Finiquitado'}
                     size="small"
                     sx={{
@@ -5194,7 +5210,7 @@ export default function CollaboratorsPage() {
                     }
                   }}
                 >
-                  <Button
+                  <AppButton
                     variant="outlined"
                     size="small"
                     startIcon={<EventNote />}
@@ -5210,8 +5226,8 @@ export default function CollaboratorsPage() {
                     onClick={() => openDailyStatusDialog(collaborator)}
                   >
                     Estado día
-                  </Button>
-                  <Button
+                  </AppButton>
+                  <AppButton
                     variant="outlined"
                     size="small"
                     startIcon={<Edit />}
@@ -5227,9 +5243,9 @@ export default function CollaboratorsPage() {
                     onClick={() => handleEditCollaborator(collaborator)}
                   >
                     Editar
-                  </Button>
+                  </AppButton>
                   {collaborator.is_active ? (
-                    <Button
+                    <AppButton
                       variant="outlined"
                       size="small"
                       startIcon={<Trash2 size={16} />}
@@ -5245,9 +5261,9 @@ export default function CollaboratorsPage() {
                       onClick={() => handleDeactivateCollaborator(collaborator)}
                     >
                       Desactivar
-                    </Button>
+                    </AppButton>
                   ) : (
-                    <Button
+                    <AppButton
                       variant="outlined"
                       size="small"
                       startIcon={<Add />}
@@ -5263,7 +5279,7 @@ export default function CollaboratorsPage() {
                       onClick={() => handleActivateCollaborator(collaborator)}
                     >
                       Activar
-                    </Button>
+                    </AppButton>
                   )}
                 </Box>
               </Paper>
@@ -5277,7 +5293,10 @@ export default function CollaboratorsPage() {
                 width: '100%',
                 maxWidth: '100%',
                 overflowX: 'auto',
-                overflowY: 'hidden'
+                overflowY: 'hidden',
+                border: `1px solid ${colors.gray1}`,
+                borderRadius: 2,
+                boxShadow: 'none',
               }}
             >
               <Table
@@ -5300,13 +5319,13 @@ export default function CollaboratorsPage() {
                         ...getPinnedHeaderSx('avatar')
                       }}
                     >
-                      <IconButton
+                      <AppIconButton
                         size="small"
                         onClick={() => togglePinnedColumn('avatar')}
                         sx={{ color: isPinnedColumn('avatar') ? colors.blue6 : colors.gray6 }}
                       >
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                     </TableCell>
                     <TableCell
                       sx={{
@@ -5317,13 +5336,13 @@ export default function CollaboratorsPage() {
                       }}
                     >
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           onClick={() => togglePinnedColumn('name')}
                           sx={{ color: isPinnedColumn('name') ? colors.blue6 : colors.gray6 }}
                         >
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <Box
                           sx={{
                             cursor: 'pointer',
@@ -5363,13 +5382,13 @@ export default function CollaboratorsPage() {
                       }}
                     >
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <IconButton
+                        <AppIconButton
                           size="small"
                           onClick={() => togglePinnedColumn('document')}
                           sx={{ color: isPinnedColumn('document') ? colors.blue6 : colors.gray6, mr: 0.5 }}
                         >
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'document'} direction={tableSortField === 'document' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('document')}>
                           Documento
                         </TableSortLabel>
@@ -5383,64 +5402,64 @@ export default function CollaboratorsPage() {
                         ...getPinnedHeaderSx('email')
                       }}
                     >
-                      <IconButton
+                      <AppIconButton
                         size="small"
                         onClick={() => togglePinnedColumn('email')}
                         sx={{ color: isPinnedColumn('email') ? colors.blue6 : colors.gray6, mr: 0.5 }}
                       >
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'email'} direction={tableSortField === 'email' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('email')}>
                         Email
                       </TableSortLabel>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 120, ...getPinnedHeaderSx('phone') }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <IconButton size="small" onClick={() => togglePinnedColumn('phone')} sx={{ color: isPinnedColumn('phone') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                        <AppIconButton size="small" onClick={() => togglePinnedColumn('phone')} sx={{ color: isPinnedColumn('phone') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'phone'} direction={tableSortField === 'phone' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('phone')}>
                           Teléfono
                         </TableSortLabel>
                       </Box>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 120, ...getPinnedHeaderSx('position') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('position')} sx={{ color: isPinnedColumn('position') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('position')} sx={{ color: isPinnedColumn('position') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'position'} direction={tableSortField === 'position' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('position')}>
                         Cargo
                       </TableSortLabel>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 120, ...getPinnedHeaderSx('condition') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('condition')} sx={{ color: isPinnedColumn('condition') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('condition')} sx={{ color: isPinnedColumn('condition') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'condition'} direction={tableSortField === 'condition' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('condition')}>
                         Condición
                       </TableSortLabel>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 120, ...getPinnedHeaderSx('specialty') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('specialty')} sx={{ color: isPinnedColumn('specialty') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('specialty')} sx={{ color: isPinnedColumn('specialty') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'specialty'} direction={tableSortField === 'specialty' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('specialty')}>
                         Especialidad
                       </TableSortLabel>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 110, ...getPinnedHeaderSx('gender') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('gender')} sx={{ color: isPinnedColumn('gender') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('gender')} sx={{ color: isPinnedColumn('gender') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'gender'} direction={tableSortField === 'gender' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('gender')}>
                         Género
                       </TableSortLabel>
                     </TableCell>
                     {showNationality && (
                       <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 120, ...getPinnedHeaderSx('nationality') }}>
-                        <IconButton size="small" onClick={() => togglePinnedColumn('nationality')} sx={{ color: isPinnedColumn('nationality') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                        <AppIconButton size="small" onClick={() => togglePinnedColumn('nationality')} sx={{ color: isPinnedColumn('nationality') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'nationality'} direction={tableSortField === 'nationality' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('nationality')}>
                           Nacionalidad
                         </TableSortLabel>
@@ -5448,27 +5467,27 @@ export default function CollaboratorsPage() {
                     )}
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 140, ...getPinnedHeaderSx('marital_status') }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <IconButton size="small" onClick={() => togglePinnedColumn('marital_status')} sx={{ color: isPinnedColumn('marital_status') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                        <AppIconButton size="small" onClick={() => togglePinnedColumn('marital_status')} sx={{ color: isPinnedColumn('marital_status') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'marital_status'} direction={tableSortField === 'marital_status' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('marital_status')}>
                           Tipo Trabajador
                         </TableSortLabel>
                       </Box>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 140, ...getPinnedHeaderSx('contract') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('contract')} sx={{ color: isPinnedColumn('contract') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('contract')} sx={{ color: isPinnedColumn('contract') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       <TableSortLabel active={tableSortField === 'contract'} direction={tableSortField === 'contract' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('contract')}>
                         Contrato
                       </TableSortLabel>
                     </TableCell>
                     {showSalary && (
                       <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 100, ...getPinnedHeaderSx('salary') }}>
-                        <IconButton size="small" onClick={() => togglePinnedColumn('salary')} sx={{ color: isPinnedColumn('salary') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                        <AppIconButton size="small" onClick={() => togglePinnedColumn('salary')} sx={{ color: isPinnedColumn('salary') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'salary'} direction={tableSortField === 'salary' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('salary')}>
                           Salario
                         </TableSortLabel>
@@ -5476,18 +5495,18 @@ export default function CollaboratorsPage() {
                     )}
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 100, ...getPinnedHeaderSx('is_active') }}>
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <IconButton size="small" onClick={() => togglePinnedColumn('is_active')} sx={{ color: isPinnedColumn('is_active') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                        <AppIconButton size="small" onClick={() => togglePinnedColumn('is_active')} sx={{ color: isPinnedColumn('is_active') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                           <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                        </IconButton>
+                        </AppIconButton>
                         <TableSortLabel active={tableSortField === 'is_active'} direction={tableSortField === 'is_active' ? tableSortDirection : 'asc'} onClick={() => handleTableSort('is_active')}>
                           Vigencia
                         </TableSortLabel>
                       </Box>
                     </TableCell>
                     <TableCell sx={{ fontWeight: 600, color: colors.blue1, minWidth: 100, ...getPinnedHeaderSx('actions') }}>
-                      <IconButton size="small" onClick={() => togglePinnedColumn('actions')} sx={{ color: isPinnedColumn('actions') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
+                      <AppIconButton size="small" onClick={() => togglePinnedColumn('actions')} sx={{ color: isPinnedColumn('actions') ? colors.blue6 : colors.gray6, mr: 0.5 }}>
                         <PushPin fontSize="inherit" sx={{ transform: 'rotate(-35deg)' }} />
-                      </IconButton>
+                      </AppIconButton>
                       Acciones
                     </TableCell>
                   </TableRow>
@@ -5555,7 +5574,7 @@ export default function CollaboratorsPage() {
                       )}
                       <TableCell sx={{ ...getPinnedCellSx('marital_status'), textAlign: 'center' }}>
                         {collaborator.worker_type ? (
-                          <Chip
+                          <AppChip
                             label={upperText(collaborator.worker_type, 'SIN ESPECIFICAR')}
                             size="small"
                             sx={{
@@ -5594,7 +5613,7 @@ export default function CollaboratorsPage() {
                         </TableCell>
                       )}
                       <TableCell sx={{ ...getPinnedCellSx('is_active'), textAlign: 'center' }}>
-                        <Chip 
+                        <AppChip
                           label={collaborator.is_active ? 'Vigente' : 'Finiquitado'}
                           size="small"
                           sx={{
@@ -5607,7 +5626,7 @@ export default function CollaboratorsPage() {
                       </TableCell>
                       <TableCell sx={getPinnedCellSx('actions')}>
                         <Box display="flex" gap={0.5}>
-                          <IconButton 
+                          <AppIconButton
                             size="small" 
                             sx={{ 
                               color: colors.blue4,
@@ -5616,8 +5635,8 @@ export default function CollaboratorsPage() {
                             onClick={() => openDailyStatusDialog(collaborator)}
                           >
                             <EventNote fontSize="small" />
-                          </IconButton>
-                          <IconButton 
+                          </AppIconButton>
+                          <AppIconButton
                             size="small" 
                             sx={{ 
                               color: colors.blue6,
@@ -5626,9 +5645,9 @@ export default function CollaboratorsPage() {
                             onClick={() => handleEditCollaborator(collaborator)}
                           >
                             <Edit fontSize="small" />
-                          </IconButton>
+                          </AppIconButton>
                           {collaborator.is_active ? (
-                            <IconButton 
+                            <AppIconButton
                               size="small" 
                               sx={{ 
                                 color: colors.gray4,
@@ -5637,9 +5656,9 @@ export default function CollaboratorsPage() {
                               onClick={() => handleDeactivateCollaborator(collaborator)}
                             >
                               <Trash2 size={16} />
-                            </IconButton>
+                            </AppIconButton>
                           ) : (
-                            <IconButton 
+                            <AppIconButton
                               size="small" 
                               sx={{ 
                                 color: colors.blue4,
@@ -5648,7 +5667,7 @@ export default function CollaboratorsPage() {
                               onClick={() => handleActivateCollaborator(collaborator)}
                             >
                               <Add fontSize="small" />
-                            </IconButton>
+                            </AppIconButton>
                           )}
                         </Box>
                       </TableCell>
@@ -5721,7 +5740,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Nombres *
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="first_name"
                     fullWidth 
                     variant="outlined" 
@@ -5740,7 +5759,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Apellidos *
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="last_name"
                     fullWidth 
                     variant="outlined" 
@@ -5761,7 +5780,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     RUT / DNI / CI
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="document"
                     fullWidth 
                     variant="outlined" 
@@ -5833,7 +5852,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Email *
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="email" 
                     fullWidth 
                     type="email" 
@@ -5861,7 +5880,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     País
                   </Typography>
-                  <TextField
+                  <AppTextField
                     name="country"
                     fullWidth
                     variant="outlined"
@@ -5874,7 +5893,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Región
                   </Typography>
-                  <TextField
+                  <AppTextField
                     name="region"
                     fullWidth
                     variant="outlined"
@@ -5887,7 +5906,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Comuna / Ciudad
                   </Typography>
-                  <TextField
+                  <AppTextField
                     name="commune"
                     fullWidth
                     variant="outlined"
@@ -5900,17 +5919,16 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Fecha de Nacimiento
                   </Typography>
-                  <TextField name="birth_date" fullWidth type="date" variant="outlined" InputLabelProps={{ shrink: true }} size="small" />
+                  <AppTextField name="birth_date" fullWidth type="date" variant="outlined" InputLabelProps={{ shrink: true }} size="small" />
                 </Box>
                 
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Sexo
                   </Typography>
-                  <TextField
+                  <AppSelect
                     name="gender"
                     fullWidth
-                    select
                     variant="outlined"
                     size="small"
                     value={gender}
@@ -5928,101 +5946,39 @@ export default function CollaboratorsPage() {
                         {option.label}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </AppSelect>
                 </Box>
                 
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Foto del Colaborador
                   </Typography>
-                  <input
-                    type="file"
-                    id="photo-upload"
+                  <FileDropzone
+                    file={photoFile}
                     accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) {
-                        setPhotoFile(file)
-                      }
-                    }}
+                    label="Arrastra la foto del colaborador aquí"
+                    helperText="Imagen JPG, PNG, WEBP u otro formato compatible"
+                    onFileChange={setPhotoFile}
                   />
-                  <label htmlFor="photo-upload">
-                    <Button
-                      variant="outlined"
-                      component="span"
-                      fullWidth
-                      size="medium"
-                      startIcon={<Add />}
-                      sx={{
-                        borderColor: colors.gray4,
-                        color: colors.blue1,
-                        borderRadius: 1,
-                        minHeight: 36,
-                        py: 1,
-                        '&:hover': {
-                          borderColor: colors.blue6,
-                          backgroundColor: colors.blue1 + '10'
-                        }
-                      }}
-                    >
-                      {photoFile ? 'Cambiar Foto' : 'Seleccionar Foto'}
-                    </Button>
-                  </label>
-                    {photoFile && (
-                    <Typography variant="caption" sx={{ color: colors.blue6, mt: 1, display: 'block' }}>
-                    ✓ {photoFile.name}
-                    </Typography>
-                  )}
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Firma del Colaborador
                   </Typography>
-                  <input
-                    type="file"
-                    id="signature-upload"
+                  <FileDropzone
+                    file={signatureFile}
                     accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) setSignatureFile(file)
-                    }}
+                    label="Arrastra la firma del colaborador aquí"
+                    helperText="Imagen JPG, PNG, WEBP u otro formato compatible"
+                    onFileChange={setSignatureFile}
                   />
-                  <label htmlFor="signature-upload">
-                    <Button
-                      variant="outlined"
-                      component="span"
-                      fullWidth
-                      size="medium"
-                      startIcon={<Add />}
-                      sx={{
-                        borderColor: colors.gray4,
-                        color: colors.blue1,
-                        borderRadius: 1,
-                        minHeight: 36,
-                        py: 1,
-                        '&:hover': {
-                          borderColor: colors.blue6,
-                          backgroundColor: colors.blue1 + '10'
-                        }
-                      }}
-                    >
-                      {signatureFile ? 'Cambiar Firma' : 'Seleccionar Firma'}
-                    </Button>
-                  </label>
-                  {signatureFile && (
-                    <Typography variant="caption" sx={{ color: colors.blue6, mt: 1, display: 'block' }}>
-                      ✓ {signatureFile.name}
-                    </Typography>
-                  )}
                 </Box>
                 
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Dirección
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="address"
                     fullWidth 
                     variant="outlined" 
@@ -6064,7 +6020,7 @@ export default function CollaboratorsPage() {
                     onChange={(event, newValue) => setSpecialty(newValue || '')}
                     onInputChange={(event, newInputValue) => setSpecialty(newInputValue)}
                     renderInput={(params) => (
-                      <TextField
+                      <AppTextField
                         {...params}
                         name="specialty"
                         fullWidth
@@ -6078,7 +6034,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ fontWeight: 500, color: colors.blue1 }}>
                       Cargo/Posición *
                     </Typography>
-                    <Chip 
+                    <AppChip
                       label={companyIndustry.toLowerCase()} 
                       size="small" 
                       sx={{ 
@@ -6178,7 +6134,7 @@ export default function CollaboratorsPage() {
                       }
                     }}
                     renderInput={(params) => (
-                      <TextField
+                      <AppTextField
                         {...params}
                         name="position"
                         fullWidth
@@ -6206,7 +6162,7 @@ export default function CollaboratorsPage() {
                     }}
                   />
                   {positionError && (
-                    <Alert 
+                    <AppAlert
                       severity="error" 
                       sx={{ 
                         mt: 1, 
@@ -6217,10 +6173,10 @@ export default function CollaboratorsPage() {
                       }}
                     >
                       {positionError}
-                    </Alert>
+                    </AppAlert>
                   )}
                   {positionWarning && (
-                    <Alert 
+                    <AppAlert
                       severity="warning" 
                       icon={<Warning />}
                       sx={{ 
@@ -6232,7 +6188,7 @@ export default function CollaboratorsPage() {
                       }}
                     >
                       {positionWarning}
-                    </Alert>
+                    </AppAlert>
                   )}
                 </Box>
                 
@@ -6241,8 +6197,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Tipo de Trabajador
                   </Typography>
-                  <TextField
-                    select
+                  <AppSelect
                     fullWidth
                     variant="outlined"
                     size="small"
@@ -6261,14 +6216,13 @@ export default function CollaboratorsPage() {
                     <option value="Contratista">Contratista</option>
                     <option value="Subcontratista">Subcontratista</option>
                     <option value="Consultor">Consultor</option>
-                  </TextField>
+                  </AppSelect>
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Condicion
                   </Typography>
-                  <TextField
-                    select
+                  <AppSelect
                     fullWidth
                     variant="outlined"
                     size="small"
@@ -6281,13 +6235,13 @@ export default function CollaboratorsPage() {
                         {option}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </AppSelect>
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Contrato
                   </Typography>
-                  <TextField
+                  <AppTextField
                     fullWidth
                     variant="outlined"
                     size="small"
@@ -6300,7 +6254,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Turno / Jornada
                   </Typography>
-                  <TextField
+                  <AppTextField
                     fullWidth
                     variant="outlined"
                     size="small"
@@ -6313,8 +6267,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Excepcion
                   </Typography>
-                  <TextField
-                    select
+                  <AppSelect
                     fullWidth
                     variant="outlined"
                     size="small"
@@ -6331,9 +6284,9 @@ export default function CollaboratorsPage() {
                         {option}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </AppSelect>
                   {exceptionChoice === EXCEPTION_OTHER_OPTION && (
-                    <TextField
+                    <AppTextField
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6349,7 +6302,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Comentario de EPP (opcional)
                   </Typography>
-                  <TextField
+                  <AppTextField
                     name="epp_details"
                     fullWidth
                     variant="outlined"
@@ -6365,7 +6318,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Salario
                   </Typography>
-                  <TextField 
+                  <AppTextField
                     name="salary" 
                     fullWidth 
                     type="text" 
@@ -6406,7 +6359,7 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Fecha de Ingreso *
                   </Typography>
-                  <TextField name="hire_date" fullWidth type="date" variant="outlined" InputLabelProps={{ shrink: true }} required size="small" />
+                  <AppTextField name="hire_date" fullWidth type="date" variant="outlined" InputLabelProps={{ shrink: true }} required size="small" />
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
@@ -6430,10 +6383,9 @@ export default function CollaboratorsPage() {
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Ropa Superior
                   </Typography>
-                  <TextField
+                  <AppSelect
                     name="upper_clothing_size"
                     fullWidth
-                    select
                     variant="outlined"
                     size="small"
                     sx={{
@@ -6449,16 +6401,15 @@ export default function CollaboratorsPage() {
                         {size}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </AppSelect>
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Ropa Inferior
                   </Typography>
-                  <TextField
+                  <AppSelect
                     name="lower_clothing_size"
                     fullWidth
-                    select
                     variant="outlined"
                     size="small"
                     sx={{
@@ -6474,18 +6425,18 @@ export default function CollaboratorsPage() {
                         {size}
                       </MenuItem>
                     ))}
-                  </TextField>
+                  </AppSelect>
                 </Box>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                     Talla de Zapatos
                   </Typography>
-                  <TextField name="shoe_size" fullWidth variant="outlined" placeholder="40, 41, 42" size="small" />
+                  <AppTextField name="shoe_size" fullWidth variant="outlined" placeholder="40, 41, 42" size="small" />
                 </Box>
               </Box>
             </DialogContent>
             <DialogActions sx={{ px: 3, py: 2, gap: 1.5 }}>
-              <Button 
+              <AppButton
                 onClick={() => {
                   resetCollaboratorForm()
                   setOpenDialog(false)
@@ -6494,8 +6445,8 @@ export default function CollaboratorsPage() {
                 sx={{ textTransform: 'none', minWidth: 120 }}
               >
                 Cancelar
-              </Button>
-              <Button 
+              </AppButton>
+              <AppButton
                 variant="contained"
                 onClick={async () => {
                   if (COLLABORATORS_DEBUG) console.log('🔄 Iniciando guardado de colaborador...')
@@ -6568,7 +6519,7 @@ export default function CollaboratorsPage() {
                 }}
               >
                 Guardar Colaborador
-              </Button>
+              </AppButton>
             </DialogActions>
           </Dialog>
 
@@ -6610,7 +6561,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Nombres *
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="first_name" 
                       fullWidth 
                       variant="outlined" 
@@ -6629,7 +6580,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Apellidos *
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="last_name" 
                       fullWidth 
                       variant="outlined" 
@@ -6649,7 +6600,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       RUT / DNI / CI *
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="document" 
                       fullWidth 
                       variant="outlined" 
@@ -6661,7 +6612,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Email *
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="email" 
                       fullWidth 
                       variant="outlined" 
@@ -6696,7 +6647,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Dirección
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="address" 
                       fullWidth 
                       variant="outlined" 
@@ -6732,7 +6683,7 @@ export default function CollaboratorsPage() {
                         setPositionValue(newInputValue)
                       }}
                       renderInput={(params) => (
-                        <TextField
+                        <AppTextField
                           {...params}
                           size="small"
                           placeholder="Selecciona o escribe un cargo"
@@ -6768,7 +6719,7 @@ export default function CollaboratorsPage() {
                         onChange={(event, newValue) => setSpecialty(newValue || '')}
                         onInputChange={(event, newInputValue) => setSpecialty(newInputValue)}
                         renderInput={(params) => (
-                          <TextField
+                          <AppTextField
                             {...params}
                             name="specialty"
                             fullWidth
@@ -6783,8 +6734,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Tipo de Trabajador *
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6797,13 +6747,13 @@ export default function CollaboratorsPage() {
                       <MenuItem value="Contratista">Contratista</MenuItem>
                       <MenuItem value="Subcontratista">Subcontratista</MenuItem>
                       <MenuItem value="Consultor">Consultor</MenuItem>
-                    </TextField>
+                    </AppSelect>
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Cargo vigente desde
                     </Typography>
-                    <TextField
+                    <AppTextField
                       type="date"
                       fullWidth
                       variant="outlined"
@@ -6820,8 +6770,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Condicion
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6835,7 +6784,7 @@ export default function CollaboratorsPage() {
                           {option}
                         </MenuItem>
                       ))}
-                    </TextField>
+                    </AppSelect>
                     <Typography variant="caption" sx={{ color: colors.gray6 }}>
                       Si seleccionas FINIQUITADO, la vigencia se actualizará automáticamente a FINIQUITADO.
                     </Typography>
@@ -6844,7 +6793,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Contrato
                     </Typography>
-                    <TextField
+                    <AppTextField
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6865,7 +6814,7 @@ export default function CollaboratorsPage() {
                       gridTemplateColumns={{ xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)' }}
                       gap={1.2}
                     >
-                      <TextField
+                      <AppTextField
                         label="Desde"
                         type="date"
                         size="small"
@@ -6873,7 +6822,7 @@ export default function CollaboratorsPage() {
                         onChange={(e) => setHistoryValidFrom(e.target.value)}
                         InputLabelProps={{ shrink: true }}
                       />
-                      <TextField
+                      <AppTextField
                         label="Hasta"
                         type="date"
                         size="small"
@@ -6889,7 +6838,7 @@ export default function CollaboratorsPage() {
                         onChange={(event, newValue) => setHistoryPosition(newValue || '')}
                         onInputChange={(event, newInputValue) => setHistoryPosition(newInputValue)}
                         renderInput={(params) => (
-                          <TextField
+                          <AppTextField
                             {...params}
                             label="Cargo"
                             size="small"
@@ -6904,15 +6853,14 @@ export default function CollaboratorsPage() {
                         onChange={(event, newValue) => setHistorySpecialty(newValue || '')}
                         onInputChange={(event, newInputValue) => setHistorySpecialty(newInputValue)}
                         renderInput={(params) => (
-                          <TextField
+                          <AppTextField
                             {...params}
                             label="Especialidad"
                             size="small"
                           />
                         )}
                       />
-                      <TextField
-                        select
+                      <AppSelect
                         label="Tipo"
                         size="small"
                         value={historyWorkerType}
@@ -6925,23 +6873,23 @@ export default function CollaboratorsPage() {
                         <MenuItem value="Contratista">Contratista</MenuItem>
                         <MenuItem value="Subcontratista">Subcontratista</MenuItem>
                         <MenuItem value="Consultor">Consultor</MenuItem>
-                      </TextField>
+                      </AppSelect>
                     </Box>
                     <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
-                      <Button
+                      <AppButton
                         variant="outlined"
                         onClick={handleSaveRoleHistoryCorrection}
                         disabled={savingRoleHistory}
                       >
                         {savingRoleHistory ? 'Guardando...' : 'Guardar corrección histórica'}
-                      </Button>
+                      </AppButton>
                     </Box>
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Turno / Jornada
                     </Typography>
-                    <TextField
+                    <AppTextField
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6954,8 +6902,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Excepcion
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -6972,9 +6919,9 @@ export default function CollaboratorsPage() {
                           {option}
                         </MenuItem>
                       ))}
-                    </TextField>
+                    </AppSelect>
                     {exceptionChoice === EXCEPTION_OTHER_OPTION && (
-                      <TextField
+                      <AppTextField
                         fullWidth
                         variant="outlined"
                         size="small"
@@ -6989,7 +6936,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Salario
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="salary" 
                       fullWidth 
                       variant="outlined" 
@@ -7028,7 +6975,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Fecha de Nacimiento
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="birth_date" 
                       fullWidth 
                       variant="outlined" 
@@ -7042,7 +6989,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Fecha de Ingreso
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="hire_date" 
                       fullWidth 
                       variant="outlined" 
@@ -7056,8 +7003,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Ropa Superior
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -7069,14 +7015,13 @@ export default function CollaboratorsPage() {
                           {size}
                         </MenuItem>
                       ))}
-                    </TextField>
+                    </AppSelect>
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Ropa Inferior
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -7088,13 +7033,13 @@ export default function CollaboratorsPage() {
                           {size}
                         </MenuItem>
                       ))}
-                    </TextField>
+                    </AppSelect>
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Talla de Zapatos
                     </Typography>
-                    <TextField 
+                    <AppTextField
                       name="shoe_size" 
                       fullWidth 
                       variant="outlined" 
@@ -7107,8 +7052,7 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Sexo
                     </Typography>
-                    <TextField
-                      select
+                    <AppSelect
                       fullWidth
                       variant="outlined"
                       size="small"
@@ -7120,48 +7064,19 @@ export default function CollaboratorsPage() {
                           {option.label}
                         </MenuItem>
                       ))}
-                    </TextField>
+                    </AppSelect>
                   </Box>
                   <Box>
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Foto del Colaborador
                     </Typography>
-                    <input
-                      type="file"
-                      id="edit-photo-upload"
+                    <FileDropzone
+                      file={photoFile}
                       accept="image/*"
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) {
-                          setPhotoFile(file)
-                        }
-                      }}
+                      label="Arrastra una nueva foto aquí"
+                      helperText="Imagen JPG, PNG, WEBP u otro formato compatible"
+                      onFileChange={setPhotoFile}
                     />
-                    <label htmlFor="edit-photo-upload">
-                      <Button
-                        variant="outlined"
-                        component="span"
-                        fullWidth
-                        size="small"
-                        startIcon={<Add />}
-                        sx={{
-                          borderColor: colors.gray4,
-                          color: colors.blue1,
-                          '&:hover': {
-                            borderColor: colors.blue6,
-                            backgroundColor: colors.blue1 + '10'
-                          }
-                        }}
-                      >
-                        {photoFile ? 'Cambiar Foto' : 'Seleccionar Nueva Foto'}
-                      </Button>
-                    </label>
-                    {photoFile && (
-                      <Typography variant="caption" sx={{ color: colors.blue6, mt: 1, display: 'block' }}>
-                        ✓ {photoFile.name}
-                      </Typography>
-                    )}
                     {editingCollaborator.photo_url && !photoFile && (
                       <Typography variant="caption" sx={{ color: colors.gray6, mt: 1, display: 'block' }}>
                         📷 Foto actual disponible
@@ -7172,40 +7087,13 @@ export default function CollaboratorsPage() {
                     <Typography variant="body2" sx={{ mb: 1, fontWeight: 500, color: colors.blue1 }}>
                       Firma del Colaborador
                     </Typography>
-                    <input
-                      type="file"
-                      id="edit-signature-upload"
+                    <FileDropzone
+                      file={signatureFile}
                       accept="image/*"
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) setSignatureFile(file)
-                      }}
+                      label="Arrastra una nueva firma aquí"
+                      helperText="Imagen JPG, PNG, WEBP u otro formato compatible"
+                      onFileChange={setSignatureFile}
                     />
-                    <label htmlFor="edit-signature-upload">
-                      <Button
-                        variant="outlined"
-                        component="span"
-                        fullWidth
-                        size="small"
-                        startIcon={<Add />}
-                        sx={{
-                          borderColor: colors.gray4,
-                          color: colors.blue1,
-                          '&:hover': {
-                            borderColor: colors.blue6,
-                            backgroundColor: colors.blue1 + '10'
-                          }
-                        }}
-                      >
-                        {signatureFile ? 'Cambiar Firma' : 'Seleccionar Nueva Firma'}
-                      </Button>
-                    </label>
-                    {signatureFile && (
-                      <Typography variant="caption" sx={{ color: colors.blue6, mt: 1, display: 'block' }}>
-                        ✓ {signatureFile.name}
-                      </Typography>
-                    )}
                     {editingCollaborator.signature_url && !signatureFile && (
                       <Typography variant="caption" sx={{ color: colors.gray6, mt: 1, display: 'block' }}>
                         ✍️ Firma actual disponible
@@ -7216,7 +7104,7 @@ export default function CollaboratorsPage() {
               )}
             </DialogContent>
             <DialogActions sx={{ px: 3, py: 2, gap: 1.5 }}>
-              <Button 
+              <AppButton
                 onClick={() => {
                   setOpenEditDialog(false)
                   setEditingCollaborator(null)
@@ -7226,8 +7114,8 @@ export default function CollaboratorsPage() {
                 sx={{ textTransform: 'none', minWidth: 120 }}
               >
                 Cancelar
-              </Button>
-              <Button 
+              </AppButton>
+              <AppButton
                 variant="contained"
                 onClick={async () => {
                   if (COLLABORATORS_DEBUG) console.log('🔄 Iniciando actualización de colaborador...')
@@ -7300,7 +7188,7 @@ export default function CollaboratorsPage() {
                 }}
               >
                 Actualizar Colaborador
-              </Button>
+              </AppButton>
             </DialogActions>
           </Dialog>
           <Dialog
@@ -7314,14 +7202,14 @@ export default function CollaboratorsPage() {
             </DialogTitle>
             <DialogContent sx={{ pt: 1 }}>
               <Box sx={{ display: 'grid', gap: 2, mt: 1 }}>
-                <TextField
+                <AppTextField
                   label="Colaborador"
                   value={dailyStatusCollaborator ? getDisplayName(dailyStatusCollaborator) : ''}
                   fullWidth
                   size="small"
                   InputProps={{ readOnly: true }}
                 />
-                <TextField
+                <AppTextField
                   label="Fecha"
                   type="date"
                   value={dailyStatusDate}
@@ -7330,8 +7218,7 @@ export default function CollaboratorsPage() {
                   size="small"
                   InputLabelProps={{ shrink: true }}
                 />
-                <TextField
-                  select
+                <AppSelect
                   label="Estado del día"
                   value={dailyStatusValue}
                   onChange={(e) => setDailyStatusValue(e.target.value)}
@@ -7341,8 +7228,8 @@ export default function CollaboratorsPage() {
                   {DAILY_STATUS_OPTIONS.map((option) => (
                     <MenuItem key={option} value={option}>{option}</MenuItem>
                   ))}
-                </TextField>
-                <TextField
+                </AppSelect>
+                <AppTextField
                   label="Motivo / Observación"
                   value={dailyStatusReason}
                   onChange={(e) => setDailyStatusReason(e.target.value)}
@@ -7354,17 +7241,16 @@ export default function CollaboratorsPage() {
               </Box>
             </DialogContent>
             <DialogActions sx={{ px: 3, py: 2 }}>
-              <Button onClick={() => setDailyStatusDialogOpen(false)} variant="outlined" sx={{ textTransform: 'none' }}>
+              <AppButton onClick={() => setDailyStatusDialogOpen(false)} variant="outlined">
                 Cancelar
-              </Button>
-              <Button
+              </AppButton>
+              <AppButton
                 onClick={saveDailyStatus}
                 variant="contained"
                 disabled={savingDailyStatus || !dailyStatusValue}
-                sx={{ textTransform: 'none' }}
               >
                 {savingDailyStatus ? 'Guardando...' : 'Guardar estado diario'}
-              </Button>
+              </AppButton>
             </DialogActions>
           </Dialog>
         </Container>

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Script from 'next/script';
+import { useSession } from 'next-auth/react';
 import {
   Accordion,
   AccordionDetails,
@@ -78,7 +79,7 @@ import UserHeader from '@/components/layout/UserHeader';
 import ConfirmActionDialog from '@/components/ui/ConfirmActionDialog';
 import { AppAlert } from '@/components/ui/AppAlert';
 import { AppButton } from '@/components/ui/AppButton';
-import { AppSelectControl, AppTextField } from '@/components/ui/FormControls';
+import { AppFormStack, AppSearchField, AppSelectControl, AppTextField } from '@/components/ui/FormControls';
 import { AppCheckbox, AppIconButton } from '@/components/ui/InteractiveControls';
 import { AppTabs } from '@/components/ui/AppTabs';
 import { useAppSnackbar } from '@/components/ui/AppSnackbarProvider';
@@ -87,6 +88,11 @@ import { AppWeekNavigator } from '@/components/ui/AppWeekNavigator';
 import { AppFloatingActionButton } from '@/components/ui/AppFloatingActionButton';
 import { colors } from '@/theme/theme';
 import { normalizeUppercaseDisplayText } from '@/lib/normalize';
+import {
+  isManagementTab,
+  type ManagementTab,
+  resolveAllowedManagementTabs,
+} from '@/lib/managementPermissions';
 import TransmittalPanel from './TransmittalPanel';
 
 type FieldReportRecord = Record<string, any>;
@@ -455,6 +461,18 @@ type HhMatrixSort = {
   direction: 'asc' | 'desc';
 };
 
+const HH_MATRIX_NON_BASE_ALL_TIME = '__NON_BASE_ALL_TIME__';
+
+const isHhMatrixBaseFront = (value: unknown) => {
+  const front = normalizeLabel(value);
+  return (
+    front === 'CANALETAS' ||
+    front === 'PISCINAS' ||
+    front.includes('CONTRATO BASE CANALETAS') ||
+    front.includes('CONTRATO BASE PISCINAS')
+  );
+};
+
 type HhSummaryPayload = {
   date_from?: string;
   date_to?: string;
@@ -630,6 +648,30 @@ const normalizeText = (value: any) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+const PHOTO_REPORT_BADGE_COLORS = [
+  { background: colors.blue100, border: colors.blue300, text: colors.blue900 },
+  { background: colors.sky100, border: colors.sky300, text: colors.blue3 },
+  { background: colors.green100, border: colors.green600, text: colors.green800 },
+  { background: colors.amber100, border: colors.amber700, text: colors.amber800 },
+  { background: colors.rose100, border: colors.red300, text: colors.red800 },
+  { background: colors.slate200, border: colors.slate400, text: colors.slate800 },
+] as const;
+const PHOTO_MODULE_OTHER = 'OTROS';
+const getPhotoReportIdentity = (item: PhotoEvidenceItem) =>
+  String(item.reportId || item.reportNo || item.reportTitle || 'sin-reporte').trim();
+const getPhotoReportShortLabel = (item: PhotoEvidenceItem) => {
+  if (item.reportNo) return `N°${item.reportNo}`;
+  const reportId = String(item.reportId || '').trim();
+  return reportId ? String(reportId.split('-')[0] || reportId) : '-';
+};
+const getPhotoReportBadgeColors = (item: PhotoEvidenceItem) => {
+  const identity = getPhotoReportIdentity(item);
+  let hash = 0;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash = ((hash << 5) - hash + identity.charCodeAt(index)) | 0;
+  }
+  return PHOTO_REPORT_BADGE_COLORS[Math.abs(hash) % PHOTO_REPORT_BADGE_COLORS.length];
+};
 const getManagementNocFrontGroupKey = (value: any) => {
   const normalized = normalizeLabel(value)
     .normalize('NFD')
@@ -1631,6 +1673,7 @@ const sortGroups = (groups: GroupSummary[]) => {
 
 export default function ManagementPage() {
   const { notify } = useAppSnackbar();
+  const { data: session, status: sessionStatus } = useSession();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isActivitiesCompact = useMediaQuery(theme.breakpoints.down('md'));
@@ -1640,13 +1683,12 @@ export default function ManagementPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const MANAGEMENT_TAB_STORAGE_KEY = 'management_active_tab_v1';
-  const isManagementTab = (value: string): value is 'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts' | 'transmittal' =>
-    ['hh', 'hh-history', 'crew-personnel', 'activities', 'interferences', 'photo-report', 'equipment', 'report-fronts', 'transmittal'].includes(value);
-  const [activeTab, setActiveTab] = useState<'hh' | 'hh-history' | 'crew-personnel' | 'activities' | 'interferences' | 'photo-report' | 'equipment' | 'report-fronts' | 'transmittal'>(() => {
+  const [activeTab, setActiveTab] = useState<ManagementTab>(() => {
     if (typeof window === 'undefined') return 'hh';
     const saved = String(window.localStorage.getItem(MANAGEMENT_TAB_STORAGE_KEY) || '').trim();
     return isManagementTab(saved) ? saved : 'hh';
   });
+  const [managementPermissionKeys, setManagementPermissionKeys] = useState<string[] | null>(null);
   const [hhAvailableDates, setHhAvailableDates] = useState<string[]>([]);
   const [hhMatrixStartDate, setHhMatrixStartDate] = useState('');
   const [hhMatrixEndDate, setHhMatrixEndDate] = useState('');
@@ -1656,6 +1698,10 @@ export default function ManagementPage() {
   const [hhMatrixTempStartDate, setHhMatrixTempStartDate] = useState<Date | null>(null);
   const [hhMatrixTempEndDate, setHhMatrixTempEndDate] = useState<Date | null>(null);
   const [hhMatrixSort, setHhMatrixSort] = useState<HhMatrixSort>({ key: 'specialty', direction: 'asc' });
+  const [hhMatrixFrontFilter, setHhMatrixFrontFilter] = useState('');
+  const [hhMatrixNonBaseFrontFilter, setHhMatrixNonBaseFrontFilter] = useState('');
+  const [hhMatrixSpecialtyFilter, setHhMatrixSpecialtyFilter] = useState('');
+  const [hhMatrixPositionFilter, setHhMatrixPositionFilter] = useState('');
   const hhMatrixRangeHydratedFromSummaryRef = useRef(false);
   const hhMatrixManualRangeChangeRef = useRef(false);
   const [crewPersonnelDateFilter, setCrewPersonnelDateFilter] = useState('');
@@ -1742,6 +1788,7 @@ export default function ManagementPage() {
   const [photoExportRangeEnd, setPhotoExportRangeEnd] = useState('');
   const [photoConfigHydratedKey, setPhotoConfigHydratedKey] = useState('');
   const [savedPhotoConfigs, setSavedPhotoConfigs] = useState<SavedPhotoReportConfig[]>([]);
+  const [selectedSavedPhotoConfigId, setSelectedSavedPhotoConfigId] = useState('');
   const [savedPhotoConfigsLoading, setSavedPhotoConfigsLoading] = useState(false);
   const [photoConfigDirty, setPhotoConfigDirty] = useState(false);
   const [photoConfigSaving, setPhotoConfigSaving] = useState(false);
@@ -1750,20 +1797,71 @@ export default function ManagementPage() {
   const [photoRestoreSelection, setPhotoRestoreSelection] = useState<Record<string, true>>({});
   const [photoRestoreSelectionOrder, setPhotoRestoreSelectionOrder] = useState<string[]>([]);
   const [photoSelectFrontFilter, setPhotoSelectFrontFilter] = useState('');
-  const [photoSelectReportFilter, setPhotoSelectReportFilter] = useState('');
+  const [photoSelectModuleFilter, setPhotoSelectModuleFilter] = useState('');
   const [photoSelectActivityFilter, setPhotoSelectActivityFilter] = useState('');
   const [photoZoomEvidenceKey, setPhotoZoomEvidenceKey] = useState('');
   const [includedPhotoEvidenceOrder, setIncludedPhotoEvidenceOrder] = useState<string[]>([]);
   const setNotice = React.useCallback((notice: { message: string; severity: 'success' | 'error' | 'info' }) => notify(notice.message, { severity: notice.severity }), [notify]);
+  const sessionRole = String(session?.user?.role || '').trim().toLowerCase();
+  const sessionPermissionKeys = useMemo(
+    () => Array.isArray(session?.user?.permissions)
+      ? session.user.permissions.map((permission: unknown) => String(permission))
+      : [],
+    [session?.user],
+  );
+  const effectiveManagementPermissionKeys = managementPermissionKeys ?? sessionPermissionKeys;
+  const allowedManagementTabs = useMemo(
+    () => resolveAllowedManagementTabs(effectiveManagementPermissionKeys, sessionRole),
+    [effectiveManagementPermissionKeys, sessionRole],
+  );
+  const allowedManagementTabSet = useMemo(() => new Set<ManagementTab>(allowedManagementTabs), [allowedManagementTabs]);
+  const managementAccessResolved = sessionRole === 'admin' || sessionRole === 'dev' || managementPermissionKeys !== null;
+  const activeTabAllowed = managementAccessResolved && allowedManagementTabSet.has(activeTab);
   const equipmentAvailableDatesSet = useMemo(() => new Set(equipmentAvailableDates), [equipmentAvailableDates]);
   const needsDetailedReports = activeTab === 'crew-personnel' || activeTab === 'activities' || activeTab === 'photo-report';
   const isActivitiesGlobalSearch = activeTab === 'activities' && activitiesSearch.trim().length > 0;
   const hasActivitiesSearchQuery = activeTab === 'activities' && activitiesSearchQuery.trim().length > 0;
 
   useEffect(() => {
+    if (sessionStatus === 'loading') return;
+    if (sessionStatus !== 'authenticated') {
+      setManagementPermissionKeys([]);
+      return;
+    }
+    if (sessionRole === 'admin' || sessionRole === 'dev') {
+      setManagementPermissionKeys(['*']);
+      return;
+    }
+
+    let cancelled = false;
+    fetch('/api/session/permissions', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || 'No fue posible cargar los permisos.');
+        return Array.isArray(payload?.permissions)
+          ? payload.permissions.map((permission: unknown) => String(permission))
+          : [];
+      })
+      .then((permissions) => {
+        if (!cancelled) setManagementPermissionKeys(permissions);
+      })
+      .catch(() => {
+        if (!cancelled) setManagementPermissionKeys(sessionPermissionKeys);
+      });
+
+    return () => { cancelled = true; };
+  }, [sessionPermissionKeys, sessionRole, sessionStatus]);
+
+  useEffect(() => {
+    if (!managementAccessResolved || allowedManagementTabs.length === 0) return;
+    if (!allowedManagementTabSet.has(activeTab)) setActiveTab(allowedManagementTabs[0]);
+  }, [activeTab, allowedManagementTabSet, allowedManagementTabs, managementAccessResolved]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!activeTabAllowed) return;
     window.localStorage.setItem(MANAGEMENT_TAB_STORAGE_KEY, activeTab);
-  }, [activeTab]);
+  }, [activeTab, activeTabAllowed]);
 
   useEffect(() => {
     if (activeTab !== 'activities') {
@@ -2116,11 +2214,24 @@ export default function ManagementPage() {
   const getPhotoActivityLabel = React.useCallback((item: PhotoEvidenceItem) => {
     const summary = String(item.activitySummary || '').trim();
     const primary = String(summary.split('|')[0] || item.reportTitle || 'Sin actividad').trim();
-    const activityOnly = String(primary.split(/\s+-\s+/)[0] || primary).trim();
-    return normalizeLabel(activityOnly || 'Sin actividad');
+    return normalizeLabel(primary || 'Sin actividad');
   }, []);
   const getPhotoActivityFilterKey = React.useCallback((item: PhotoEvidenceItem) => {
     return `${normalizeText(item.front || 'Sin frente')}::${normalizeText(getPhotoActivityLabel(item))}`;
+  }, [getPhotoActivityLabel]);
+  const getPhotoActivityModules = React.useCallback((item: PhotoEvidenceItem) => {
+    const label = getPhotoActivityLabel(item)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
+    const modules = Array.from(label.matchAll(
+      /(?:\bMODULOS?\b|\bMOD\.)\s*(?:(?:N(?:RO|UMERO|O)?)[.\s]*(?:°|º|#)?\s*)?[:#.-]?\s*([0-9](?:(?:[0-9,\s/–—-]+)|(?:\b(?:Y|E|AL)\b))*)/gu
+    ))
+      .flatMap((match) => String(match[1] || '').match(/\d+/g) || [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => `MÓDULO ${value}`);
+    return Array.from(new Set(modules));
   }, [getPhotoActivityLabel]);
   const getPhotoSlideBucketKey = React.useCallback((item: PhotoEvidenceItem) => {
     const reportKey = normalizeText([
@@ -2148,15 +2259,31 @@ export default function ManagementPage() {
     const haystack = normalizeText(values.filter(Boolean).join(' '));
     return haystack.includes(photoKeywordQuery);
   }, [photoKeywordQuery]);
-  const photoActivityBaseCandidates = useMemo(
+  const photoModuleBaseCandidates = useMemo(
     () => selectablePhotoCandidates.filter((item) => {
       if (!photoEvidenceMatchesKeyword(item)) return false;
       if (photoSelectFrontFilter && item.front !== photoSelectFrontFilter) return false;
-      const reportValue = getPhotoReportFilterValue(item);
-      if (photoSelectReportFilter && reportValue !== photoSelectReportFilter) return false;
       return true;
     }),
-    [selectablePhotoCandidates, photoEvidenceMatchesKeyword, photoSelectFrontFilter, photoSelectReportFilter, getPhotoReportFilterValue]
+    [selectablePhotoCandidates, photoEvidenceMatchesKeyword, photoSelectFrontFilter]
+  );
+  const photoSelectModuleOptions = useMemo(
+    () => {
+      const modules = Array.from(new Set(photoModuleBaseCandidates.flatMap((item) => getPhotoActivityModules(item))))
+        .sort((a, b) => Number(a.replace(/\D/g, '')) - Number(b.replace(/\D/g, '')));
+      const hasActivitiesWithoutModule = photoModuleBaseCandidates.some((item) => getPhotoActivityModules(item).length === 0);
+      return hasActivitiesWithoutModule ? [...modules, PHOTO_MODULE_OTHER] : modules;
+    },
+    [photoModuleBaseCandidates, getPhotoActivityModules]
+  );
+  const photoActivityBaseCandidates = useMemo(
+    () => photoModuleBaseCandidates.filter((item) => {
+      if (!photoSelectModuleFilter) return true;
+      const modules = getPhotoActivityModules(item);
+      if (photoSelectModuleFilter === PHOTO_MODULE_OTHER) return modules.length === 0;
+      return modules.includes(photoSelectModuleFilter);
+    }),
+    [photoModuleBaseCandidates, photoSelectModuleFilter, getPhotoActivityModules]
   );
   const photoActivitySuggestions = useMemo<PhotoActivitySuggestion[]>(() => {
     const byActivity = new Map<string, {
@@ -2241,6 +2368,10 @@ export default function ManagementPage() {
     () => selectablePhotoCandidates.find((item) => String(item.key || '').trim() === photoZoomEvidenceKey) || null,
     [selectablePhotoCandidates, photoZoomEvidenceKey]
   );
+  const zoomPhotoReportBadgeColors = useMemo(
+    () => zoomPhotoCandidate ? getPhotoReportBadgeColors(zoomPhotoCandidate) : null,
+    [zoomPhotoCandidate]
+  );
   const zoomPhotoList = useMemo(
     () => filteredSelectablePhotoCandidates.length > 0 ? filteredSelectablePhotoCandidates : selectablePhotoCandidates,
     [filteredSelectablePhotoCandidates, selectablePhotoCandidates]
@@ -2260,21 +2391,12 @@ export default function ManagementPage() {
     () => Array.from(new Set(selectablePhotoCandidates.map((item) => item.front).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'es')),
     [selectablePhotoCandidates]
   );
-  const photoSelectReportOptions = useMemo(
-    () => Array.from(new Set(
-      selectablePhotoCandidates
-        .filter((item) => !photoSelectFrontFilter || item.front === photoSelectFrontFilter)
-        .map((item) => getPhotoReportFilterValue(item))
-        .filter(Boolean)
-    )).sort((a, b) => a.localeCompare(b, 'es')),
-    [selectablePhotoCandidates, photoSelectFrontFilter, getPhotoReportFilterValue]
-  );
   useEffect(() => {
-    if (photoSelectReportFilter && !photoSelectReportOptions.includes(photoSelectReportFilter)) {
-      setPhotoSelectReportFilter('');
+    if (photoSelectModuleFilter && !photoSelectModuleOptions.includes(photoSelectModuleFilter)) {
+      setPhotoSelectModuleFilter('');
+      setPhotoSelectActivityFilter('');
     }
-  }, [photoSelectReportFilter, photoSelectReportOptions]);
-
+  }, [photoSelectModuleFilter, photoSelectModuleOptions]);
   useEffect(() => {
     if (photoSelectActivityFilter && !photoActivitySuggestions.some((activity) => activity.key === photoSelectActivityFilter)) {
       setPhotoSelectActivityFilter('');
@@ -4083,6 +4205,46 @@ export default function ManagementPage() {
     return Array.isArray(hhSummary?.matrix_rows) ? hhSummary.matrix_rows : [];
   }, [hhSummary]);
 
+  const hhMatrixFrontOptions = useMemo(() => {
+    return Array.from(new Set(hhMatrixRows.map((row) => String(row.front || '').trim()).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
+  }, [hhMatrixRows]);
+
+  const hhMatrixNonBaseFrontOptions = useMemo(() => {
+    return hhMatrixFrontOptions.filter((front) => !isHhMatrixBaseFront(front));
+  }, [hhMatrixFrontOptions]);
+
+  const hhMatrixSpecialtyOptions = useMemo(() => {
+    return Array.from(new Set(hhMatrixRows.map((row) => String(row.specialty || '').trim()).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
+  }, [hhMatrixRows]);
+
+  const hhMatrixPositionOptions = useMemo(() => {
+    return Array.from(new Set(hhMatrixRows.map((row) => String(row.position || '').trim()).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
+  }, [hhMatrixRows]);
+
+  const filteredHhMatrixRows = useMemo(() => {
+    return hhMatrixRows.filter((row) => {
+      if (hhMatrixFrontFilter === HH_MATRIX_NON_BASE_ALL_TIME) {
+        if (isHhMatrixBaseFront(row.front)) return false;
+        if (hhMatrixNonBaseFrontFilter && row.front !== hhMatrixNonBaseFrontFilter) return false;
+      } else if (hhMatrixFrontFilter && row.front !== hhMatrixFrontFilter) {
+        return false;
+      }
+
+      if (hhMatrixSpecialtyFilter && row.specialty !== hhMatrixSpecialtyFilter) return false;
+      if (hhMatrixPositionFilter && row.position !== hhMatrixPositionFilter) return false;
+      return true;
+    });
+  }, [
+    hhMatrixFrontFilter,
+    hhMatrixNonBaseFrontFilter,
+    hhMatrixPositionFilter,
+    hhMatrixRows,
+    hhMatrixSpecialtyFilter,
+  ]);
+
   const sortedHhMatrixRows = useMemo(() => {
     const valueFor = (row: HhMatrixRow, key: string): string | number => {
       if (key === 'specialty' || key === 'position' || key === 'front') return String(row[key] || '');
@@ -4092,7 +4254,7 @@ export default function ManagementPage() {
       return '';
     };
 
-    return [...hhMatrixRows].sort((a, b) => {
+    return [...filteredHhMatrixRows].sort((a, b) => {
       const aValue = valueFor(a, hhMatrixSort.key);
       const bValue = valueFor(b, hhMatrixSort.key);
       const comparison = typeof aValue === 'number' && typeof bValue === 'number'
@@ -4101,7 +4263,7 @@ export default function ManagementPage() {
       if (comparison !== 0) return hhMatrixSort.direction === 'asc' ? comparison : -comparison;
       return a.key.localeCompare(b.key, 'es');
     });
-  }, [hhMatrixRows, hhMatrixSort]);
+  }, [filteredHhMatrixRows, hhMatrixSort]);
 
   const toggleHhMatrixSort = React.useCallback((key: string) => {
     setHhMatrixSort((current) => (
@@ -4129,10 +4291,19 @@ export default function ManagementPage() {
   );
 
   const hhMatrixTotalsByWeek = useMemo(() => {
-    return hhSummary?.matrix_totals_by_week || {};
-  }, [hhSummary]);
+    const totals: Record<string, number> = {};
+    filteredHhMatrixRows.forEach((row) => {
+      Object.entries(row.byWeek || {}).forEach(([weekKey, value]) => {
+        totals[weekKey] = Number(totals[weekKey] || 0) + Number(value || 0);
+      });
+    });
+    return totals;
+  }, [filteredHhMatrixRows]);
 
-  const hhMatrixGrandTotal = hhMatrixRows.reduce((acc, row) => acc + Number(row.hh || 0) + Number(row.hhExtras || 0), 0);
+  const hhMatrixGrandTotal = filteredHhMatrixRows.reduce(
+    (acc, row) => acc + Number(row.hh || 0) + Number(row.hhExtras || 0),
+    0
+  );
 
   const dashboardByDay = useMemo<DayDashboardRow[]>(() => {
     return Array.isArray(hhSummary?.dashboard_by_day) ? hhSummary.dashboard_by_day : [];
@@ -5106,9 +5277,9 @@ export default function ManagementPage() {
     <Box sx={{ minHeight: '100vh', background: colors.gray10 }}>
       <Script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js" strategy="afterInteractive" />
       <UserHeader title="Gestión y Datos" />
-      {activeTab === 'interferences' ? (
+      {activeTabAllowed && activeTab === 'interferences' ? (
         <AppFloatingActionButton ariaLabel="Crear interferencia" tooltip="Crear interferencia" offset="tabs" onClick={() => setInterferenceDialogOpen(true)} />
-      ) : activeTab === 'equipment' || activeTab === 'report-fronts' ? (
+      ) : activeTabAllowed && (activeTab === 'equipment' || activeTab === 'report-fronts') ? (
         <AppFloatingActionButton ariaLabel={activeTab === 'equipment' ? 'Agregar equipo' : 'Crear frente'} tooltip={activeTab === 'equipment' ? 'Agregar equipo' : 'Crear frente'} offset="tabs" onClick={() => activeTab === 'equipment' ? openCreateEquipmentModal('MAYOR') : openCreateReportFrontDialog()} />
       ) : null}
       <Container
@@ -5125,7 +5296,9 @@ export default function ManagementPage() {
             <AppTabs
               ariaLabel="Secciones de Gestión y Datos"
               value={activeTab}
-              onChange={(value) => setActiveTab(value as typeof activeTab)}
+              onChange={(value) => {
+                if (isManagementTab(value) && allowedManagementTabSet.has(value)) setActiveTab(value);
+              }}
               minItemWidth={150}
               items={[
                 { value: 'hh', label: 'HH', icon: <QueryStatsOutlined /> },
@@ -5137,11 +5310,11 @@ export default function ManagementPage() {
                 { value: 'report-fronts', label: 'Frentes / UDR', icon: <AccountTreeOutlined /> },
                 { value: 'transmittal', label: 'Transmittal', icon: <SendOutlined /> },
                 { value: 'photo-report', label: 'Informe Fotográfico', icon: <PhotoLibraryOutlined /> },
-              ]}
+              ].filter((item) => allowedManagementTabSet.has(item.value as ManagementTab))}
               paperProps={{
                 sx: {
                   position: 'fixed',
-                  top: { xs: 56, md: 64 },
+                  top: { xs: 56, md: 60 },
                   left: { xs: 0, md: 'var(--users-aside-width, 240px)' },
                   width: { xs: '100%', md: 'calc(100% - var(--users-aside-width, 240px))' },
                   zIndex: 1100,
@@ -5150,7 +5323,13 @@ export default function ManagementPage() {
             />
 
             <Box sx={{ px: { xs: 0.1, md: 0.1 }, pb: { xs: 0.75, md: 1 }, pt: { xs: 10.4, md: 11.4 } }}>
-              {activeTab === 'transmittal' ? (
+              {!managementAccessResolved ? (
+                <Paper variant="outlined" sx={{ py: 6, display: 'flex', justifyContent: 'center', borderColor: colors.managementBorder }}>
+                  <CircularProgress size={26} />
+                </Paper>
+              ) : allowedManagementTabs.length === 0 ? (
+                <AppAlert severity="warning">No tienes pestañas habilitadas en Gestión y Datos.</AppAlert>
+              ) : activeTab === 'transmittal' ? (
                 <TransmittalPanel />
               ) : activeTab === 'hh' ? (
               <>
@@ -5448,6 +5627,8 @@ export default function ManagementPage() {
                   p: 0,
                   overflow: 'hidden',
                   background: colors.white,
+                  display: 'flex',
+                  flexDirection: 'column',
                 }}
               >
                 <Box
@@ -5455,7 +5636,7 @@ export default function ManagementPage() {
                     px: { xs: 1.25, md: 1.5 },
                     py: 1.25,
                     display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', md: '1fr auto' },
+                    gridTemplateColumns: '1fr',
                     gap: 1,
                     alignItems: 'center',
                     borderBottom: `1px solid ${colors.gray200}`,
@@ -5469,7 +5650,107 @@ export default function ManagementPage() {
                         : 'Seleccione un rango para visualizar'}
                     </Typography>
                   </Box>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+                  <Stack
+                    direction={{ xs: 'column', lg: 'row' }}
+                    spacing={1}
+                    alignItems={{ xs: 'stretch', lg: 'center' }}
+                    justifyContent="flex-start"
+                    useFlexGap
+                    flexWrap={{ xs: 'wrap', lg: 'nowrap' }}
+                    sx={{ width: '100%' }}
+                  >
+                    <FormControl size="small" sx={{ minWidth: { xs: '100%', lg: 300 }, flexShrink: 0 }}>
+                      <InputLabel id="hh-matrix-front-filter-label">Frente</InputLabel>
+                      <AppSelectControl
+                        labelId="hh-matrix-front-filter-label"
+                        label="Frente"
+                        value={hhMatrixFrontFilter}
+                        onChange={(event) => {
+                          const nextFront = String(event.target.value || '');
+                          setHhMatrixFrontFilter(nextFront);
+                          setHhMatrixNonBaseFrontFilter('');
+
+                          if (nextFront === HH_MATRIX_NON_BASE_ALL_TIME) {
+                            const availableDates = hhAvailableDates
+                              .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+                              .slice()
+                              .sort();
+
+                            if (availableDates.length > 0) {
+                              hhMatrixManualRangeChangeRef.current = true;
+                              hhMatrixRangeHydratedFromSummaryRef.current = false;
+                              setHhMatrixStartDate(availableDates[0]);
+                              setHhMatrixEndDate(availableDates[availableDates.length - 1]);
+                            }
+                          }
+                        }}
+                      >
+                        <MenuItem value="">Todos los frentes</MenuItem>
+                        <MenuItem value={HH_MATRIX_NON_BASE_ALL_TIME}>
+                          OTROS FRENTES · ACUMULADO GLOBAL
+                        </MenuItem>
+                        {hhMatrixFrontOptions.map((front) => (
+                          <MenuItem key={front} value={front}>{front}</MenuItem>
+                        ))}
+                      </AppSelectControl>
+                    </FormControl>
+
+                    {hhMatrixFrontFilter === HH_MATRIX_NON_BASE_ALL_TIME ? (
+                      <FormControl
+                        size="small"
+                        sx={{ minWidth: { xs: '100%', lg: 260 }, maxWidth: { lg: 260 }, flexShrink: 0 }}
+                      >
+                        <InputLabel id="hh-matrix-non-base-front-filter-label">
+                          Frente global
+                        </InputLabel>
+                        <AppSelectControl
+                          labelId="hh-matrix-non-base-front-filter-label"
+                          label="Frente global"
+                          value={hhMatrixNonBaseFrontFilter}
+                          onChange={(event) => {
+                            setHhMatrixNonBaseFrontFilter(String(event.target.value || ''));
+                          }}
+                        >
+                          <MenuItem value="">Todos los otros frentes</MenuItem>
+                          {hhMatrixNonBaseFrontOptions.map((front) => (
+                            <MenuItem key={front} value={front}>
+                              {front}
+                            </MenuItem>
+                          ))}
+                        </AppSelectControl>
+                      </FormControl>
+                    ) : null}
+
+                    <FormControl size="small" sx={{ minWidth: { xs: '100%', lg: 220 }, flexShrink: 0 }}>
+                      <InputLabel id="hh-matrix-specialty-filter-label">Especialidad</InputLabel>
+                      <AppSelectControl
+                        labelId="hh-matrix-specialty-filter-label"
+                        label="Especialidad"
+                        value={hhMatrixSpecialtyFilter}
+                        onChange={(event) => setHhMatrixSpecialtyFilter(String(event.target.value || ''))}
+                      >
+                        <MenuItem value="">Todas las especialidades</MenuItem>
+                        {hhMatrixSpecialtyOptions.map((specialty) => (
+                          <MenuItem key={specialty} value={specialty}>{specialty}</MenuItem>
+                        ))}
+                      </AppSelectControl>
+                    </FormControl>
+
+                    <FormControl size="small" sx={{ minWidth: { xs: '100%', lg: 260 }, flexShrink: 0 }}>
+                      <InputLabel id="hh-matrix-position-filter-label">Cargo</InputLabel>
+                      <AppSelectControl
+                        labelId="hh-matrix-position-filter-label"
+                        label="Cargo"
+                        value={hhMatrixPositionFilter}
+                        onChange={(event) => setHhMatrixPositionFilter(String(event.target.value || ''))}
+                      >
+                        <MenuItem value="">Todos los cargos</MenuItem>
+                        {hhMatrixPositionOptions.map((position) => (
+                          <MenuItem key={position} value={position}>{position}</MenuItem>
+                        ))}
+                      </AppSelectControl>
+                    </FormControl>
+
                     <AppTextField
                       label="Rango"
                       size="small"
@@ -5493,7 +5774,10 @@ export default function ManagementPage() {
                         ),
                       }}
                       sx={{
-                        minWidth: 260,
+                        width: { xs: '100%', lg: 300 },
+                        minWidth: { xs: '100%', lg: 300 },
+                        maxWidth: { lg: 300 },
+                        flexShrink: 0,
                         cursor: 'pointer',
                         '& .MuiInputBase-input': { cursor: 'pointer' },
                       }}
@@ -5559,7 +5843,7 @@ export default function ManagementPage() {
                   </Stack>
                 </Box>
 
-                <TableContainer sx={{ height: 'calc(95vh - 190px)', overflow: 'auto' }}>
+                <TableContainer sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                   <Table
                     size="small"
                     stickyHeader
@@ -5615,10 +5899,12 @@ export default function ManagementPage() {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {hhMatrixRows.length === 0 ? (
+                      {filteredHhMatrixRows.length === 0 ? (
                         <TableRow>
                           <TableCell colSpan={9 + hhMatrixWeeks.length} sx={{ py: 3, color: colors.slate500, textAlign: 'center' }}>
-                            No hay HH en el rango seleccionado.
+                            {hhMatrixRows.length === 0
+                              ? 'No hay HH en el rango seleccionado.'
+                              : 'No hay resultados para los filtros seleccionados.'}
                           </TableCell>
                         </TableRow>
                       ) : (
@@ -5646,9 +5932,9 @@ export default function ManagementPage() {
                           );
                         })
                       )}
-                      {hhMatrixRows.length > 0 ? (
+                      {filteredHhMatrixRows.length > 0 ? (
                         <TableRow>
-                          <TableCell colSpan={3} sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white, position: 'sticky', left: 0, zIndex: 2 }}>
+                          <TableCell colSpan={3} sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white, textAlign: 'right' }}>
                             TOTAL
                           </TableCell>
                           {hhMatrixWeeks.map((week) => (
@@ -5657,16 +5943,16 @@ export default function ManagementPage() {
                             </TableCell>
                           ))}
                           <TableCell align="center" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
-                            {hhMatrixRows.reduce((acc, row) => acc + row.peopleRows, 0)}
+                            {filteredHhMatrixRows.reduce((acc, row) => acc + row.peopleRows, 0)}
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
-                            {formatNumber(hhMatrixRows.reduce((acc, row) => acc + row.hh, 0))}
+                            {formatNumber(filteredHhMatrixRows.reduce((acc, row) => acc + row.hh, 0))}
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
-                            {formatNumber(hhMatrixRows.reduce((acc, row) => acc + row.hhExtras, 0))}
+                            {formatNumber(filteredHhMatrixRows.reduce((acc, row) => acc + row.hhExtras, 0))}
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
-                            {formatNumber(hhMatrixRows.reduce((acc, row) => acc + Number(row.dailyReportHh || 0), 0))}
+                            {formatNumber(filteredHhMatrixRows.reduce((acc, row) => acc + Number(row.dailyReportHh || 0), 0))}
                           </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 700, background: colors.managementTableHeadDark, color: colors.white }}>
                             {formatNumber(hhMatrixGrandTotal)}
@@ -7319,16 +7605,24 @@ export default function ManagementPage() {
                   sx={{
                     p: { xs: 1.5, md: 2 },
                     borderColor: colors.managementBorder,
+                    borderRadius: 2,
                     background: colors.white,
+                    boxShadow: '0 10px 28px rgba(15, 50, 90, 0.07)',
                   }}
                 >
                   <Stack spacing={1.75}>
-                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+                    <Stack
+                      direction={{ xs: 'column', md: 'row' }}
+                      spacing={1.25}
+                      alignItems={{ xs: 'stretch', md: 'center' }}
+                      justifyContent="space-between"
+                      sx={{ pb: 1.5, borderBottom: `1px solid ${colors.managementBorderMuted}` }}
+                    >
                       <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography sx={{ fontWeight: 700, color: colors.slate900, fontSize: { xs: '1rem', md: '1.1rem' } }}>
-                          Vista previa de caratula (PPTX)
+                        <Typography sx={{ fontWeight: 600, color: colors.blue1, fontSize: { xs: '1rem', md: '1.1rem' } }}>
+                          Vista previa de carátula (PPTX)
                         </Typography>
-                        <Typography sx={{ mt: 0.15, fontSize: 12.5, color: colors.blue900, fontWeight: 700 }}>
+                        <Typography sx={{ mt: 0.2, fontSize: 12.5, color: colors.managementTextMuted, fontWeight: 500 }}>
                           Página {currentPreviewPage} de {Math.max(1, totalPhotoSlides)}
                         </Typography>
                         {activePhotoEvidenceSummary ? (
@@ -7349,7 +7643,7 @@ export default function ManagementPage() {
                               : photoConfigDirty
                                 ? colors.amber700
                                 : (photoConfigExistsForScope ? colors.slate500 : colors.red800),
-                            fontWeight: hasPhotoPeriodSelected && photoConfigDirty ? 700 : 500,
+                            fontWeight: 500,
                           }}
                         >
                           {!hasPhotoPeriodSelected
@@ -7361,7 +7655,16 @@ export default function ManagementPage() {
                                 : 'No existe guardado para este rango. Debes guardar antes de exportar.'}
                         </Typography>
                       </Box>
-                      <Stack direction="row" spacing={0.8} sx={{ alignSelf: { xs: 'flex-start', sm: 'auto' } }}>
+                      <Stack
+                        direction="row"
+                        spacing={0.8}
+                        sx={{
+                          alignSelf: { xs: 'stretch', md: 'auto' },
+                          flexWrap: 'wrap',
+                          gap: 0.8,
+                          '& > *': { m: '0 !important' },
+                        }}
+                      >
                         <AppButton
                           variant="outlined"
                           startIcon={<PushPinOutlined />}
@@ -7376,27 +7679,13 @@ export default function ManagementPage() {
                             setPhotoRestoreDialogOpen(true);
                           }}
                           disabled={!hasPhotoPeriodSelected || selectablePhotoCandidates.length === 0}
-                          sx={{ textTransform: 'none', fontWeight: 700 }}
                         >
                           Seleccionar fotos ({Object.keys(includedPhotoEvidenceKeys).length})
                         </AppButton>
                         <AppButton
                           variant="contained"
-                          color="warning"
                           onClick={() => void savePhotoReportConfig()}
                           disabled={photoConfigSaving || !photoConfigDirty || !hasPhotoPeriodSelected}
-                          sx={{
-                            textTransform: 'none',
-                            fontWeight: 700,
-                            color: colors.blue50,
-                            '&:hover': {
-                              color: colors.white,
-                            },
-                            '&.Mui-disabled': {
-                              color: colors.managementLinkBlue,
-                              WebkitTextFillColor: colors.managementLinkBlue,
-                            },
-                          }}
                         >
                           {photoConfigSaving ? 'Guardando...' : 'Guardar configuración'}
                         </AppButton>
@@ -7405,14 +7694,6 @@ export default function ManagementPage() {
                           startIcon={photoExporting ? <CircularProgress size={16} sx={{ color: colors.white }} /> : <Download />}
                           onClick={() => void exportPhotoReportPptx()}
                           disabled={photoExporting || !canExportPhotoReport || !hasPhotoPeriodSelected}
-                          sx={{
-                            bgcolor: colors.blue1,
-                            color: colors.white,
-                            textTransform: 'none',
-                            fontWeight: 700,
-                            px: 1.4,
-                            '&:hover': { bgcolor: colors.blue2 },
-                          }}
                         >
                           {photoExporting ? 'Exportando...' : 'Exportar PPTX'}
                         </AppButton>
@@ -7436,25 +7717,44 @@ export default function ManagementPage() {
                       <Paper
                         variant="outlined"
                         sx={{
-                          p: { xs: 1, md: 1.25 },
+                          p: { xs: 1.25, md: 1.5 },
                           borderColor: colors.managementBorder,
                           borderRadius: 1.5,
                           minWidth: 0,
                           width: '100%',
+                          bgcolor: colors.white,
+                          boxShadow: '0 8px 22px rgba(15, 50, 90, 0.06)',
                         }}
                       >
-                        <Stack spacing={1}>
-                          <FormControl size="small" fullWidth>
-                            <InputLabel id="saved-photo-config-label">Reportes guardados</InputLabel>
-                            <AppSelectControl
-                              labelId="saved-photo-config-label"
+                        <AppFormStack>
+                          <Box sx={{ pb: 0.9, borderBottom: `1px solid ${colors.managementBorderMuted}` }}>
+                            <Typography sx={{ color: colors.blue1, fontSize: 14, fontWeight: 600 }}>
+                              Configuración del informe
+                            </Typography>
+                            <Typography sx={{ mt: 0.15, color: colors.managementTextMuted, fontSize: 11.5, fontWeight: 400 }}>
+                              Ajusta portada, período y páginas de exportación.
+                            </Typography>
+                          </Box>
+                          <AppTextField
+                              select
                               label="Reportes guardados"
-                              value=""
-                              displayEmpty
+                              value={selectedSavedPhotoConfigId}
+                              InputLabelProps={{ shrink: true }}
+                              SelectProps={{
+                                displayEmpty: true,
+                                renderValue: (selectedValue) => {
+                                  if (savedPhotoConfigsLoading) return 'Cargando...';
+                                  const selected = savedPhotoConfigs.find((config) => String(config.id) === String(selectedValue || ''));
+                                  return selected
+                                    ? `N°${selected.report_no} | ${formatSpanishShortDate(String(selected.period_start || ''))} - ${formatSpanishShortDate(String(selected.period_end || ''))}`
+                                    : 'Seleccionar reporte';
+                                },
+                              }}
                               onChange={(event) => {
                                 const selectedId = String(event.target.value || '').trim();
                                 const selected = savedPhotoConfigs.find((cfg) => String(cfg.id) === selectedId);
                                 if (!selected) return;
+                                setSelectedSavedPhotoConfigId(selectedId);
                                 const selectedStart = String(selected.period_start || '').slice(0, 10);
                                 const selectedEnd = String(selected.period_end || '').slice(0, 10);
                                 setPhotoCoverReportNo(String(selected.report_no || '').trim() || formatPhotoReportNumberForPeriod(selectedStart, selectedEnd));
@@ -7464,7 +7764,7 @@ export default function ManagementPage() {
                                 setPhotoTempEndDate(parseDateFromIso(selectedEnd));
                                 setPhotoKeywordFilter('');
                                 setPhotoSelectFrontFilter('');
-                                setPhotoSelectReportFilter('');
+                                setPhotoSelectModuleFilter('');
                                 setPhotoSelectActivityFilter('');
                                 setPhotoConfigDirty(false);
                               }}
@@ -7477,68 +7777,38 @@ export default function ManagementPage() {
                                   {`N°${cfg.report_no} | ${formatSpanishShortDate(String(cfg.period_start || ''))} - ${formatSpanishShortDate(String(cfg.period_end || ''))}`}
                                 </MenuItem>
                               ))}
-                            </AppSelectControl>
-                          </FormControl>
+                          </AppTextField>
                           <AppTextField
-                            size="small"
-                            label="Titulo portada"
+                            label="Título de portada"
                             value={photoCoverTitle}
                             onChange={(event) => setPhotoCoverTitle(event.target.value)}
                           />
                           <AppTextField
-                            size="small"
                             label="N° informe"
                             value={photoCoverReportNo}
                             InputProps={{ readOnly: true }}
                           />
-                          <Box
-                            sx={{
-                              width: '100%',
-                              border: `1px solid ${colors.managementBorder}`,
-                              borderRadius: 1.5,
-                              px: 1,
-                              py: 0.9,
-                              background: colors.managementPanelBgSoft,
-                            }}
-                          >
-                            <Typography
-                              sx={{
-                                fontSize: 12,
-                                fontWeight: 700,
-                                color: colors.managementTextMuted,
-                                mb: 0.7,
-                                ml: 0.25,
-                                lineHeight: 1,
-                              }}
-                            >
-                              Período
-                            </Typography>
-                            <AppTextField
-                              size="small"
-                              fullWidth
-                              label="Rango de fechas"
-                              value={photoPeriodInputLabel}
-                              onClick={() => {
-                                setPhotoTempStartDate(parseDateFromIso(photoPeriodStartDate));
-                                setPhotoTempEndDate(parseDateFromIso(photoPeriodEndDate));
-                                setPhotoRangeDialogOpen(true);
-                              }}
-                              InputProps={{
-                                readOnly: true,
-                                endAdornment: (
-                                  <InputAdornment position="end">
-                                    <CalendarMonth sx={{ color: colors.slate500 }} />
-                                  </InputAdornment>
-                                ),
-                                sx: {
-                                  cursor: 'pointer',
-                                  background: colors.white,
-                                },
-                              }}
-                            />
-                          </Box>
                           <AppTextField
-                            size="small"
+                            label="Período"
+                            value={photoPeriodInputLabel}
+                            placeholder="Seleccionar rango de fechas"
+                            InputLabelProps={{ shrink: true }}
+                            onClick={() => {
+                              setPhotoTempStartDate(parseDateFromIso(photoPeriodStartDate));
+                              setPhotoTempEndDate(parseDateFromIso(photoPeriodEndDate));
+                              setPhotoRangeDialogOpen(true);
+                            }}
+                            InputProps={{
+                              readOnly: true,
+                              endAdornment: (
+                                <InputAdornment position="end">
+                                  <CalendarMonth sx={{ color: colors.slate500 }} />
+                                </InputAdornment>
+                              ),
+                              sx: { cursor: 'pointer' },
+                            }}
+                          />
+                          <AppSearchField
                             label="Filtrar por palabra o frase"
                             value={photoKeywordFilter}
                             onChange={(event) => setPhotoKeywordFilter(event.target.value)}
@@ -7548,11 +7818,6 @@ export default function ManagementPage() {
                                 : `Sin filtro: ${visiblePhotoEvidenceCount} imágenes visibles`
                             }
                             InputProps={{
-                              startAdornment: (
-                                <InputAdornment position="start">
-                                  <Search sx={{ color: colors.slate500, fontSize: 19 }} />
-                                </InputAdornment>
-                              ),
                               endAdornment: photoKeywordFilter ? (
                                 <InputAdornment position="end">
                                   <AppIconButton
@@ -7568,7 +7833,6 @@ export default function ManagementPage() {
                             }}
                           />
                           <AppTextField
-                            size="small"
                             label="Título subcarátula"
                             value={activePhotoSectionTitleValue}
                             onChange={(event) => {
@@ -7583,56 +7847,56 @@ export default function ManagementPage() {
                                   : 'Sección CANALETAS'
                             }
                           />
-                          <Stack direction="row" spacing={0.8} sx={{ width: '100%' }}>
-                            <AppTextField
-                              size="small"
-                              label="Desde pág."
-                              type="number"
-                              fullWidth
-                              value={photoExportRangeStart}
-                              placeholder="Todas"
-                              onChange={(event) => {
-                                const raw = String(event.target.value || '').trim();
-                                if (!raw) return setPhotoExportRangeStart('');
-                                const parsed = Math.max(1, Math.min(Math.max(1, totalPhotoSlides), Math.trunc(Number(raw) || 1)));
-                                setPhotoExportRangeStart(String(parsed));
-                              }}
-                              InputProps={{ sx: { '& input': { textAlign: 'center' } } }}
-                              inputProps={{ min: 1, max: Math.max(1, totalPhotoSlides) }}
-                            />
-                            <AppTextField
-                              size="small"
-                              label="Hasta pág."
-                              type="number"
-                              fullWidth
-                              value={photoExportRangeEnd}
-                              placeholder="Todas"
-                              onChange={(event) => {
-                                const raw = String(event.target.value || '').trim();
-                                if (!raw) return setPhotoExportRangeEnd('');
-                                const parsed = Math.max(1, Math.min(Math.max(1, totalPhotoSlides), Math.trunc(Number(raw) || totalPhotoSlides)));
-                                setPhotoExportRangeEnd(String(parsed));
-                              }}
-                              InputProps={{ sx: { '& input': { textAlign: 'center' } } }}
-                              inputProps={{ min: 1, max: Math.max(1, totalPhotoSlides) }}
-                            />
-                          </Stack>
-                          <FormControl size="small" fullWidth>
-                            <InputLabel id="photo-sector-jump-label">Ir a sector</InputLabel>
-                            <AppSelectControl
-                              labelId="photo-sector-jump-label"
-                              label="Ir a sector"
-                              value={activeSectorIndex >= 0 ? String(activeSectorIndex) : ''}
-                              onChange={(event) => goToSector(Number(event.target.value))}
-                            >
-                              {sectorPageRanges.map((s, idx) => (
-                                <MenuItem key={s.key} value={String(idx)}>
-                                  {s.label} ({s.start}-{s.end})
-                                </MenuItem>
-                              ))}
-                            </AppSelectControl>
-                          </FormControl>
-                          <Stack direction="row" spacing={0.8}>
+                          <Box>
+                            <Typography sx={{ mb: 0.7, color: colors.managementTextMuted, fontSize: 11.5, fontWeight: 500 }}>
+                              Páginas a exportar
+                            </Typography>
+                            <Stack direction="row" spacing={0.8} sx={{ width: '100%' }}>
+                              <AppTextField
+                                label="Desde"
+                                type="number"
+                                fullWidth
+                                value={photoExportRangeStart}
+                                placeholder="Todas"
+                                onChange={(event) => {
+                                  const raw = String(event.target.value || '').trim();
+                                  if (!raw) return setPhotoExportRangeStart('');
+                                  const parsed = Math.max(1, Math.min(Math.max(1, totalPhotoSlides), Math.trunc(Number(raw) || 1)));
+                                  setPhotoExportRangeStart(String(parsed));
+                                }}
+                                InputProps={{ sx: { '& input': { textAlign: 'center' } } }}
+                                inputProps={{ min: 1, max: Math.max(1, totalPhotoSlides) }}
+                              />
+                              <AppTextField
+                                label="Hasta"
+                                type="number"
+                                fullWidth
+                                value={photoExportRangeEnd}
+                                placeholder="Todas"
+                                onChange={(event) => {
+                                  const raw = String(event.target.value || '').trim();
+                                  if (!raw) return setPhotoExportRangeEnd('');
+                                  const parsed = Math.max(1, Math.min(Math.max(1, totalPhotoSlides), Math.trunc(Number(raw) || totalPhotoSlides)));
+                                  setPhotoExportRangeEnd(String(parsed));
+                                }}
+                                InputProps={{ sx: { '& input': { textAlign: 'center' } } }}
+                                inputProps={{ min: 1, max: Math.max(1, totalPhotoSlides) }}
+                              />
+                            </Stack>
+                          </Box>
+                          <AppTextField
+                            select
+                            label="Ir a sector"
+                            value={activeSectorIndex >= 0 ? String(activeSectorIndex) : ''}
+                            onChange={(event) => goToSector(Number(event.target.value))}
+                          >
+                            {sectorPageRanges.map((sector, index) => (
+                              <MenuItem key={sector.key} value={String(index)}>
+                                {sector.label} ({sector.start}-{sector.end})
+                              </MenuItem>
+                            ))}
+                          </AppTextField>
+                          <Stack direction="row" spacing={0.8} sx={{ '& > *': { flex: 1 } }}>
                             <AppButton
                               size="small"
                               variant="outlined"
@@ -7652,7 +7916,7 @@ export default function ManagementPage() {
                           </Stack>
                           <Accordion disableGutters elevation={0} sx={{ border: `1px solid ${colors.managementBorder}`, borderRadius: 1.25, '&:before': { display: 'none' } }}>
                             <AccordionSummary expandIcon={<ExpandMore />} sx={{ minHeight: 36 }}>
-                              <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate700 }}>Opciones avanzadas (URLs)</Typography>
+                              <Typography sx={{ fontSize: 13, fontWeight: 500, color: colors.slate700 }}>Opciones avanzadas (URLs)</Typography>
                             </AccordionSummary>
                             <AccordionDetails sx={{ pt: 0.5 }}>
                               <Stack spacing={1}>
@@ -7683,7 +7947,7 @@ export default function ManagementPage() {
                               </Stack>
                             </AccordionDetails>
                           </Accordion>
-                        </Stack>
+                        </AppFormStack>
                       </Paper>
 
                       <Box
@@ -8194,16 +8458,69 @@ export default function ManagementPage() {
         fullWidth
         sx={{
           '& .MuiDialog-paper': {
-            width: '95vw',
-            height: '95vh',
+            width: { xs: 'calc(100vw - 16px)', sm: '95vw' },
+            height: { xs: 'calc(100dvh - 16px)', sm: '95vh' },
             maxWidth: '95vw',
             maxHeight: '95vh',
-            m: 0,
+            m: { xs: 1, sm: 0 },
+            borderRadius: 2,
+            border: `1px solid ${colors.managementBorder}`,
+            bgcolor: colors.white,
+            boxShadow: '0 20px 60px rgba(0, 26, 51, 0.22)',
+            overflow: 'hidden',
           },
         }}
       >
-        <DialogTitle>Seleccionar imágenes del informe</DialogTitle>
-        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <DialogTitle
+          sx={{
+            px: { xs: 1.5, sm: 2.25 },
+            py: 1.35,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1.5,
+            color: colors.blue1,
+            borderBottom: `1px solid ${colors.managementBorderMuted}`,
+          }}
+        >
+          <Stack direction="row" spacing={1.1} alignItems="center" sx={{ minWidth: 0 }}>
+            <Box
+              sx={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                display: 'grid',
+                placeItems: 'center',
+                flexShrink: 0,
+                color: colors.blue600,
+                bgcolor: colors.blue50,
+              }}
+            >
+              <PhotoLibraryOutlined sx={{ fontSize: 20 }} />
+            </Box>
+            <Typography component="span" sx={{ fontSize: { xs: 17, sm: 18 }, fontWeight: 600, lineHeight: 1.25 }} noWrap>
+              Seleccionar imágenes del informe
+            </Typography>
+          </Stack>
+          <AppIconButton
+            size="small"
+            onClick={() => setPhotoRestoreDialogOpen(false)}
+            aria-label="Cerrar selección de imágenes"
+            title="Cerrar"
+            sx={{ color: colors.slate500, flexShrink: 0 }}
+          >
+            <Clear fontSize="small" />
+          </AppIconButton>
+        </DialogTitle>
+        <DialogContent
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            p: { xs: 1.25, sm: 1.75 },
+            bgcolor: colors.managementPageBg,
+          }}
+        >
           {selectablePhotoCandidates.length === 0 ? (
             <Typography sx={{ color: colors.slate500 }}>No hay imágenes candidatas para este rango.</Typography>
           ) : (
@@ -8211,87 +8528,96 @@ export default function ManagementPage() {
               <AppAlert severity="info" sx={{ py: 0.35 }}>
                 {photoPeriodInputLabel ? `Período: ${photoPeriodInputLabel}` : 'Selecciona un período antes de elegir imágenes.'}
               </AppAlert>
+              <Paper
+                variant="outlined"
+                sx={{
+                  px: 1.25,
+                  py: 0.9,
+                  borderColor: colors.managementBorderMuted,
+                  borderRadius: 1.25,
+                  bgcolor: colors.white,
+                  display: 'flex',
+                  alignItems: { xs: 'stretch', md: 'center' },
+                  justifyContent: 'space-between',
+                  flexDirection: { xs: 'column', md: 'row' },
+                  gap: 0.9,
+                }}
+              >
+                <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.75, '& > *': { m: '0 !important' } }}>
+                  <AppButton
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      const orderedKeys: string[] = [];
+                      const all = filteredSelectablePhotoCandidates.reduce<Record<string, true>>((acc, item) => {
+                        const key = String(item.key || '').trim();
+                        if (key) {
+                          acc[key] = true;
+                          orderedKeys.push(key);
+                        }
+                        return acc;
+                      }, {});
+                      setPhotoRestoreSelection(all);
+                      setPhotoRestoreSelectionOrder(orderedKeys);
+                    }}
+                  >
+                    Seleccionar visibles
+                  </AppButton>
+                  <AppButton
+                    size="small"
+                    variant="outlined"
+                    onClick={() => {
+                      setPhotoRestoreSelection({});
+                      setPhotoRestoreSelectionOrder([]);
+                    }}
+                  >
+                    Limpiar selección
+                  </AppButton>
+                  <AppButton
+                    size="small"
+                    variant="text"
+                    onClick={() => {
+                      setPhotoKeywordFilter('');
+                      setPhotoSelectFrontFilter('');
+                      setPhotoSelectModuleFilter('');
+                      setPhotoSelectActivityFilter('');
+                    }}
+                  >
+                    Limpiar filtros
+                  </AppButton>
+                </Stack>
+                <Typography sx={{ color: colors.managementTextMuted, fontSize: 12.5, fontWeight: 400 }}>
+                  {filteredSelectedPhotoCount} seleccionadas visibles de {filteredSelectablePhotoCandidates.length}
+                  {filteredSelectablePhotoCandidates.length !== selectablePhotoCandidates.length
+                    ? ` · ${Object.keys(photoRestoreSelection).filter((key) => photoRestoreSelection[key]).length} seleccionadas en total`
+                    : ''}
+                </Typography>
+              </Paper>
               <Box
                 sx={{
                   display: 'grid',
-                  gridTemplateColumns: { xs: '1fr', lg: '380px minmax(0, 1fr)' },
+                  gridTemplateColumns: { xs: '1fr', lg: '330px minmax(0, 1fr)' },
                   gap: 1.25,
                   alignItems: 'stretch',
                   minHeight: 0,
                   flex: 1,
                 }}
               >
-                <Stack spacing={1} sx={{ minWidth: 0, minHeight: 0, height: '100%' }}>
-              <Stack
-                direction="row"
-                spacing={0.65}
-                sx={{
-                  flexWrap: 'nowrap',
-                  overflowX: 'auto',
-                  mt: 0.5,
-                  mb: 0.4,
-                  pb: 1,
-                  '& .MuiButton-root': {
+                <AppFormStack
+                  sx={{
                     minWidth: 0,
-                    flexShrink: 0,
-                    px: 0.8,
-                    fontSize: 11.5,
-                    whiteSpace: 'nowrap',
-                  },
-                }}
-              >
-                <AppButton
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    const orderedKeys: string[] = [];
-                    const all = filteredSelectablePhotoCandidates.reduce<Record<string, true>>((acc, item) => {
-                      const key = String(item.key || '').trim();
-                      if (key) {
-                        acc[key] = true;
-                        orderedKeys.push(key);
-                      }
-                      return acc;
-                    }, {});
-                    setPhotoRestoreSelection(all);
-                    setPhotoRestoreSelectionOrder(orderedKeys);
+                    minHeight: 0,
+                    height: '100%',
+                    p: 1.25,
+                    border: `1px solid ${colors.managementBorderMuted}`,
+                    borderRadius: 1.25,
+                    bgcolor: colors.white,
                   }}
                 >
-                  Seleccionar todo
-                </AppButton>
-                <AppButton
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    setPhotoRestoreSelection({});
-                    setPhotoRestoreSelectionOrder([]);
-                  }}
-                >
-                  Limpiar selección
-                </AppButton>
-                <AppButton
-                  size="small"
-                  variant="outlined"
-                  onClick={() => {
-                    setPhotoKeywordFilter('');
-                    setPhotoSelectFrontFilter('');
-                    setPhotoSelectReportFilter('');
-                    setPhotoSelectActivityFilter('');
-                  }}
-                >
-                  Limpiar filtros
-                </AppButton>
-                <AppButton
-                  size="small"
-                  variant="text"
-                  color="error"
-                  onClick={() => setPhotoRestoreSelection({})}
-                >
-                  Quitar todas
-                </AppButton>
-              </Stack>
-              <AppTextField
-                size="small"
+              <Typography sx={{ color: colors.blue1, fontSize: 14, fontWeight: 600 }}>
+                Filtros y actividades
+              </Typography>
+              <AppSearchField
                 fullWidth
                 label="Filtrar por palabra o frase"
                 value={photoKeywordFilter}
@@ -8302,11 +8628,6 @@ export default function ManagementPage() {
                     : `${selectablePhotoCandidates.length} imágenes candidatas`
                 }
                 InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Search sx={{ color: colors.slate500, fontSize: 19 }} />
-                    </InputAdornment>
-                  ),
                   endAdornment: photoKeywordFilter ? (
                     <InputAdornment position="end">
                       <AppIconButton
@@ -8325,7 +8646,7 @@ export default function ManagementPage() {
                 sx={{
                   display: 'grid',
                   gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: '1fr' },
-                  gap: 1,
+                  gap: 1.5,
                 }}
               >
                 <AppTextField
@@ -8333,7 +8654,11 @@ export default function ManagementPage() {
                   size="small"
                   label="Frente"
                   value={photoSelectFrontFilter}
-                  onChange={(event) => setPhotoSelectFrontFilter(String(event.target.value || ''))}
+                  onChange={(event) => {
+                    setPhotoSelectFrontFilter(String(event.target.value || ''));
+                    setPhotoSelectModuleFilter('');
+                    setPhotoSelectActivityFilter('');
+                  }}
                 >
                   <MenuItem value="">Todos</MenuItem>
                   {photoSelectFrontOptions.map((front) => (
@@ -8343,21 +8668,47 @@ export default function ManagementPage() {
                 <AppTextField
                   select
                   size="small"
-                  label="Reporte"
-                  value={photoSelectReportFilter}
-                  onChange={(event) => setPhotoSelectReportFilter(String(event.target.value || ''))}
+                  label="Módulo"
+                  value={photoSelectModuleFilter}
+                  onChange={(event) => {
+                    setPhotoSelectModuleFilter(String(event.target.value || ''));
+                    setPhotoSelectActivityFilter('');
+                  }}
                 >
-                  <MenuItem value="">Todos</MenuItem>
-                  {photoSelectReportOptions.map((report) => (
-                    <MenuItem key={`photo-select-report-${report}`} value={report}>{report}</MenuItem>
+                  <MenuItem value="">Todas</MenuItem>
+                  {photoSelectModuleOptions.length === 0 ? (
+                    <MenuItem value="__no-modules" disabled>Sin módulos identificados</MenuItem>
+                  ) : photoSelectModuleOptions.map((module) => (
+                    <MenuItem key={`photo-module-${module}`} value={module}>
+                      {module}
+                    </MenuItem>
                   ))}
                 </AppTextField>
               </Box>
+              {photoSelectModuleFilter ? (
+                <AppTextField
+                  select
+                  label="Trabajo realizado"
+                  value={photoSelectActivityFilter}
+                  onChange={(event) => setPhotoSelectActivityFilter(String(event.target.value || ''))}
+                >
+                  <MenuItem value="">
+                    {photoSelectModuleFilter === PHOTO_MODULE_OTHER
+                      ? 'Todos los otros trabajos'
+                      : 'Todos los trabajos del módulo'}
+                  </MenuItem>
+                  {photoActivitySuggestions.map((activity) => (
+                    <MenuItem key={`photo-module-activity-${activity.key}`} value={activity.key}>
+                      {activity.label} · {activity.imageCount} imágenes
+                    </MenuItem>
+                  ))}
+                </AppTextField>
+              ) : null}
               <Paper
                 variant="outlined"
                 sx={{
                   p: 1,
-                  borderColor: colors.managementBorder,
+                  borderColor: colors.managementBorderMuted,
                   bgcolor: colors.managementPanelBgSoft,
                   borderRadius: 1.25,
                   flex: 1,
@@ -8367,7 +8718,7 @@ export default function ManagementPage() {
               >
                 <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between" sx={{ mb: 0.75 }}>
                   <Box>
-                    <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.slate900 }}>
+                    <Typography sx={{ fontSize: 13, fontWeight: 600, color: colors.blue1 }}>
                       Actividades relevantes
                     </Typography>
                     <Typography sx={{ fontSize: 11.5, color: colors.slate500 }}>
@@ -8379,7 +8730,7 @@ export default function ManagementPage() {
                       size="small"
                       variant="text"
                       onClick={() => setPhotoSelectActivityFilter('')}
-                      sx={{ textTransform: 'none', fontWeight: 700, flexShrink: 0 }}
+                      sx={{ flexShrink: 0 }}
                     >
                       Ver todas
                     </AppButton>
@@ -8393,13 +8744,13 @@ export default function ManagementPage() {
                   <Stack spacing={1}>
                     {photoActivitySuggestionSections.map((section) => (
                       <Box key={`photo-activity-section-${section.front}`} sx={{ minWidth: 0 }}>
-                        <Typography sx={{ mb: 0.5, fontSize: 11.5, color: colors.slate600, fontWeight: 700 }}>
+                        <Typography sx={{ mb: 0.5, fontSize: 11.5, color: colors.managementTextMuted, fontWeight: 600 }}>
                           {section.front}
                         </Typography>
                         <Stack spacing={0.8}>
                           {section.groups.map((group) => (
                             <Box key={`photo-activity-subgroup-${section.front}-${group.label}`} sx={{ minWidth: 0 }}>
-                              <Typography sx={{ mb: 0.45, fontSize: 10.8, color: colors.slate500, fontWeight: 700 }}>
+                              <Typography sx={{ mb: 0.45, fontSize: 10.8, color: colors.slate500, fontWeight: 500 }}>
                                 {group.label}
                               </Typography>
                               <Box
@@ -8420,7 +8771,7 @@ export default function ManagementPage() {
                                       sx={{
                                         width: '100%',
                                         minWidth: 0,
-                                        p: 0.85,
+                                        p: 0.75,
                                         borderRadius: 1,
                                         border: selected ? `1px solid ${colors.blue600}` : `1px solid ${colors.managementBorder}`,
                                         bgcolor: selected ? colors.blue100 : colors.white,
@@ -8431,7 +8782,7 @@ export default function ManagementPage() {
                                         '&:hover': { borderColor: colors.blue600, bgcolor: selected ? colors.blue100 : colors.blue50 },
                                       }}
                                     >
-                                      <Typography sx={{ fontSize: 12.5, fontWeight: 700 }} noWrap title={activity.label}>
+                                      <Typography sx={{ fontSize: 12.25, fontWeight: 600 }} noWrap title={activity.label}>
                                         {activity.label}
                                       </Typography>
                                       <Typography sx={{ mt: 0.25, fontSize: 11.5, color: colors.slate600 }}>
@@ -8450,16 +8801,44 @@ export default function ManagementPage() {
                   </Stack>
                 )}
               </Paper>
-                </Stack>
+                </AppFormStack>
                 <Stack spacing={0.75} sx={{ minWidth: 0, minHeight: 0 }}>
-              <Typography sx={{ fontSize: 12, color: colors.slate500 }}>
-                Seleccionadas visibles: {filteredSelectedPhotoCount} de {filteredSelectablePhotoCandidates.length}
-                {filteredSelectablePhotoCandidates.length !== selectablePhotoCandidates.length
-                  ? ` | Total seleccionadas: ${Object.keys(photoRestoreSelection).filter((k) => photoRestoreSelection[k]).length} de ${selectablePhotoCandidates.length}`
-                  : ''}
-              </Typography>
-              <TableContainer sx={{ border: `1px solid ${colors.gray200}`, borderRadius: 1, flex: 1, minHeight: 0 }}>
-                <Table size="small">
+              <TableContainer
+                sx={{
+                  border: `1px solid ${colors.managementBorder}`,
+                  borderRadius: 1.25,
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'auto',
+                  bgcolor: colors.white,
+                }}
+              >
+                <Table
+                  size="small"
+                  stickyHeader
+                  sx={{
+                    '& .MuiTableCell-root': {
+                      borderColor: colors.managementBorderMuted,
+                      color: colors.slate800,
+                      fontSize: 13.5,
+                    },
+                    '& .MuiTableBody-root .MuiTableCell-root': {
+                      py: 0.65,
+                    },
+                    '& .MuiTableHead-root .MuiTableCell-root': {
+                      bgcolor: colors.managementTableHead,
+                      color: colors.blue1,
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                    },
+                    '& .MuiTableBody-root .MuiTableRow-root': {
+                      transition: 'background-color 140ms ease',
+                    },
+                    '& .MuiTableBody-root .MuiTableRow-root:hover': {
+                      bgcolor: colors.managementTableHover,
+                    },
+                  }}
+                >
                   <TableHead>
                     <TableRow>
                       <TableCell sx={{ width: 46 }} />
@@ -8479,8 +8858,13 @@ export default function ManagementPage() {
                       </TableRow>
                     ) : filteredSelectablePhotoCandidates.map((item) => {
                       const key = String(item.key || '').trim();
+                      const reportBadgeColors = getPhotoReportBadgeColors(item);
                       return (
-                        <TableRow key={`select-photo-${key}`}>
+                        <TableRow
+                          key={`select-photo-${key}`}
+                          selected={Boolean(photoRestoreSelection[key])}
+                          sx={{ '&.Mui-selected, &.Mui-selected:hover': { bgcolor: colors.blue50 } }}
+                        >
                           <TableCell padding="checkbox">
                             <AppCheckbox
                               checked={Boolean(photoRestoreSelection[key])}
@@ -8520,8 +8904,8 @@ export default function ManagementPage() {
                                 src={photoEvidencePreviewByKey[key]}
                                 alt={item.name || 'Imagen'}
                                 sx={{
-                                  width: 140,
-                                  height: 92,
+                                  width: 112,
+                                  height: 72,
                                   objectFit: 'cover',
                                   borderRadius: 0.75,
                                   border: `1px solid ${colors.slate300}`,
@@ -8536,8 +8920,8 @@ export default function ManagementPage() {
                                 onClick={() => setPhotoZoomEvidenceKey(key)}
                                 aria-label="Ampliar imagen"
                                 sx={{
-                                  width: 140,
-                                  height: 92,
+                                  width: 112,
+                                  height: 72,
                                   borderRadius: 0.75,
                                   border: `1px solid ${colors.slate300}`,
                                   bgcolor: colors.slate200,
@@ -8547,7 +8931,29 @@ export default function ManagementPage() {
                             )}
                           </TableCell>
                           <TableCell>{item.front || '-'}</TableCell>
-                          <TableCell>{item.reportNo ? `N°${item.reportNo}` : (item.reportId || '-')}</TableCell>
+                          <TableCell>
+                            <Box
+                              component="span"
+                              title={item.reportNo ? `N°${item.reportNo}` : (item.reportId || '-')}
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                minWidth: 74,
+                                px: 1,
+                                py: 0.45,
+                                borderRadius: 1,
+                                border: `1px solid ${reportBadgeColors.border}`,
+                                bgcolor: reportBadgeColors.background,
+                                color: reportBadgeColors.text,
+                                fontWeight: 600,
+                                lineHeight: 1.2,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {getPhotoReportShortLabel(item)}
+                            </Box>
+                          </TableCell>
                           <TableCell>{item.crew || '-'}</TableCell>
                         </TableRow>
                       );
@@ -8560,8 +8966,16 @@ export default function ManagementPage() {
             </Stack>
           )}
         </DialogContent>
-        <DialogActions>
-          <AppButton onClick={() => setPhotoRestoreDialogOpen(false)}>Cancelar</AppButton>
+        <DialogActions
+          sx={{
+            px: { xs: 1.5, sm: 2.25 },
+            py: 1.25,
+            gap: 1,
+            borderTop: `1px solid ${colors.managementBorderMuted}`,
+            bgcolor: colors.white,
+          }}
+        >
+          <AppButton variant="outlined" onClick={() => setPhotoRestoreDialogOpen(false)}>Cancelar</AppButton>
           <AppButton
             variant="contained"
             onClick={restoreSelectedPhotoEvidence}
@@ -8576,28 +8990,77 @@ export default function ManagementPage() {
         maxWidth={false}
         sx={{
           '& .MuiDialog-paper': {
-            width: '92vw',
-            height: '92vh',
-            maxWidth: '92vw',
-            maxHeight: '92vh',
-            m: 0,
+            width: { xs: 'calc(100vw - 16px)', sm: '94vw' },
+            height: { xs: 'calc(100dvh - 16px)', sm: '94vh' },
+            maxWidth: '94vw',
+            maxHeight: '94vh',
+            m: { xs: 1, sm: 0 },
+            borderRadius: 2,
+            border: `1px solid ${colors.managementBorder}`,
+            bgcolor: colors.white,
+            boxShadow: '0 20px 60px rgba(0, 26, 51, 0.22)',
+            overflow: 'hidden',
           },
         }}
       >
-        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-          <Typography sx={{ fontWeight: 700, color: colors.slate900 }}>
-            Vista ampliada
-          </Typography>
-          <AppButton onClick={() => setPhotoZoomEvidenceKey('')} sx={{ textTransform: 'none' }}>
-            Cerrar
-          </AppButton>
+        <DialogTitle
+          sx={{
+            px: { xs: 1.5, sm: 2.25 },
+            py: 1.35,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1.5,
+            borderBottom: `1px solid ${colors.managementBorderMuted}`,
+          }}
+        >
+          <Stack direction="row" spacing={1.1} alignItems="center" sx={{ minWidth: 0 }}>
+            <Box
+              sx={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                display: 'grid',
+                placeItems: 'center',
+                flexShrink: 0,
+                color: colors.blue600,
+                bgcolor: colors.blue50,
+              }}
+            >
+              <PhotoLibraryOutlined sx={{ fontSize: 20 }} />
+            </Box>
+            <Typography component="span" sx={{ color: colors.blue1, fontSize: { xs: 17, sm: 18 }, fontWeight: 600, lineHeight: 1.25 }} noWrap>
+              Vista ampliada
+            </Typography>
+          </Stack>
+          <AppIconButton
+            size="small"
+            onClick={() => setPhotoZoomEvidenceKey('')}
+            aria-label="Cerrar vista ampliada"
+            title="Cerrar"
+            sx={{ color: colors.slate500, flexShrink: 0 }}
+          >
+            <Clear fontSize="small" />
+          </AppIconButton>
         </DialogTitle>
-        <DialogContent dividers sx={{ minHeight: 0, display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) 340px' }, gap: 1.5 }}>
+        <DialogContent
+          sx={{
+            minHeight: 0,
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) minmax(280px, 340px)' },
+            gridTemplateRows: { xs: 'minmax(42vh, 1fr) auto', md: 'minmax(0, 1fr)' },
+            gap: { xs: 1, md: 1.5 },
+            p: { xs: 1, sm: 1.5 },
+            bgcolor: colors.managementPageBg,
+            overflow: { xs: 'auto', md: 'hidden' },
+          }}
+        >
           <Box
             sx={{
               minHeight: 0,
               bgcolor: colors.slate900,
-              borderRadius: 1,
+              borderRadius: 1.5,
+              border: `1px solid ${colors.slate800}`,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -8650,8 +9113,19 @@ export default function ManagementPage() {
               </>
             ) : null}
           </Box>
-          <Stack spacing={1.1} sx={{ minWidth: 0 }}>
-            <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="space-between">
+          <Stack
+            spacing={1.1}
+            sx={{
+              minWidth: 0,
+              minHeight: 0,
+              p: { xs: 1.25, sm: 1.5 },
+              borderRadius: 1.5,
+              border: `1px solid ${colors.managementBorderMuted}`,
+              bgcolor: colors.white,
+              overflowY: 'auto',
+            }}
+          >
+            <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="space-between" sx={{ pb: 0.75, borderBottom: `1px solid ${colors.managementBorderMuted}` }}>
               <AppIconButton
                 size="small"
                 onClick={() => goToZoomPhoto(-1)}
@@ -8660,7 +9134,7 @@ export default function ManagementPage() {
               >
                 <ChevronLeft />
               </AppIconButton>
-              <Typography sx={{ fontSize: 12.5, color: colors.slate500, fontWeight: 700 }}>
+              <Typography sx={{ fontSize: 12.5, color: colors.managementTextMuted, fontWeight: 500 }}>
                 {zoomPhotoIndex >= 0 ? `${zoomPhotoIndex + 1} de ${zoomPhotoList.length}` : `1 de ${Math.max(1, zoomPhotoList.length)}`}
               </Typography>
               <AppIconButton
@@ -8672,27 +9146,6 @@ export default function ManagementPage() {
                 <ChevronRight />
               </AppIconButton>
             </Stack>
-            <FormControlLabel
-              control={
-                <AppCheckbox
-                  checked={Boolean(photoRestoreSelection[photoZoomEvidenceKey])}
-                  onChange={(event) => {
-                    const checked = event.target.checked;
-	                    setPhotoRestoreSelection((prev) => {
-	                      const next = { ...prev };
-	                      if (checked) next[photoZoomEvidenceKey] = true;
-	                      else delete next[photoZoomEvidenceKey];
-	                      return next;
-	                    });
-	                    setPhotoRestoreSelectionOrder((prev) => {
-	                      const withoutKey = prev.filter((itemKey) => itemKey !== photoZoomEvidenceKey);
-	                      return checked ? [...withoutKey, photoZoomEvidenceKey] : withoutKey;
-	                    });
-	                  }}
-	                />
-              }
-              label="Incluir en el informe"
-            />
             <AppButton
 	              variant={photoRestoreSelection[photoZoomEvidenceKey] ? 'outlined' : 'contained'}
 	              onClick={() => {
@@ -8708,29 +9161,50 @@ export default function ManagementPage() {
 	                  return checked ? [...withoutKey, photoZoomEvidenceKey] : withoutKey;
 	                });
 	              }}
-              sx={{ textTransform: 'none', fontWeight: 700 }}
             >
               {photoRestoreSelection[photoZoomEvidenceKey] ? 'Quitar de selección' : 'Seleccionar imagen'}
             </AppButton>
-            <Box sx={{ borderTop: `1px solid ${colors.slate200}`, pt: 1 }}>
-              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Frente</Typography>
-              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.front || '-'}</Typography>
+            <Box sx={{ borderTop: `1px solid ${colors.managementBorderMuted}`, pt: 1 }}>
+              <Typography sx={{ fontSize: 12, color: colors.managementTextMuted, fontWeight: 500 }}>Frente</Typography>
+              <Typography sx={{ color: colors.slate900, fontWeight: 400 }}>{zoomPhotoCandidate?.front || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Reporte</Typography>
-              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.reportNo ? `N°${zoomPhotoCandidate.reportNo}` : (zoomPhotoCandidate?.reportId || '-')}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.managementTextMuted, fontWeight: 500 }}>Reporte</Typography>
+              {zoomPhotoCandidate && zoomPhotoReportBadgeColors ? (
+                <Box
+                  component="span"
+                  title={zoomPhotoCandidate.reportNo ? `N°${zoomPhotoCandidate.reportNo}` : (zoomPhotoCandidate.reportId || '-')}
+                  sx={{
+                    mt: 0.35,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    px: 1,
+                    py: 0.45,
+                    borderRadius: 1,
+                    border: `1px solid ${zoomPhotoReportBadgeColors.border}`,
+                    bgcolor: zoomPhotoReportBadgeColors.background,
+                    color: zoomPhotoReportBadgeColors.text,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {getPhotoReportShortLabel(zoomPhotoCandidate)}
+                </Box>
+              ) : (
+                <Typography sx={{ color: colors.slate900, fontWeight: 400 }}>-</Typography>
+              )}
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Fecha</Typography>
-              <Typography sx={{ color: colors.slate900 }}>{formatDate(zoomPhotoCandidate?.date || '') || '-'}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.managementTextMuted, fontWeight: 500 }}>Fecha</Typography>
+              <Typography sx={{ color: colors.slate900, fontWeight: 400 }}>{formatDate(zoomPhotoCandidate?.date || '') || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Cuadrilla</Typography>
-              <Typography sx={{ color: colors.slate900 }}>{zoomPhotoCandidate?.crew || '-'}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.managementTextMuted, fontWeight: 500 }}>Cuadrilla</Typography>
+              <Typography sx={{ color: colors.slate900, fontWeight: 400 }}>{zoomPhotoCandidate?.crew || '-'}</Typography>
             </Box>
             <Box>
-              <Typography sx={{ fontSize: 12, color: colors.slate500, fontWeight: 700 }}>Resumen</Typography>
-              <Typography sx={{ color: colors.slate900, whiteSpace: 'pre-wrap' }}>
+              <Typography sx={{ fontSize: 12, color: colors.managementTextMuted, fontWeight: 500 }}>Resumen</Typography>
+              <Typography sx={{ color: colors.slate900, fontWeight: 400, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>
                 {zoomPhotoCandidate?.activitySummary || zoomPhotoCandidate?.reportTitle || '-'}
               </Typography>
             </Box>

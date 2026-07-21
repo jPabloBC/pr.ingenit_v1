@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AppBar, Badge, Box, Button, IconButton, Popover, Stack, Toolbar, Typography } from '@mui/material';
+import { AppBar, Badge, Box, IconButton, Popover, Stack, Toolbar, Typography } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
-import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
+import { Bell } from 'lucide-react';
 import { useTheme, useMediaQuery } from '@mui/material';
 import { useRouter } from 'next/navigation';
 import { colors } from '../../theme/theme';
+import { AppButton } from '../ui/AppButton';
 
 interface UserHeaderProps {
   title: string;
@@ -113,13 +114,19 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
           transition: 'left 0.3s ease, width 0.3s ease',
           zIndex: 1200,
           background: `linear-gradient(135deg, ${colors.blue1} 0%, ${colors.blue3} 100%)`,
-          boxShadow: '0 4px 20px rgba(0, 26, 51, 0.15)',
+          boxShadow: '0 3px 14px rgba(0, 26, 51, 0.14)',
+          borderBottom: `1px solid ${colors.blue5}`,
           borderRadius: 0,
           padding: 0,
           margin: 0,
         }}
       >
-        <Toolbar>
+        <Toolbar
+          sx={{
+            minHeight: { xs: '56px !important', md: '60px !important' },
+            px: { xs: 1.5, sm: 2.25, md: 3 },
+          }}
+        >
           {isMobile ? (
             <IconButton
               edge="start"
@@ -134,7 +141,16 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
               <MenuIcon />
             </IconButton>
           ) : null}
-          <Typography variant="h6" sx={{ color: colors.white, fontWeight: 600 }}>
+          <Typography
+            variant="h6"
+            sx={{
+              color: colors.blue14,
+              fontWeight: 300,
+              fontSize: { xs: '1rem', md: '1.08rem' },
+              lineHeight: 1.2,
+              letterSpacing: 0.2,
+            }}
+          >
             {title}
           </Typography>
           <IconButton
@@ -143,10 +159,24 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
               setAnchorEl(event.currentTarget)
               void loadNotifications({ details: true, force: true })
             }}
-            sx={{ ml: 'auto', color: colors.white }}
+            sx={{
+              ml: 'auto',
+              width: 38,
+              height: 38,
+              color: colors.blue14,
+              '&:hover': {
+                color: colors.white,
+                bgcolor: 'rgba(255,255,255,0.08)',
+              },
+            }}
           >
-            <Badge badgeContent={unreadCount} color="error" max={99}>
-              <NotificationsNoneIcon />
+            <Badge
+              badgeContent={unreadCount}
+              color="error"
+              max={99}
+              sx={{ '& .MuiBadge-badge': { minWidth: 16, height: 16, px: 0.4, fontSize: '0.62rem', fontWeight: 500 } }}
+            >
+              <Bell size={21} strokeWidth={1.5} />
             </Badge>
           </IconButton>
         </Toolbar>
@@ -165,15 +195,15 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
             justifyContent="space-between"
             sx={{ px: 0.25, pb: 1, borderBottom: '1px solid #dbe5f1' }}
           >
-            <Typography sx={{ fontWeight: 800, color: colors.blue1, fontSize: 15 }}>Notificaciones</Typography>
-            <Button
+            <Typography sx={{ fontWeight: 500, color: colors.blue1, fontSize: 15 }}>Notificaciones</Typography>
+            <AppButton
               size="small"
               onClick={() => void markNotificationsRead()}
               disabled={unreadCount === 0}
-              sx={{ minWidth: 0, textTransform: 'none', fontWeight: 700, fontSize: 12, px: 0.5 }}
+              sx={{ minWidth: 0, minHeight: 28, fontSize: 12, px: 0.75 }}
             >
               Marcar leídas
-            </Button>
+            </AppButton>
           </Stack>
           {notifications.length === 0 ? (
             <Typography sx={{ py: 3, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No hay notificaciones.</Typography>
@@ -207,7 +237,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
                     }}
                   >
                     <Stack direction="row" alignItems="baseline" justifyContent="space-between" spacing={1}>
-                      <Typography sx={{ minWidth: 0, fontWeight: unread ? 800 : 700, color: '#172033', fontSize: 13, lineHeight: 1.3 }}>
+                      <Typography sx={{ minWidth: 0, fontWeight: unread ? 600 : 400, color: '#172033', fontSize: 13, lineHeight: 1.3 }}>
                         {titleParts.date ? `${titleParts.label} - ${titleParts.date}` : titleParts.label}
                       </Typography>
                       {time ? (
@@ -231,7 +261,7 @@ const UserHeader: React.FC<UserHeaderProps> = ({ title }) => {
           )}
         </Box>
       </Popover>
-      <Toolbar />
+      <Toolbar sx={{ minHeight: { xs: '56px !important', md: '60px !important' } }} />
     </>
   );
 };
