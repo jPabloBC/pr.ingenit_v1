@@ -15,7 +15,7 @@ export async function GET() {
     if (!allowed || !canManageForms || !actor.projectId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     let formsQuery = supabaseAdmin
       .from('pr_communication_forms')
-      .select('id, title, description, status, questions, results, created_at, updated_at')
+      .select('id, short_code, title, description, status, questions, results, created_at, updated_at')
       .eq('company_id', actor.companyId)
       .eq('project_id', actor.projectId)
       .order('created_at', { ascending: false })
@@ -26,7 +26,7 @@ export async function GET() {
     const invitationsResult = formIds.length
       ? await supabaseAdmin
         .from('pr_communication_form_invitations')
-        .select('id, form_id, collaborator_id, access_token, recipient_name, recipient_email, recipient_phone, status, answers, result_id, opened_at, submitted_at, expires_at')
+        .select('id, form_id, collaborator_id, access_token, short_code, recipient_name, recipient_email, recipient_phone, status, answers, result_id, opened_at, submitted_at, expires_at')
         .in('form_id', formIds)
         .order('recipient_name', { ascending: true })
       : { data: [], error: null }
@@ -43,7 +43,7 @@ export async function GET() {
       const invitations = (invitationsResult.data || []).filter((invitation) => invitation.form_id === form.id)
       return {
         ...form,
-        public_url: `/forms/${form.id}`,
+        public_url: `/f/${form.short_code}`,
         summary: {
           total: invitations.length,
           pending: invitations.filter((invitation) => invitation.status === 'pending' || invitation.status === 'opened').length,
@@ -57,7 +57,7 @@ export async function GET() {
         invitations: invitations.map((invitation) => ({
           ...invitation,
           expected_profile: invitation.answers?.__expected_profile || profilesById.get(String(invitation.collaborator_id || '')) || null,
-          public_url: `/forms/${invitation.access_token}`,
+          public_url: `/f/${invitation.short_code}`,
         })),
       }
     })
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
     const { data: form, error: formError } = await supabaseAdmin
       .from('pr_communication_forms')
       .insert({ company_id: actor.companyId, project_id: actor.projectId, title, description, status: 'published', questions, results, created_by: actor.userId || null })
-      .select('id, title')
+      .select('id, title, short_code')
       .single()
     if (formError || !form) return NextResponse.json({ error: formError?.message || 'No fue posible crear el formulario.' }, { status: 500 })
     if ((collaboratorsResult.data || []).length) {
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({
       form,
-      public_url: `/forms/${form.id}`,
+      public_url: `/f/${form.short_code}`,
       expected_count: collaboratorIds.length,
     }, { status: 201 })
   } catch (error) {
