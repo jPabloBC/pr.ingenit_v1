@@ -69,6 +69,71 @@ import { AttendanceView } from '../../../components/attendance/AttendanceView'
 import { normalizeUppercaseDisplayText } from '../../../lib/normalize'
 import { notifyAttendanceDataUpdated } from '../../../lib/attendanceDataRefresh'
 
+interface DebouncedCollaboratorSearchProps {
+  value: string
+  onSearch: (value: string) => void
+}
+
+const DebouncedCollaboratorSearch = React.memo(function DebouncedCollaboratorSearch({
+  value,
+  onSearch,
+}: DebouncedCollaboratorSearchProps) {
+  const [inputValue, setInputValue] = useState(value)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setInputValue(value)
+  }, [value])
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+      }
+    }
+  }, [])
+
+  const applySearch = (nextValue: string) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+
+    React.startTransition(() => {
+      onSearch(nextValue.trim())
+    })
+  }
+
+  return (
+    <AppSearchField
+      className="collaborators-toolbar-control"
+      placeholder="Buscar por nombre, correo, RUT, especialidad o tipo..."
+      value={inputValue}
+      onChange={(event) => {
+        const nextValue = event.target.value
+        setInputValue(nextValue)
+
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current)
+        }
+
+        debounceRef.current = setTimeout(() => {
+          React.startTransition(() => {
+            onSearch(nextValue.trim())
+          })
+          debounceRef.current = null
+        }, 300)
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        applySearch(inputValue)
+      }}
+      sx={{ flex: '1 1 320px', minWidth: { xs: '100%', sm: 280 } }}
+    />
+  )
+})
+
 interface Collaborator {
   id: string
   user_id?: string
@@ -3388,12 +3453,9 @@ export default function CollaboratorsPage() {
                 gap={1}
                 sx={{ flex: '1 1 680px', minWidth: 0 }}
               >
-                <AppSearchField
-                  className="collaborators-toolbar-control"
-                  placeholder="Buscar por nombre, correo, RUT, especialidad o tipo..."
+                <DebouncedCollaboratorSearch
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  sx={{ flex: '1 1 320px', minWidth: { xs: '100%', sm: 280 } }}
+                  onSearch={setSearchTerm}
                 />
                 <AppSelect
                   className="collaborators-toolbar-control"
