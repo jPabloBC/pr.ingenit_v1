@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import React, { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import {
   Box,
@@ -469,8 +469,9 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   const [dailySelectedCollaborator, setDailySelectedCollaborator] = useState<string>('all')
   const [dailySelectedAttendance, setDailySelectedAttendance] = useState<string>('all')
   const [dailySelectedWorkerType, setDailySelectedWorkerType] = useState<string>('all')
+  const dailySearchInputRef = useRef<HTMLInputElement | null>(null)
+  const dailySearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [dailySearch, setDailySearch] = useState('')
-  const deferredDailySearch = useDeferredValue(dailySearch)
   const [dailySortField, setDailySortField] = useState<DailySortField>('name')
   const [dailySortDirection, setDailySortDirection] = useState<SortDirection>('asc')
   const [dailyDraftStatusByCollaborator, setDailyDraftStatusByCollaborator] = useState<Record<string, string>>({})
@@ -485,11 +486,24 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   const [historySelectedCollaborator, setHistorySelectedCollaborator] = useState<string>('all')
   const [historySelectedStatus, setHistorySelectedStatus] = useState<string>('all')
   const [historySelectedWorkerType, setHistorySelectedWorkerType] = useState<string>('all')
+  const historySearchInputRef = useRef<HTMLInputElement | null>(null)
+  const historySearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [historySearch, setHistorySearch] = useState('')
-  const deferredHistorySearch = useDeferredValue(historySearch)
   const [pinnedHistoryCollaboratorIds, setPinnedHistoryCollaboratorIds] = useState<string[]>([])
   const [historySortField, setHistorySortField] = useState<HistorySortField>('name')
   const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('asc')
+
+  useEffect(() => {
+    return () => {
+      if (dailySearchDebounceRef.current) {
+        clearTimeout(dailySearchDebounceRef.current)
+      }
+
+      if (historySearchDebounceRef.current) {
+        clearTimeout(historySearchDebounceRef.current)
+      }
+    }
+  }, [])
 
   const historyBaseColumns = [
     { key: 'document', label: 'Documento', width: 130 },
@@ -918,8 +932,8 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
       } as DailyStatusRow
     })
 
-    const q = deferredDailySearch.trim().toLowerCase()
-    const qVariants = searchQueryVariants(deferredDailySearch)
+    const q = dailySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(dailySearch)
     return rows.filter((row) => {
       const displayStatus = formatAttendanceStatus(String(row.status || ''), String(row.reason || ''))
       const employmentState = row.collaborator?.is_active === false ? 'Finiquitado' : 'Vigente'
@@ -959,7 +973,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
       }
       return String(getValue(a)).localeCompare(String(getValue(b)), 'es', { sensitivity: 'base' }) * dir
     })
-  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedAttendance, dailySelectedWorkerType, deferredDailySearch, dailyDate, dailySortField, dailySortDirection])
+  }, [dailyRows, collaboratorOptions, dailySelectedCollaborator, dailySelectedAttendance, dailySelectedWorkerType, dailySearch, dailyDate, dailySortField, dailySortDirection])
 
   const historyMatrixRows = useMemo<AttendanceMatrixRow[]>(() => {
     const byCollaborator = new Map<string, AttendanceMatrixRow>()
@@ -1030,8 +1044,8 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
   }, [historyMatrixRows, historySelectedStatus, historySelectedCollaborator, historySelectedWorkerType])
 
   const historySearchRows = useMemo(() => {
-    const q = deferredHistorySearch.trim().toLowerCase()
-    const qVariants = searchQueryVariants(deferredHistorySearch)
+    const q = historySearch.trim().toLowerCase()
+    const qVariants = searchQueryVariants(historySearch)
     if (!q) return historyRowsAfterBaseFilters
     return historyRowsAfterBaseFilters.filter((row) => {
       const workerType = String(row.collaborator?.worker_type || '').trim()
@@ -1059,10 +1073,10 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
         dates.includes(q)
       )
     })
-  }, [historyRowsAfterBaseFilters, deferredHistorySearch])
+  }, [historyRowsAfterBaseFilters, historySearch])
 
   const filteredHistoryRows = useMemo(() => {
-    const q = deferredHistorySearch.trim()
+    const q = historySearch.trim()
     const pinnedIds = new Set(pinnedHistoryCollaboratorIds)
     const byId = new Map<string, AttendanceMatrixRow>()
 
@@ -1089,7 +1103,7 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
       }
       return String(getValue(a)).localeCompare(String(getValue(b)), 'es', { sensitivity: 'base' }) * dir
     })
-  }, [historyRowsAfterBaseFilters, deferredHistorySearch, historySearchRows, pinnedHistoryCollaboratorIds, historySortField, historySortDirection])
+  }, [historyRowsAfterBaseFilters, historySearch, historySearchRows, pinnedHistoryCollaboratorIds, historySortField, historySortDirection])
 
   const pinnedHistoryRows = useMemo(() => {
     const pinnedIds = new Set(pinnedHistoryCollaboratorIds)
@@ -1171,14 +1185,6 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
     }
     setHistorySortField(field)
     setHistorySortDirection('asc')
-  }
-
-  const handleSearchAction = () => {
-    if (tab === 'daily') {
-      loadDaily()
-      return
-    }
-    loadHistory()
   }
 
   const handleExportExcel = async () => {
@@ -1721,8 +1727,35 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       className="attendance-search-field"
                       label="Buscar"
                       placeholder="Documento, colaborador, cargo, tipo, estado, asistencia"
-                      value={dailySearch}
-                      onChange={(e) => setDailySearch(e.target.value)}
+                      inputRef={dailySearchInputRef}
+                      defaultValue={dailySearch}
+                      onChange={(e) => {
+                        const value = e.target.value
+
+                        if (dailySearchDebounceRef.current) {
+                          clearTimeout(dailySearchDebounceRef.current)
+                        }
+
+                        dailySearchDebounceRef.current = setTimeout(() => {
+                          startTransition(() => {
+                            setDailySearch(value.trim())
+                          })
+                          dailySearchDebounceRef.current = null
+                        }, 300)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        e.preventDefault()
+
+                        if (dailySearchDebounceRef.current) {
+                          clearTimeout(dailySearchDebounceRef.current)
+                          dailySearchDebounceRef.current = null
+                        }
+
+                        startTransition(() => {
+                          setDailySearch((dailySearchInputRef.current?.value || '').trim())
+                        })
+                      }}
                       size="small"
                       fullWidth
                     />
@@ -1881,21 +1914,40 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       className="attendance-search-field"
                       label="Buscar"
                       placeholder="Documento, colaborador, cargo, tipo, estado, asistencia"
-                      value={historySearch}
-                      onChange={(e) => setHistorySearch(e.target.value)}
+                      inputRef={historySearchInputRef}
+                      defaultValue={historySearch}
+                      onChange={(e) => {
+                        const value = e.target.value
+
+                        if (historySearchDebounceRef.current) {
+                          clearTimeout(historySearchDebounceRef.current)
+                        }
+
+                        historySearchDebounceRef.current = setTimeout(() => {
+                          startTransition(() => {
+                            setHistorySearch(value.trim())
+                          })
+                          historySearchDebounceRef.current = null
+                        }, 300)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        e.preventDefault()
+
+                        if (historySearchDebounceRef.current) {
+                          clearTimeout(historySearchDebounceRef.current)
+                          historySearchDebounceRef.current = null
+                        }
+
+                        startTransition(() => {
+                          setHistorySearch((historySearchInputRef.current?.value || '').trim())
+                        })
+                      }}
                       size="small"
                       fullWidth
                     />
                   </>
                 )}
-                <AppButton
-                  className="attendance-action attendance-compact-action"
-                  variant="contained"
-                  startIcon={<Search />}
-                  onClick={handleSearchAction}
-                >
-                  Buscar
-                </AppButton>
                 <AppButton
                   className="attendance-action attendance-compact-action"
                   variant="outlined"
@@ -1906,6 +1958,11 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       setDailySelectedCollaborator('all')
                       setDailySelectedAttendance('all')
                       setDailySelectedWorkerType('all')
+                      if (dailySearchDebounceRef.current) {
+                        clearTimeout(dailySearchDebounceRef.current)
+                        dailySearchDebounceRef.current = null
+                      }
+                      if (dailySearchInputRef.current) dailySearchInputRef.current.value = ''
                       setDailySearch('')
                     } else {
                       const resetWeek = latestHistoryWeek.start && latestHistoryWeek.end ? latestHistoryWeek : defaultHistoryWeek
@@ -1918,6 +1975,11 @@ export function AttendanceView({ renderImportAction }: AttendancePageProps = {})
                       setHistorySelectedCollaborator('all')
                       setHistorySelectedStatus('all')
                       setHistorySelectedWorkerType('all')
+                      if (historySearchDebounceRef.current) {
+                        clearTimeout(historySearchDebounceRef.current)
+                        historySearchDebounceRef.current = null
+                      }
+                      if (historySearchInputRef.current) historySearchInputRef.current.value = ''
                       setHistorySearch('')
                       setPinnedHistoryCollaboratorIds([])
                     }

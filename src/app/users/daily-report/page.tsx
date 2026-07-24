@@ -13055,7 +13055,14 @@ export default function DailyReportPage() {
       }
       const buildDetailRowSnapshot = (
         row: any,
-        overrides?: Partial<{ instalacionFaena: number; frente: number; nocFront: number; dotacionTotalObra: number; hhTotalObra: number }>
+        overrides?: Partial<{
+          instalacionFaena: number
+          frente: number
+          nocFront: number
+          dynamicFrontValues: number[]
+          dotacionTotalObra: number
+          hhTotalObra: number
+        }>
       ) => ({
         discipline: String(row?.discipline || "").trim(),
         specialty: String(row?.specialty || "").trim(),
@@ -13076,6 +13083,9 @@ export default function DailyReportPage() {
         instalacionFaena: toSnapshotNumber(overrides?.instalacionFaena ?? row?.instalacionFaena),
         frente: toSnapshotNumber(overrides?.frente ?? row?.frente),
         nocFront: toSnapshotNumber(overrides?.nocFront ?? row?.nocFront),
+        dynamicFrontValues: Array.isArray(overrides?.dynamicFrontValues ?? row?.dynamicFrontValues)
+          ? (overrides?.dynamicFrontValues ?? row?.dynamicFrontValues).map((value: any) => toSnapshotNumber(value))
+          : [],
         dotacionTotalObra: toSnapshotNumber(overrides?.dotacionTotalObra ?? row?.dotacionTotalObra),
         hhTotalObra: toSnapshotNumber(overrides?.hhTotalObra ?? row?.hhTotalObra)
       })
